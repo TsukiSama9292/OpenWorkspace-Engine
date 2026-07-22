@@ -17,6 +17,15 @@ services:
     shm_size: 512mb
     environment:
       - VNC_PW=password
+  kasm2:
+    image: kasmweb/desktop:1.19.0-rolling-daily
+    container_name: kasm2
+    <<: *default-opts
+    volumes:
+      - ./vnc/kasmvnc.yaml:/etc/kasmvnc/kasmvnc.yaml
+    shm_size: 512mb
+    environment:
+      - VNC_PW=password
   nginx:
     image: nginx:stable-alpine-perl
     container_name: nginx
