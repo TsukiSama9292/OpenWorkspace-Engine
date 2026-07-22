@@ -1,4 +1,5 @@
 <script>
+  import { onMount } from 'svelte';
   import { theme } from '$lib/stores/theme.js';
 
   let {
@@ -29,23 +30,82 @@
     error: '#e94560'
   };
 
+  const STORAGE_KEY = 'vnc-toggle-y';
+
+  let btnTop = $state(50);
+  let dragging = $state(false);
+  let dragMoved = $state(false);
+  let dragStartY = 0;
+  let dragStartTop = 0;
+  let btnEl = $state(null);
+
+  onMount(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved !== null) {
+      const pct = parseFloat(saved);
+      if (pct >= 0 && pct <= 100) btnTop = pct;
+    }
+  });
+
+  function onPointerDown(e) {
+    if (e.button && e.button !== 0) return;
+    dragging = true;
+    dragMoved = false;
+    dragStartY = e.clientY;
+    dragStartTop = btnTop;
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }
+
+  function onPointerMove(e) {
+    if (!dragging) return;
+    const dy = e.clientY - dragStartY;
+    if (Math.abs(dy) > 3) dragMoved = true;
+    const btnH = 48;
+    const minPct = (btnH / 2 / window.innerHeight) * 100;
+    const maxPct = 100 - minPct;
+    let newPct = dragStartTop + (dy / window.innerHeight) * 100;
+    newPct = Math.max(minPct, Math.min(maxPct, newPct));
+    btnTop = newPct;
+  }
+
+  function onPointerUp() {
+    if (dragging) {
+      dragging = false;
+      localStorage.setItem(STORAGE_KEY, String(btnTop));
+    }
+  }
+
   function toggle() {
+    if (dragMoved) return;
     collapsed = !collapsed;
   }
 </script>
 
-<aside class="sidebar" class:collapsed>
-  <button class="toggle-btn" onclick={toggle} title={collapsed ? 'Expand' : 'Collapse'}>
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      {#if collapsed}
-        <path d="M9 18l6-6-6-6"/>
-      {:else}
-        <path d="M15 18l-6-6 6-6"/>
-      {/if}
-    </svg>
-  </button>
+<button
+  bind:this={btnEl}
+  class="toggle-btn"
+  class:sidebar-open={!collapsed}
+  style="top: {collapsed ? btnTop : 50}%;"
+  onpointerdown={onPointerDown}
+  onpointermove={onPointerMove}
+  onpointerup={onPointerUp}
+  onclick={toggle}
+  title={collapsed ? 'Expand' : 'Collapse'}
+>
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    {#if collapsed}
+      <path d="M9 18l6-6-6-6"/>
+    {:else}
+      <path d="M15 18l-6-6 6-6"/>
+    {/if}
+  </svg>
+</button>
 
-  {#if !collapsed}
+{#if !collapsed}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="sidebar-backdrop" onclick={toggle}></div>
+  <aside class="sidebar">
     <div class="sidebar-content">
       <div class="status-indicator">
         <span class="status-dot" style="background: {statusColors[status] || '#e94560'}"></span>
@@ -109,22 +169,68 @@
         <span class="btn-label">{$theme === 'dark' ? 'Light' : 'Dark'}</span>
       </button>
     </div>
-  {/if}
-</aside>
+  </aside>
+{/if}
 
 <style>
+  .toggle-btn {
+    position: fixed;
+    left: 0;
+    transform: translateY(-50%);
+    z-index: 51;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 48px;
+    background: rgba(16, 24, 48, 0.7);
+    border: none;
+    border-radius: 0 6px 6px 0;
+    color: #a0a0b0;
+    cursor: grab;
+    transition: width 0.25s ease, background 0.25s ease, left 0.25s ease;
+    backdrop-filter: blur(8px);
+    touch-action: none;
+  }
+
+  :global([data-theme="light"]) .toggle-btn {
+    background: rgba(255, 255, 255, 0.7);
+    color: #555;
+  }
+
+  .toggle-btn:hover {
+    color: #4ecca3;
+    background: rgba(16, 24, 48, 0.9);
+    width: 30px;
+  }
+
+  :global([data-theme="light"]) .toggle-btn:hover {
+    background: rgba(255, 255, 255, 0.9);
+  }
+
+  .toggle-btn.sidebar-open {
+    left: 160px;
+    cursor: pointer;
+  }
+
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 49;
+    background: rgba(0, 0, 0, 0.3);
+  }
+
   .sidebar {
     position: fixed;
     left: 0;
     top: 0;
     bottom: 0;
+    width: 160px;
     z-index: 50;
     display: flex;
     flex-direction: column;
     backdrop-filter: blur(12px);
     border-right: 1px solid rgba(78, 204, 163, 0.15);
-    transition: width 0.25s ease, background 0.3s ease;
-    width: 160px;
     font-family: system-ui, -apple-system, sans-serif;
     user-select: none;
   }
@@ -136,35 +242,6 @@
   :global([data-theme="light"]) .sidebar {
     background: rgba(255, 255, 255, 0.92);
     border-right-color: rgba(0, 0, 0, 0.1);
-  }
-
-  .sidebar.collapsed {
-    width: 36px;
-  }
-
-  .toggle-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    height: 36px;
-    background: none;
-    border: none;
-    border-bottom: 1px solid rgba(78, 204, 163, 0.1);
-    color: #a0a0b0;
-    cursor: pointer;
-    transition: color 0.2s, background 0.2s;
-    flex-shrink: 0;
-  }
-
-  :global([data-theme="light"]) .toggle-btn {
-    border-bottom-color: rgba(0, 0, 0, 0.1);
-    color: #555;
-  }
-
-  .toggle-btn:hover {
-    color: #4ecca3;
-    background: rgba(78, 204, 163, 0.08);
   }
 
   .sidebar-content {
@@ -266,11 +343,11 @@
   }
 
   @media (max-width: 640px) {
-    .sidebar {
-      width: 36px;
+    .toggle-btn.sidebar-open {
+      left: 140px;
     }
-    .btn-label {
-      display: none;
+    .sidebar {
+      width: 140px;
     }
   }
 </style>
