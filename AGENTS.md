@@ -1,0 +1,74 @@
+# OpenWorkspace Engine — Agent Guide
+
+## Project nature
+
+Experimental. A Docker Compose stack that runs KasmVNC containers behind nginx, with a custom SvelteKit browser UI. Goal: share one Linux box's resources among multiple devs via browser-based virtual desktops.
+
+## Monorepo layout
+
+Single active app: `apps/vnc-ui/`. All other `apps/` were removed. pnpm workspaces + Turborepo.
+
+## Key commands
+
+```bash
+# Root (turbo)
+turbo build          # build all packages
+turbo dev            # dev servers (no cache)
+
+# vnc-ui only
+cd apps/vnc-ui
+pnpm test            # vitest run (21 tests)
+pnpm build           # vite build → apps/vnc-ui/build/
+pnpm check           # svelte-check (typecheck)
+```
+
+No lint script exists in vnc-ui. Root `turbo lint` runs if configured per-package.
+
+## Build/deploy flow
+
+1. `pnpm build` in `apps/vnc-ui/` produces static files in `build/`
+2. Docker Compose bind-mounts `build/` into nginx container at `/usr/share/nginx/html`
+3. After rebuilding frontend: `docker compose restart nginx` to pick up changes
+4. KasmVNC containers (`kasm`, `kasm2`) serve desktops on internal port 6901
+5. nginx proxies WebSocket at `/kasm1/websockify` → `https://kasm:6901/websockify` (SSL verify off)
+
+## SvelteKit specifics
+
+- `adapter-static` — fully static SSG, no server
+- `ssr = false` + `trailingSlash = 'always'` in `+layout.js`
+- `base: ''` in svelte.config.js — app detects instance from `window.location.pathname`
+- Catch-all route `[...path]/+page.svelte` handles `/kasm1/`, `/kasm2/`
+- noVNC core files live in `src/lib/vnc/` with shim files in `src/lib/vnc/shims/`
+- `pako@1` pinned — v3 broke internal import paths used by noVNC
+
+## KasmVNC gotchas
+
+- KasmVNC startup hardcodes `-sslOnly` — nginx must use `proxy_pass https://` with `proxy_ssl_verify off`
+- `VNCOPTIONS=-disableBasicAuth` env var required to disable HTTP Basic Auth on websockify endpoint
+- `RFB` constructor: `touchInput` param must be a real hidden `<input>` DOM element, not `false`/`null`
+- `mouseButtonMapper` is initialized to `null` in rfb.js — must be manually instantiated with `MouseButtonMapper` class after RFB creation (default button mapping in `src/lib/components/VncViewer.svelte`)
+
+## Testing
+
+- vitest with `jsdom` environment, `@testing-library/svelte`, `happy-dom` setup
+- 21 unit tests in `src/tests/` — run with `pnpm test` from `apps/vnc-ui/`
+- Playwright E2E configured but not actively run (requires live VNC containers)
+
+## .gitignore
+
+`build/`, `.svelte-kit/`, `node_modules/` are gitignored. Do not commit compiled output.
+
+## Reference code
+
+`references_repo/KasmVNC/kasmweb/` is the upstream KasmVNC source. `core/` contains noVNC protocol files (the basis for `src/lib/vnc/`). `app/` contains the original UI logic (reference only).
+
+<!-- CODEGRAPH_START -->
+## CodeGraph
+
+In repositories indexed by CodeGraph (a `.codegraph/` directory exists at the repo root), reach for it BEFORE grep/find or reading files when you need to understand or locate code:
+
+- **MCP tool** (when available): `codegraph_explore` answers most code questions in one call — the relevant symbols' verbatim source plus the call paths between them, including dynamic-dispatch hops grep can't follow. Name a file or symbol in the query to read its current line-numbered source. If it's listed but deferred, load it by name via tool search.
+- **Shell** (always works): `codegraph explore "<symbol names or question>"` prints the same output.
+
+If there is no `.codegraph/` directory, skip CodeGraph entirely — indexing is the user's decision.
+<!-- CODEGRAPH_END -->

@@ -9,7 +9,7 @@ describe('+page.svelte', () => {
 
   it('renders status bar', () => {
     const { container } = render(Page);
-    const statusBar = container.querySelector('.status-bar');
+    const statusBar = container.querySelector('.sidebar');
     expect(statusBar).toBeTruthy();
   });
 
@@ -28,7 +28,7 @@ describe('+page.svelte', () => {
   it('has correct layout structure', () => {
     const { container } = render(Page);
     expect(container.querySelector('.vnc-container')).toBeTruthy();
-    expect(container.querySelector('.status-bar')).toBeTruthy();
+    expect(container.querySelector('.sidebar')).toBeTruthy();
     expect(container.querySelector('.vnc-viewport')).toBeTruthy();
   });
 });

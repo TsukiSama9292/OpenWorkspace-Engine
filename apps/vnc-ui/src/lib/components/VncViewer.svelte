@@ -3,12 +3,18 @@
   import RFB from '../vnc/rfb.js';
   import { MouseButtonMapper, XVNC_BUTTONS } from '../vnc/mousebuttonmapper.js';
 
-  let { url = '', password = 'password', status = $bindable('idle') } = $props();
+  let {
+    url = '',
+    password = 'password',
+    status = $bindable('idle'),
+    onClipboardText = null
+  } = $props();
 
   let container = $state(null);
   let touchInput = $state(null);
   let rfb = $state(null);
   let errorMessage = $state('');
+  let resizeObserver = $state(null);
 
   onMount(() => {
     if (!url || !container) return;
@@ -38,6 +44,9 @@
       rfb.addEventListener('connect', () => {
         status = 'connected';
         errorMessage = '';
+        // Scale canvas to fill container and tell server to match browser viewport
+        rfb.resizeSession = true;
+        rfb.updateConnectionSettings();
       });
 
       rfb.addEventListener('disconnect', (e) => {
@@ -49,6 +58,12 @@
 
       rfb.addEventListener('credentialsrequired', () => {
         rfb.sendCredentials({ username: '', password });
+      });
+
+      rfb.addEventListener('clipboard', (e) => {
+        if (onClipboardText && e.detail && e.detail.text) {
+          onClipboardText(e.detail.text);
+        }
       });
 
       rfb.addEventListener('error', (e) => {
@@ -122,5 +137,6 @@
     z-index: 10;
     max-width: 80%;
     text-align: center;
+    pointer-events: none;
   }
 </style>

@@ -1,159 +1,123 @@
-# Turborepo starter
+# OpenWorkspace Engine
 
-This Turborepo starter is maintained by the Turborepo core team.
+> 實驗性專案 — 基於 Linux 設備的共享開發環境引擎
 
-## Using this example
+## 為什麼需要這個？
 
-Run the following command:
+中小團隊經常面臨一個兩難：每位開發者都需要效能足夠的開發機，但購置與維護成本高昂。與其讓每台高效能 Linux 工作站閒置，不如將一台主機的資源動態分配給多位團隊成員。
 
-```sh
-npx create-turbo@latest
+**OpenWorkspace Engine** 將這個想法付諸實踐：一台 Linux 主機，透過容器化虛擬桌面，同時提供多位開發者獨立的開發環境。
+
+## 核心概念
+
+```
+┌─────────────────────────────────────────────────┐
+│              Linux 工作站（主機）                  │
+│                                                   │
+│   ┌──────────┐  ┌──────────┐  ┌──────────┐      │
+│   │ Container │  │ Container │  │ Container │      │
+│   │  DEV-01   │  │  DEV-02   │  │  DEV-03   │      │
+│   │ (Desktop) │  │ (Desktop) │  │ (Desktop) │      │
+│   └─────┬────┘  └─────┬────┘  └─────┬────┘      │
+│         │             │             │             │
+│   ┌─────┴─────────────┴─────────────┴────┐      │
+│   │           nginx 反向代理              │      │
+│   └───────────────┬──────────────────────┘      │
+└───────────────────┼─────────────────────────────┘
+                    │
+        ┌───────────┼───────────┐
+        │           │           │
+   ┌────┴───┐  ┌────┴───┐  ┌────┴───┐
+   │ 瀏覽器  │  │ 瀏覽器  │  │ 瀏覽器  │
+   │ 開發者A │  │ 開發者B │  │ 開發者C │
+   └────────┘  └────────┘  └────────┘
 ```
 
-## What's inside?
+每位開發者只需開啟瀏覽器，就能存取自己的完整 Linux 桌面環境，無需安裝任何軟體。
 
-This Turborepo includes the following packages/apps:
+## 成本對比
 
-### Apps and Packages
+| 方案 | 每位開發者成本 | 維護複雜度 | 資源利用率 |
+|------|--------------|-----------|-----------|
+| 個人筆電/工作站 | 高 | 高 | 低（平均 20-30%） |
+| 雲端 VM（AWS/GCP） | 中 | 中 | 中 |
+| **OpenWorkspace Engine** | **低** | **低** | **高（60-80%）** |
 
-- `docs`: a [Next.js](https://nextjs.org/) app
-- `web`: another [Next.js](https://nextjs.org/) app
-- `@repo/ui`: a stub React component library shared by both `web` and `docs` applications
-- `@repo/eslint-config`: `eslint` configurations (includes `eslint-config-next` and `eslint-config-prettier`)
-- `@repo/typescript-config`: `tsconfig.json`s used throughout the monorepo
+## 技術架構
 
-Each package/app is 100% [TypeScript](https://www.typescriptlang.org/).
+| 組件 | 技術 | 用途 |
+|------|------|------|
+| 虛擬桌面 | KasmVNC | Linux 桌面容器化 |
+| 前端介面 | SvelteKit + noVNC | 瀏覽器端 VNC 客戶端 |
+| 反向代理 | nginx | 靜態資源 + WebSocket 代理 |
+| 容器編排 | Docker Compose | 多實例管理 |
 
-### Utilities
+## 快速開始
 
-This Turborepo has some additional tools already setup for you:
+### 前置需求
 
-- [TypeScript](https://www.typescriptlang.org/) for static type checking
-- [ESLint](https://eslint.org/) for code linting
-- [Prettier](https://prettier.io) for code formatting
+- Linux 主機（建議 16GB+ RAM，4+ 核心）
+- Docker + Docker Compose
+- pnpm
 
-### Build
+### 啟動服務
 
-To build all apps and packages, run the following command:
+```bash
+# 克隆專案
+git clone <repo-url>
+cd OpenWorkspace-Engine
 
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
+# 啟動所有服務
+docker compose up -d
 
-```sh
-cd my-turborepo
-turbo build
+# 建置前端
+cd apps/vnc-ui
+pnpm install
+pnpm build
+
+# 重新載入 nginx
+docker compose restart nginx
 ```
 
-Without global `turbo`, use your package manager:
+### 存取桌面
 
-```sh
-cd my-turborepo
-npx turbo build
-pnpm dlx turbo build
-pnpm exec turbo build
+- 開發者 A: `http://<主機IP>/kasm1/`
+- 遠端桌面: `http://<主機IP>/kasm2/`
+
+## 目錄結構
+
+```
+OpenWorkspace-Engine/
+├── apps/
+│   └── vnc-ui/          # 自訂 VNC 前端（SvelteKit）
+├── nginx/               # 反向代理配置
+├── vnc/                 # KasmVNC 配置
+├── docker-compose.yml   # 容器編排
+└── TODO.md              # 開發計畫
 ```
 
-You can build a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
+## 使用場景
 
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
+- **小型團隊**：3-5 人團隊共用一台高效能 Linux 主機
+- **遠端開發**：團隊成員透過瀏覽器存取開發環境
+- **實驗室/教育**：提供學生或研究人員標準化開發環境
+- **資源優化**：提升 Linux 工作站的使用率
 
-```sh
-turbo build --filter=docs
-```
+## 目前狀態
 
-Without global `turbo`:
+> ⚠️ 本專案為實驗性質，仍在積極開發中。
 
-```sh
-npx turbo build --filter=docs
-pnpm exec turbo build --filter=docs
-pnpm exec turbo build --filter=docs
-```
+- [x] VNC 連線正常運作
+- [x] 自訂瀏覽器端 UI
+- [x] 多實例支援
+- [ ] UI 優化（側邊控制面板）
+- [ ] 剪貼簿同步
+- [ ] 響應式設計
 
-### Develop
+## 貢獻
 
-To develop all apps and packages, run the following command:
+歡迎試用並回饋問題與建議。由於是實驗性專案，API 和配置可能會變動。
 
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
+## 授權
 
-```sh
-cd my-turborepo
-turbo dev
-```
-
-Without global `turbo`, use your package manager:
-
-```sh
-cd my-turborepo
-npx turbo dev
-pnpm exec turbo dev
-pnpm exec turbo dev
-```
-
-You can develop a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo dev --filter=web
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo dev --filter=web
-pnpm exec turbo dev --filter=web
-pnpm exec turbo dev --filter=web
-```
-
-### Remote Caching
-
-> [!TIP]
-> Vercel Remote Cache is free for all plans. Get started today at [vercel.com](https://vercel.com/signup?utm_source=remote-cache-sdk&utm_campaign=free_remote_cache).
-
-Turborepo can use a technique known as [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching) to share cache artifacts across machines, enabling you to share build caches with your team and CI/CD pipelines.
-
-By default, Turborepo will cache locally. To enable Remote Caching you will need an account with Vercel. If you don't have an account you can [create one](https://vercel.com/signup?utm_source=turborepo-examples), then enter the following commands:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo login
-```
-
-Without global `turbo`, use your package manager:
-
-```sh
-cd my-turborepo
-npx turbo login
-pnpm exec turbo login
-pnpm exec turbo login
-```
-
-This will authenticate the Turborepo CLI with your [Vercel account](https://vercel.com/docs/concepts/personal-accounts/overview).
-
-Next, you can link your Turborepo to your Remote Cache by running the following command from the root of your Turborepo:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo link
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo link
-pnpm exec turbo link
-pnpm exec turbo link
-```
-
-## Useful Links
-
-Learn more about the power of Turborepo:
-
-- [Tasks](https://turborepo.dev/docs/crafting-your-repository/running-tasks)
-- [Caching](https://turborepo.dev/docs/crafting-your-repository/caching)
-- [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching)
-- [Filtering](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters)
-- [Configuration Options](https://turborepo.dev/docs/reference/configuration)
-- [CLI Usage](https://turborepo.dev/docs/reference/command-line-reference)
+尚未決定，請勿用於商業用途。

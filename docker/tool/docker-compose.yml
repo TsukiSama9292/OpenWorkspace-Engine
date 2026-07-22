@@ -1,0 +1,20 @@
+services:
+  opencode:
+    container_name: opencode
+    image: tsukisama9292/private-images:openworkspace-engine-opencode
+    build:
+      context: ../..
+      dockerfile: docker/tool/Dockerfile
+
+    user: "1000:1000"
+    group_add:
+      - "988"
+
+    restart: unless-stopped
+    tty: true
+    stdin_open: true
+    privileged: true
+    ipc: private
+    volumes:
+      - ../../:/home/user/workspace/OpenWorkspace-Engine/
+      - /var/run/docker.sock:/var/run/docker.sock

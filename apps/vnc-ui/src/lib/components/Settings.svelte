@@ -1,4 +1,6 @@
 <script>
+  import { theme } from '$lib/stores/theme.js';
+
   let { open = $bindable(false), settings = $bindable({}) } = $props();
 
   function handleKeydown(e) {
@@ -18,6 +20,26 @@
         <button class="close-btn" onclick={() => open = false}>×</button>
       </div>
       <div class="panel-body">
+        <div class="setting-group">
+          <!-- svelte-ignore a11y_label_has_associated_control -->
+          <label>Theme</label>
+          <div class="theme-toggle">
+            <button class="theme-btn" class:active={$theme === 'dark'} onclick={() => theme.set('dark')}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+              </svg>
+              Dark
+            </button>
+            <button class="theme-btn" class:active={$theme === 'light'} onclick={() => theme.set('light')}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="5"/>
+                <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+              </svg>
+              Light
+            </button>
+          </div>
+        </div>
+
         <div class="setting-group">
           <!-- svelte-ignore a11y_label_has_associated_control -->
           <label>Quality</label>
@@ -67,12 +89,21 @@
   }
 
   .settings-panel {
-    background: #1e2a3a;
-    border: 1px solid #0f3460;
     border-radius: 8px;
     width: 360px;
     max-width: 90vw;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    transition: background 0.3s ease;
+  }
+
+  :global([data-theme="dark"]) .settings-panel {
+    background: #1e2a3a;
+    border: 1px solid #0f3460;
+  }
+
+  :global([data-theme="light"]) .settings-panel {
+    background: #ffffff;
+    border: 1px solid #e0e0e0;
   }
 
   .panel-header {
@@ -80,15 +111,30 @@
     align-items: center;
     justify-content: space-between;
     padding: 12px 16px;
+    transition: border-color 0.3s ease;
+  }
+
+  :global([data-theme="dark"]) .panel-header {
     border-bottom: 1px solid #0f3460;
+  }
+
+  :global([data-theme="light"]) .panel-header {
+    border-bottom: 1px solid #e0e0e0;
   }
 
   .panel-header h3 {
     margin: 0;
     font-size: 14px;
     font-weight: 600;
-    color: #e0e0e0;
     font-family: system-ui, -apple-system, sans-serif;
+  }
+
+  :global([data-theme="dark"]) .panel-header h3 {
+    color: #e0e0e0;
+  }
+
+  :global([data-theme="light"]) .panel-header h3 {
+    color: #1a1a2e;
   }
 
   .close-btn {
@@ -128,12 +174,58 @@
 
   .setting-group > label {
     font-size: 13px;
-    color: #a0a0b0;
     font-family: system-ui, -apple-system, sans-serif;
     display: flex;
     align-items: center;
     gap: 8px;
     cursor: pointer;
+  }
+
+  :global([data-theme="dark"]) .setting-group > label {
+    color: #a0a0b0;
+  }
+
+  :global([data-theme="light"]) .setting-group > label {
+    color: #555;
+  }
+
+  .theme-toggle {
+    display: flex;
+    gap: 8px;
+  }
+
+  .theme-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-family: system-ui, -apple-system, sans-serif;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: all 0.2s ease;
+  }
+
+  :global([data-theme="dark"]) .theme-btn {
+    background: #0a0a1a;
+    border-color: #0f3460;
+    color: #a0a0b0;
+  }
+
+  :global([data-theme="light"]) .theme-btn {
+    background: #f0f0f0;
+    border-color: #ddd;
+    color: #555;
+  }
+
+  .theme-btn.active {
+    border-color: #4ecca3;
+    color: #4ecca3;
+  }
+
+  .theme-btn:hover {
+    border-color: #4ecca3;
   }
 
   .setting-row {
@@ -155,9 +247,17 @@
     height: 4px;
     -webkit-appearance: none;
     appearance: none;
-    background: #0f3460;
     border-radius: 2px;
     outline: none;
+    transition: background 0.3s ease;
+  }
+
+  :global([data-theme="dark"]) input[type="range"] {
+    background: #0f3460;
+  }
+
+  :global([data-theme="light"]) input[type="range"] {
+    background: #ddd;
   }
 
   input[type="range"]::-webkit-slider-thumb {
