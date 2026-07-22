@@ -1,0 +1,32 @@
+x-default-opts: &default-opts
+  restart: unless-stopped
+  tty: true
+  stdin_open: true
+  privileged: false
+  ipc: private
+  networks:
+    - default
+
+services:
+  kasm:
+    image: kasmweb/desktop:1.19.0-rolling-daily
+    container_name: kasm
+    <<: *default-opts
+    volumes:
+      - ./vnc/kasmvnc.yaml:/etc/kasmvnc/kasmvnc.yaml
+    shm_size: 512mb
+    environment:
+      - VNC_PW=password
+  nginx:
+    image: nginx:stable-alpine-perl
+    container_name: nginx
+    <<: *default-opts
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+
+networks:
+  default:
