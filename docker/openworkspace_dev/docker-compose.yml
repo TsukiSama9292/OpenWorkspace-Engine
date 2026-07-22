@@ -1,0 +1,36 @@
+x-default-opts: &default-opts
+  restart: unless-stopped
+  tty: true
+  stdin_open: true
+  privileged: false
+  ipc: private
+  networks:
+    - openworkspace-engin
+
+services:
+  postgresql:
+    image: postgres:18-alpine
+    container_name: ow-postgres
+    <<: *default-opts
+    ports:
+      - "55432:5432"
+    environment:
+      - TZ=Asia/Taipei
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB=${POSTGRES_DB:-postgres}
+    volumes:
+      - server-dev-pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+networks:
+  openworkspace-engin:
+    external: true
+
+volumes:
+  server-dev-pgdata:

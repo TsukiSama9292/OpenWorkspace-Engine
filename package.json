@@ -2,11 +2,23 @@
   "name": "OpenWorkspace-Engine",
   "private": true,
   "scripts": {
-    "build": "turbo run build",
-    "dev": "turbo run dev",
-    "lint": "turbo run lint",
-    "format": "prettier --write \"**/*.{ts,tsx,md}\"",
-    "check-types": "turbo run check-types"
+    "init": "bash ./scripts/docker-network.sh",
+    "dev": "pnpm run init && pnpm run docker:dev:up && pnpm run dev:api & pnpm run dev:web",
+    "dev:api": "cd apps/api && RUST_LOG=info cargo run >> /tmp/api.log 2>&1",
+    "dev:web": "pnpm --filter web dev",
+    "dev:logs": "tail -f /tmp/api.log",
+    "build": "turbo run build --filter=web",
+    "build:web": "pnpm --filter web build",
+    "api": "cd apps/api && RUST_LOG=info cargo run",
+    "api:build": "cd apps/api && cargo build --release",
+    "docker:dev:up": "docker compose -f docker/openworkspace_dev/docker-compose.yml up -d",
+    "docker:dev:down": "docker compose -f docker/openworkspace_dev/docker-compose.yml down",
+    "docker:up": "docker compose -f docker/openworkspace/docker-compose.yml up -d",
+    "docker:down": "docker compose -f docker/openworkspace/docker-compose.yml down",
+    "docker:logs": "docker compose -f docker/openworkspace/docker-compose.yml logs -f",
+    "check": "turbo run check --filter=web",
+    "lint": "turbo run lint --filter=web",
+    "format": "prettier --write \"**/*.{ts,tsx,md}\""
   },
   "devDependencies": {
     "prettier": "^3.7.4",
