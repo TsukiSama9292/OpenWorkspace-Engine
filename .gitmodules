@@ -1,0 +1,3 @@
+[submodule "references_repo/KasmVNC"]
+	path = references_repo/KasmVNC
+	url = https://github.com/kasmtech/KasmVNC.git
