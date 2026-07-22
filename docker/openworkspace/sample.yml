@@ -1,0 +1,111 @@
+x-default-opts: &default-opts
+  restart: unless-stopped
+  tty: true
+  stdin_open: true
+  privileged: false
+  ipc: private
+  networks:
+    - openworkspace-engin
+
+services:
+  traefik:
+    image: traefik:v3.7.4
+    container_name: ow-traefik
+    <<: *default-opts
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=openworkspace-engin"
+      - "--entrypoints.web.address=:80"
+      - "--api.insecure=true"
+      - "--log.level=DEBUG"
+      - "--serversTransport.insecureSkipVerify=true"
+    ports:
+      - "80:80"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  postgresql:
+    image: postgres:18-alpine
+    container_name: ow-postgres
+    <<: *default-opts
+    ports:
+      - "55432:5432"
+    environment:
+      - TZ=Asia/Taipei
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB=${POSTGRES_DB:-postgres}
+    volumes:
+      - server-pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  nginx:
+    image: nginx:alpine
+    container_name: ow-nginx
+    <<: *default-opts
+    volumes:
+      - ../../apps/vnc-ui/build:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.nginx.rule: "PathPrefix(`/`)"
+      traefik.http.routers.nginx.entrypoints: "web"
+      traefik.http.services.nginx.loadbalancer.server.port: "80"
+
+  kasm:
+    image: kasmweb/desktop:1.19.0-rolling-daily
+    container_name: ow-kasm1
+    <<: *default-opts
+    shm_size: 512mb
+    environment:
+      - LC_ALL=zh_TW.UTF-8
+      - TZ=Asia/Taipei
+      - VNC_PW=password
+      - VNCOPTIONS=-disableBasicAuth
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.kasm.rule: "PathPrefix(`/kasm1/websockify`)"
+      traefik.http.routers.kasm.entrypoints: "web"
+      traefik.http.routers.kasm.priority: "100"
+      traefik.http.routers.kasm.middlewares: "kasm-strip@docker,kasm-ws@docker"
+      traefik.http.middlewares.kasm-strip.stripprefix.prefixes: "/kasm1"
+      traefik.http.middlewares.kasm-ws.headers.customrequestheaders.Upgrade: "websocket"
+      traefik.http.middlewares.kasm-ws.headers.customrequestheaders.Connection: "upgrade"
+      traefik.http.services.kasm.loadbalancer.server.port: "6901"
+      traefik.http.services.kasm.loadbalancer.server.scheme: "https"
+
+  kasm2:
+    image: kasmweb/desktop:1.19.0-rolling-daily
+    container_name: ow-kasm2
+    <<: *default-opts
+    shm_size: 512mb
+    environment:
+      - LC_ALL=zh_TW.UTF-8
+      - TZ=Asia/Taipei
+      - VNC_PW=password
+      - VNCOPTIONS=-disableBasicAuth
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.kasm2.rule: "PathPrefix(`/kasm2/websockify`)"
+      traefik.http.routers.kasm2.entrypoints: "web"
+      traefik.http.routers.kasm2.priority: "100"
+      traefik.http.routers.kasm2.middlewares: "kasm2-strip@docker,kasm2-ws@docker"
+      traefik.http.middlewares.kasm2-strip.stripprefix.prefixes: "/kasm2"
+      traefik.http.middlewares.kasm2-ws.headers.customrequestheaders.Upgrade: "websocket"
+      traefik.http.middlewares.kasm2-ws.headers.customrequestheaders.Connection: "upgrade"
+      traefik.http.services.kasm2.loadbalancer.server.port: "6901"
+      traefik.http.services.kasm2.loadbalancer.server.scheme: "https"
+
+networks:
+  openworkspace-engin:
+    external: true
+
+volumes:
+  server-pgdata:

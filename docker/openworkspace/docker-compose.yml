@@ -27,8 +27,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
 
   postgresql:
-    image: pgvector/pgvector:pg18
-    container_name: ow-pgvector
+    image: postgres:18-alpine
+    container_name: ow-postgres
     <<: *default-opts
     ports:
       - "55432:5432"
@@ -46,31 +46,6 @@ services:
       retries: 10
       start_period: 5s
 
-  valkey:
-    container_name: ow-valkey
-    image: valkey/valkey:9.0.1-alpine3.23
-    <<: *default-opts
-    shm_size: 128mb
-    ports:
-      - "6379:6379"
-    environment:
-      - TZ=Asia/Taipei
-      - VALKEY_PASSWORD=${VALKEY_PASSWORD:-valkey}
-    volumes:
-      - server-valkey-data:/data
-    healthcheck:
-      test: ["CMD-SHELL", "valkey-cli -a $$VALKEY_PASSWORD ping | grep PONG"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-      start_period: 10s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "1m"
-        max-file: "1"
-    command: valkey-server --save 30 1 --loglevel warning --requirepass ${VALKEY_PASSWORD:-valkey}
-
   nginx:
     image: nginx:alpine
     container_name: ow-nginx
@@ -84,54 +59,9 @@ services:
       traefik.http.routers.nginx.entrypoints: "web"
       traefik.http.services.nginx.loadbalancer.server.port: "80"
 
-  kasm:
-    image: kasmweb/desktop:1.19.0-rolling-daily
-    container_name: ow-kasm1
-    <<: *default-opts
-    shm_size: 512mb
-    environment:
-      - LC_ALL=zh_TW.UTF-8
-      - TZ=Asia/Taipei
-      - VNC_PW=password
-      - VNCOPTIONS=-disableBasicAuth
-    labels:
-      traefik.enable: "true"
-      traefik.http.routers.kasm.rule: "PathPrefix(`/kasm1/websockify`)"
-      traefik.http.routers.kasm.entrypoints: "web"
-      traefik.http.routers.kasm.priority: "100"
-      traefik.http.routers.kasm.middlewares: "kasm-strip@docker,kasm-ws@docker"
-      traefik.http.middlewares.kasm-strip.stripprefix.prefixes: "/kasm1"
-      traefik.http.middlewares.kasm-ws.headers.customrequestheaders.Upgrade: "websocket"
-      traefik.http.middlewares.kasm-ws.headers.customrequestheaders.Connection: "upgrade"
-      traefik.http.services.kasm.loadbalancer.server.port: "6901"
-      traefik.http.services.kasm.loadbalancer.server.scheme: "https"
-
-  # kasm2:
-  #   image: kasmweb/desktop:1.19.0-rolling-daily
-  #   container_name: ow-kasm2
-  #   <<: *default-opts
-  #   shm_size: 512mb
-  #   environment:
-  #     - LC_ALL=zh_TW.UTF-8
-  #     - TZ=Asia/Taipei
-  #     - VNC_PW=password
-  #     - VNCOPTIONS=-disableBasicAuth
-  #   labels:
-  #     traefik.enable: "true"
-  #     traefik.http.routers.kasm2.rule: "PathPrefix(`/kasm2/websockify`)"
-  #     traefik.http.routers.kasm2.entrypoints: "web"
-  #     traefik.http.routers.kasm2.priority: "100"
-  #     traefik.http.routers.kasm2.middlewares: "kasm2-strip@docker,kasm2-ws@docker"
-  #     traefik.http.middlewares.kasm2-strip.stripprefix.prefixes: "/kasm2"
-  #     traefik.http.middlewares.kasm2-ws.headers.customrequestheaders.Upgrade: "websocket"
-  #     traefik.http.middlewares.kasm2-ws.headers.customrequestheaders.Connection: "upgrade"
-  #     traefik.http.services.kasm2.loadbalancer.server.port: "6901"
-  #     traefik.http.services.kasm2.loadbalancer.server.scheme: "https"
-
 networks:
   openworkspace-engin:
     external: true
 
 volumes:
   server-pgdata:
-  server-valkey-data:
