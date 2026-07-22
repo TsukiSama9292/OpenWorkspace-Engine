@@ -13,19 +13,25 @@ services:
     container_name: kasm
     <<: *default-opts
     volumes:
-      - ./vnc/kasmvnc.yaml:/etc/kasmvnc/kasmvnc.yaml
+      - ./vnc/kasmvnc.yaml:/etc/kasmvnc/kasmvnc.yaml:ro
     shm_size: 512mb
     environment:
+      - LC_ALL=zh_TW.UTF-8
+      - TZ=Asia/Taipei
       - VNC_PW=password
+      - VNCOPTIONS=-disableBasicAuth
   kasm2:
     image: kasmweb/desktop:1.19.0-rolling-daily
     container_name: kasm2
     <<: *default-opts
     volumes:
-      - ./vnc/kasmvnc.yaml:/etc/kasmvnc/kasmvnc.yaml
+      - ./vnc/kasmvnc.yaml:/etc/kasmvnc/kasmvnc.yaml:ro
     shm_size: 512mb
     environment:
+      - LC_ALL=zh_TW.UTF-8
+      - TZ=Asia/Taipei
       - VNC_PW=password
+      - VNCOPTIONS=-disableBasicAuth
   nginx:
     image: nginx:stable-alpine-perl
     container_name: nginx
@@ -34,8 +40,9 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx/conf.d:/etc/nginx/conf.d
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./apps/vnc-ui/build:/usr/share/nginx/html:ro
 
 networks:
   default:
