@@ -8,6 +8,31 @@ x-default-opts: &default-opts
     - openworkspace-engin
 
 services:
+  traefik:
+    image: traefik:v3.7.4
+    container_name: ow-traefik
+    <<: *default-opts
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=openworkspace-engin"
+      # 💥 新增這兩行：啟用檔案 Provider 來讀取 local/static 服務
+      - "--providers.file.filename=/etc/traefik/dynamic.yml"
+      - "--providers.file.watch=true"
+      - "--entrypoints.web.address=:80"
+      - "--api.insecure=true"
+      - "--log.level=DEBUG"
+      - "--serversTransport.insecureSkipVerify=true"
+    ports:
+      - "80:80"
+      - "8080:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # 💥 讓 Traefik 容器能連回宿主機的 3000 和 5173
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+
   postgresql:
     image: postgres:18-alpine
     container_name: ow-postgres

@@ -3,10 +3,10 @@
   "private": true,
   "scripts": {
     "init": "bash ./scripts/docker-network.sh",
-    "dev": "pnpm run init && pnpm run docker:dev:up && pnpm run dev:api & pnpm run dev:web",
-    "dev:api": "cd apps/api && RUST_LOG=info cargo run >> /tmp/api.log 2>&1",
+    "dev": "pnpm run init && pnpm run docker:dev:up && concurrently --kill-others --names api,web --prefix-colors blue,green \"pnpm run dev:api\" \"pnpm run dev:web\"",
+    "dev:api": "cd apps/api && RUST_LOG=info cargo run",
     "dev:web": "pnpm --filter web dev",
-    "dev:logs": "tail -f /tmp/api.log",
+    "dev:stop": "pnpm run docker:dev:down",
     "build": "turbo run build --filter=web",
     "build:web": "pnpm --filter web build",
     "api": "cd apps/api && RUST_LOG=info cargo run",
@@ -21,6 +21,7 @@
     "format": "prettier --write \"**/*.{ts,tsx,md}\""
   },
   "devDependencies": {
+    "concurrently": "^10.0.3",
     "prettier": "^3.7.4",
     "turbo": "^2.10.5",
     "typescript": "5.9.2"
