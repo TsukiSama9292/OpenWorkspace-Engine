@@ -2,51 +2,39 @@
   import { onMount } from 'svelte';
   import { api } from '$lib/api';
 
-  let instances = $state([]);
+  let workspaces = $state([]);
   let loading = $state(true);
 
   onMount(async () => {
-    const res = await api.get('/instances');
+    const res = await api.get('/workspaces');
     if (res.data) {
-      instances = res.data.instances;
+      workspaces = res.data.workspaces;
     }
     loading = false;
   });
-
-  function openVnc(token, e) {
-    e.preventDefault();
-    e.stopPropagation();
-    window.open(`/vnc/${token}/`, '_blank');
-  }
 </script>
 
 <div class="dashboard">
   <div class="header">
-    <h1>Instances</h1>
-    <a href="/instances/new/" class="btn">New Instance</a>
+    <h1>Workspaces</h1>
+    <a href="/workspaces/new/" class="btn">New Workspace</a>
   </div>
 
   {#if loading}
     <p>Loading...</p>
-  {:else if instances.length === 0}
-    <p class="empty">No instances yet. Create one to get started.</p>
+  {:else if workspaces.length === 0}
+    <p class="empty">No workspaces yet. Create one to get started.</p>
   {:else}
     <div class="grid">
-      {#each instances as instance}
-        <a href="/instances/{instance.id}/" class="card">
-          <h3>{instance.name}</h3>
+      {#each workspaces as ws}
+        <a href="/workspaces/{ws.id}/" class="card">
+          <h3>{ws.name}</h3>
           <div class="card-footer">
-            <span class="status" class:running={instance.status === 'running'}>
-              {instance.status}
+            <span class="status" class:running={ws.status === 'running'} class:paused={ws.status === 'paused'}>
+              {ws.status}
             </span>
-            {#if instance.status === 'running' && instance.vnc_token}
-              <button class="vnc-btn" onclick={(e) => openVnc(instance.vnc_token, e)} title="Open VNC">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <rect x="2" y="3" width="20" height="14" rx="2"/>
-                  <path d="M8 21h8M12 17v4"/>
-                </svg>
-                VNC
-              </button>
+            {#if ws.owner_username}
+              <span class="owner">{ws.owner_username}</span>
             {/if}
           </div>
         </a>
@@ -107,21 +95,11 @@
   .status.running {
     color: #22c55e;
   }
-  .vnc-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 4px 10px;
-    background: var(--accent, #4ecca3);
-    color: #0a0a1a;
-    border: none;
-    border-radius: 4px;
-    font-size: 0.8rem;
-    font-weight: 500;
-    cursor: pointer;
-    text-decoration: none;
+  .status.paused {
+    color: #f59e0b;
   }
-  .vnc-btn:hover {
-    opacity: 0.9;
+  .owner {
+    font-size: 0.8rem;
+    color: var(--text-secondary, #888);
   }
 </style>

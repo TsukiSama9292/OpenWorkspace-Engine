@@ -5,7 +5,7 @@ mod routes;
 mod vnc_cache;
 mod vnc_trafik;
 
-use db::{InstanceRepository, UserRepository};
+use db::{WorkspaceRepository, UserRepository};
 use routes::{api_routes, AppState};
 use sqlx::postgres::PgPoolOptions;
 use tower_http::cors::{Any, CorsLayer};
@@ -58,22 +58,22 @@ async fn main() {
     tracing::info!("Admin seed done, populating VNC cache...");
 
     let vnc_cache = vnc_cache::VncCache::new();
-    let instance_repo = InstanceRepository::new(&db);
-    match instance_repo.list_all().await {
-        Ok(instances) => {
+    let workspace_repo = WorkspaceRepository::new(&db);
+    match workspace_repo.list_all().await {
+        Ok(workspaces) => {
             let mut count = 0;
-            for (_id, _name, _instance_number, _container_id, status, _owner_id, _created_at, vnc_token) in &instances {
-                if status == "running" {
-                    if let Some(token) = vnc_token {
-                        vnc_cache.insert(token, status, *_owner_id);
+            for ws in &workspaces {
+                if ws.status == "running" {
+                    if let Some(ref token) = ws.vnc_token {
+                        vnc_cache.insert(token, &ws.status, ws.owner_id);
                         count += 1;
                     }
                 }
             }
-            tracing::info!("VNC cache loaded: {} running instances", count);
+            tracing::info!("VNC cache loaded: {} running workspaces", count);
         }
         Err(e) => {
-            tracing::warn!("Failed to load instances for VNC cache: {}", e);
+            tracing::warn!("Failed to load workspaces for VNC cache: {}", e);
         }
     }
 

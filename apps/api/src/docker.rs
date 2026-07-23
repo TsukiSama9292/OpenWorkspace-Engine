@@ -236,6 +236,20 @@ impl DockerClient {
         }
     }
 
+    pub async fn pause_container_by_id(
+        &self,
+        container_id: &str,
+    ) -> Result<(), bollard::errors::Error> {
+        self.docker.pause_container(container_id, None).await
+    }
+
+    pub async fn unpause_container_by_id(
+        &self,
+        container_id: &str,
+    ) -> Result<(), bollard::errors::Error> {
+        self.docker.unpause_container(container_id, None).await
+    }
+
     pub async fn get_container_ip(
         &self,
         container_id: &str,

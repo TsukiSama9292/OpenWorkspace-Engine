@@ -2,7 +2,7 @@ use axum::{
     extract::{Path, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, put},
     Json, Router,
 };
 use bcrypt::{hash, verify, DEFAULT_COST};
@@ -11,7 +11,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::auth::{clear_cookie, create_token, set_cookie, Claims, AuthUser};
-use crate::db::{InstanceRepository, UserRepository};
+use crate::db::{RegistryRepository, UserRepository, WorkspaceRepository};
 use crate::docker::DockerClient;
 use crate::vnc_cache::VncCache;
 
@@ -35,8 +35,42 @@ struct RegisterRequest {
 }
 
 #[derive(Deserialize)]
-struct CreateInstanceRequest {
+struct CreateWorkspaceRequest {
     name: String,
+    #[serde(default = "default_image")]
+    image: String,
+    #[serde(default = "default_cores")]
+    cores: i32,
+    #[serde(default = "default_memory")]
+    memory: i64,
+    #[serde(default)]
+    gpu_count: i32,
+    #[serde(default = "default_true")]
+    persistent_storage: bool,
+    volume_host_path: Option<String>,
+    #[serde(default = "default_volume_container_path")]
+    volume_container_path: String,
+}
+
+fn default_image() -> String {
+    "kasmweb/desktop:1.19.0-rolling-daily".to_string()
+}
+fn default_cores() -> i32 {
+    2
+}
+fn default_memory() -> i64 {
+    4_294_967_296
+}
+fn default_true() -> bool {
+    true
+}
+fn default_volume_container_path() -> String {
+    "/home/kasm_user".to_string()
+}
+
+#[derive(Deserialize)]
+struct SetRegistryUrlRequest {
+    url: String,
 }
 
 pub fn api_routes() -> Router<AppState> {
@@ -50,15 +84,20 @@ pub fn api_routes() -> Router<AppState> {
         .route("/api/users", get(list_users))
         .route("/api/users/{id}", get(get_user).delete(delete_user))
         .route(
-            "/api/instances",
-            get(list_instances).post(create_instance),
+            "/api/workspaces",
+            get(list_workspaces).post(create_workspace),
         )
         .route(
-            "/api/instances/{id}",
-            get(get_instance).delete(delete_instance),
+            "/api/workspaces/{id}",
+            get(get_workspace).delete(delete_workspace),
         )
-        .route("/api/instances/{id}/start", post(start_instance))
-        .route("/api/instances/{id}/stop", post(stop_instance))
+        .route("/api/workspaces/{id}/start", post(start_workspace))
+        .route("/api/workspaces/{id}/stop", post(stop_workspace))
+        .route("/api/workspaces/{id}/pause", post(pause_workspace))
+        .route("/api/workspaces/{id}/unpause", post(unpause_workspace))
+        .route("/api/registry", get(get_registry))
+        .route("/api/registry/sync", post(sync_registry))
+        .route("/api/registry/url", get(get_registry_url).put(set_registry_url))
         .route("/api/docker/containers", get(list_docker_containers))
         .route("/api/docker/containers/create", post(create_docker_container))
         .route("/api/vnc/verify", get(vnc_verify))
@@ -210,13 +249,33 @@ async fn delete_user(
     }
 }
 
-async fn list_instances(
+fn workspace_to_json(ws: &crate::db::Workspace) -> serde_json::Value {
+    serde_json::json!({
+        "id": ws.id,
+        "name": ws.name,
+        "workspace_number": ws.instance_number,
+        "container_id": ws.container_id,
+        "status": ws.status,
+        "owner_id": ws.owner_id,
+        "owner_username": ws.owner_username,
+        "vnc_token": ws.vnc_token,
+        "image": ws.image,
+        "cores": ws.cores,
+        "memory": ws.memory,
+        "gpu_count": ws.gpu_count,
+        "persistent_storage": ws.persistent_storage,
+        "volume_host_path": ws.volume_host_path,
+        "volume_container_path": ws.volume_container_path,
+    })
+}
+
+async fn list_workspaces(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let repo = InstanceRepository::new(&state.db);
+    let repo = WorkspaceRepository::new(&state.db);
 
-    let instances = if auth.role == "admin" {
+    let workspaces = if auth.role == "admin" {
         repo.list_all()
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -226,44 +285,45 @@ async fn list_instances(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     };
 
-    let instances_json: Vec<_> = instances
-        .into_iter()
-        .map(|i| {
-            serde_json::json!({
-                "id": i.0, "name": i.1, "instance_number": i.2,
-                "container_id": i.3, "status": i.4, "owner_id": i.5,
-                "vnc_token": i.7
-            })
-        })
-        .collect();
+    let workspaces_json: Vec<_> = workspaces.iter().map(workspace_to_json).collect();
 
-    Ok(Json(serde_json::json!({ "instances": instances_json })))
+    Ok(Json(serde_json::json!({ "workspaces": workspaces_json })))
 }
 
-async fn create_instance(
+async fn create_workspace(
     State(state): State<AppState>,
     auth: AuthUser,
-    Json(input): Json<CreateInstanceRequest>,
+    Json(input): Json<CreateWorkspaceRequest>,
 ) -> Response {
-    let repo = InstanceRepository::new(&state.db);
+    let repo = WorkspaceRepository::new(&state.db);
 
-    let (id, instance_number, vnc_token) = match repo
-        .create(&input.name, auth.user_id)
+    let workspace = match repo
+        .create(
+            &input.name,
+            auth.user_id,
+            &input.image,
+            input.cores,
+            input.memory,
+            input.gpu_count,
+            input.persistent_storage,
+            input.volume_host_path.as_deref(),
+            &input.volume_container_path,
+        )
         .await
     {
-        Ok(r) => r,
+        Ok(ws) => ws,
         Err(e) => {
-            tracing::error!("Failed to create instance record: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to create instance"}))).into_response();
+            tracing::error!("Failed to create workspace record: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to create workspace"}))).into_response();
         }
     };
 
     tracing::info!(
-        "Instance '{}' created (id={}, #{}, token={})",
-        input.name,
-        id,
-        instance_number,
-        vnc_token
+        "Workspace '{}' created (id={}, #{}, token={})",
+        workspace.name,
+        workspace.id,
+        workspace.instance_number,
+        workspace.vnc_token.as_deref().unwrap_or("")
     );
 
     let docker = match DockerClient::new().await {
@@ -275,115 +335,96 @@ async fn create_instance(
     };
 
     match docker
-        .create_kasm_container(&input.name, instance_number)
+        .create_kasm_container(&workspace.name, workspace.instance_number)
         .await
     {
         Ok(container_id) => {
-            repo.update_container_id(id, &container_id).await.ok();
-            repo.update_status(id, "running").await.ok();
+            repo.update_container_id(workspace.id, &container_id).await.ok();
+            repo.update_status(workspace.id, "running").await.ok();
 
             // Write Traefik route
-            match docker.get_container_ip(&container_id, "openworkspace-engin").await {
-                Ok(ip) => {
-                    if let Err(e) = crate::vnc_trafik::write_vnc_route(&vnc_token, &ip) {
-                        tracing::error!("Failed to write Traefik VNC route: {}", e);
+            if let Some(ref token) = workspace.vnc_token {
+                match docker.get_container_ip(&container_id, "openworkspace-engin").await {
+                    Ok(ip) => {
+                        if let Err(e) = crate::vnc_trafik::write_vnc_route(token, &ip) {
+                            tracing::error!("Failed to write Traefik VNC route: {}", e);
+                        }
+                        state.vnc_cache.insert(token, "running", auth.user_id);
                     }
-                    // Populate cache
-                    state.vnc_cache.insert(&vnc_token, "running", auth.user_id);
+                    Err(e) => tracing::error!("Failed to get container IP for Traefik route: {}", e),
                 }
-                Err(e) => tracing::error!("Failed to get container IP for Traefik route: {}", e),
             }
 
             tracing::info!(
-                "KasmVNC container started for instance '{}' (container={})",
-                input.name,
+                "KasmVNC container started for workspace '{}' (container={})",
+                workspace.name,
                 &container_id[..12]
             );
-            Json(serde_json::json!({
-                "instance": {
-                    "id": id,
-                    "name": input.name,
-                    "instance_number": instance_number,
-                    "container_id": container_id,
-                    "status": "running",
-                    "vnc_token": vnc_token
-                }
-            }))
-            .into_response()
+
+            let mut ws = workspace;
+            ws.container_id = Some(container_id);
+            ws.status = "running".to_string();
+            Json(serde_json::json!({ "workspace": workspace_to_json(&ws) }))
+                .into_response()
         }
         Err(e) => {
             tracing::warn!(
-                "Failed to create KasmVNC container for instance '{}': {} (DB record kept)",
-                input.name,
+                "Failed to create KasmVNC container for workspace '{}': {} (DB record kept)",
+                workspace.name,
                 e
             );
-            repo.update_status(id, "error").await.ok();
-            Json(serde_json::json!({
-                "instance": {
-                    "id": id,
-                    "name": input.name,
-                    "instance_number": instance_number,
-                    "status": "error",
-                    "vnc_token": vnc_token
-                }
-            }))
-            .into_response()
+            repo.update_status(workspace.id, "error").await.ok();
+            let mut ws = workspace;
+            ws.status = "error".to_string();
+            Json(serde_json::json!({ "workspace": workspace_to_json(&ws) }))
+                .into_response()
         }
     }
 }
 
-async fn get_instance(
+async fn get_workspace(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     _auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let repo = InstanceRepository::new(&state.db);
+    let repo = WorkspaceRepository::new(&state.db);
 
-    let instance = repo
+    let workspace = repo
         .find_by_id(id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    Ok(Json(serde_json::json!({
-        "instance": {
-            "id": instance.0, "name": instance.1, "instance_number": instance.2,
-            "container_id": instance.3, "status": instance.4, "owner_id": instance.5,
-            "vnc_token": instance.7
-        }
-    })))
+    Ok(Json(serde_json::json!({ "workspace": workspace_to_json(&workspace) })))
 }
 
-async fn delete_instance(
+async fn delete_workspace(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     _auth: AuthUser,
 ) -> Response {
-    let repo = InstanceRepository::new(&state.db);
+    let repo = WorkspaceRepository::new(&state.db);
 
-    let instance = match repo
-        .find_by_id(id)
-        .await
-    {
-        Ok(Some(i)) => i,
+    let workspace = match repo.find_by_id(id).await {
+        Ok(Some(ws)) => ws,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
 
     // Delete Traefik route
-    if let Some(ref token) = instance.7 {
+    if let Some(ref token) = workspace.vnc_token {
         if let Err(e) = crate::vnc_trafik::delete_vnc_route(token) {
             tracing::error!("Failed to delete Traefik VNC route: {}", e);
         }
         state.vnc_cache.remove(token);
     }
 
-    if let Some(container_id) = instance.3 {
+    if let Some(ref container_id) = workspace.container_id {
         if let Ok(docker) = DockerClient::new().await {
-            let _ = docker.stop_container_by_id(&container_id).await;
-            match docker.remove_container_by_id(&container_id).await {
-                Ok(()) => tracing::info!("Container removed for instance '{}'", instance.1),
-                Err(e) => tracing::warn!("Failed to remove container for '{}': {}", instance.1, e),
+            let _ = docker.stop_container_by_id(container_id).await;
+            match docker.remove_container_by_id(container_id).await {
+                Ok(()) => tracing::info!("Container removed for workspace '{}'", workspace.name),
+                Err(e) => tracing::warn!("Failed to remove container for '{}': {}", workspace.name, e),
             }
         }
     }
@@ -395,91 +436,88 @@ async fn delete_instance(
     }
 }
 
-async fn start_instance(
+async fn start_workspace(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     _auth: AuthUser,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let repo = InstanceRepository::new(&state.db);
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let repo = WorkspaceRepository::new(&state.db);
 
-    let instance = repo
+    let workspace = repo
         .find_by_id(id)
         .await
         .map_err(|e| {
-            tracing::error!("Failed to find instance {}: {}", id, e);
-            StatusCode::INTERNAL_SERVER_ERROR
+            tracing::error!("Failed to find workspace {}: {}", id, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal error"})))
         })?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .ok_or((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Workspace not found"}))))?;
 
-    let (instance_id, name, instance_number, container_id, status, _, _, vnc_token) = instance;
-
-    if status == "running" {
-        return Err(StatusCode::CONFLICT);
+    if workspace.status == "running" {
+        return Err((StatusCode::CONFLICT, Json(serde_json::json!({"error": "Workspace is already running"}))).into_response());
     }
 
     let docker = DockerClient::new().await.map_err(|e| {
         tracing::error!("Failed to connect to Docker: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Docker unavailable"})))
     })?;
 
-    let new_container_id = match container_id {
-        Some(cid) => {
-            match docker.inspect_container_state(&cid).await {
+    let new_container_id = match workspace.container_id {
+        Some(ref cid) => {
+            match docker.inspect_container_state(cid).await {
                 Ok(Some(state_str)) => {
                     if state_str.contains("Running") {
-                        tracing::info!("Container for '{}' already running, updating DB", name);
+                        tracing::info!("Container for '{}' already running, updating DB", workspace.name);
                     } else {
-                        tracing::info!("Starting stopped container for '{}' (id: {})", name, &cid[..12]);
-                        docker.start_container_by_id(&cid).await.map_err(|e| {
-                            tracing::error!("Failed to start container for '{}': {}", name, e);
-                            StatusCode::INTERNAL_SERVER_ERROR
+                        tracing::info!("Starting stopped container for '{}' (id: {})", workspace.name, &cid[..12]);
+                        docker.start_container_by_id(cid).await.map_err(|e| {
+                            tracing::error!("Failed to start container for '{}': {}", workspace.name, e);
+                            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to start container"})))
                         })?;
                     }
-                    Some(cid)
+                    Some(cid.clone())
                 }
                 _ => {
-                    tracing::warn!("Container for '{}' not found, creating new one", name);
-                    let new_id = docker.create_kasm_container(&name, instance_number).await.map_err(|e| {
-                        tracing::error!("Failed to create container for '{}': {}", name, e);
-                        StatusCode::INTERNAL_SERVER_ERROR
+                    tracing::warn!("Container for '{}' not found, creating new one", workspace.name);
+                    let new_id = docker.create_kasm_container(&workspace.name, workspace.instance_number).await.map_err(|e| {
+                        tracing::error!("Failed to create container for '{}': {}", workspace.name, e);
+                        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to create container"})))
                     })?;
                     Some(new_id)
                 }
             }
         }
         None => {
-            tracing::info!("No container for instance '{}', creating new KasmVNC container", name);
-            let new_id = docker.create_kasm_container(&name, instance_number).await.map_err(|e| {
-                tracing::error!("Failed to create container for '{}': {}", name, e);
-                StatusCode::INTERNAL_SERVER_ERROR
+            tracing::info!("No container for workspace '{}', creating new KasmVNC container", workspace.name);
+            let new_id = docker.create_kasm_container(&workspace.name, workspace.instance_number).await.map_err(|e| {
+                tracing::error!("Failed to create container for '{}': {}", workspace.name, e);
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to create container"})))
             })?;
             Some(new_id)
         }
     };
 
     if let Some(ref cid) = new_container_id {
-        repo.update_container_id(instance_id, cid).await.ok();
+        repo.update_container_id(workspace.id, cid).await.ok();
 
         // Write Traefik route
-        match docker.get_container_ip(cid, "openworkspace-engin").await {
-            Ok(ip) => {
-                if let Err(e) = crate::vnc_trafik::write_vnc_route(vnc_token.as_deref().unwrap_or(""), &ip) {
-                    tracing::error!("Failed to write Traefik VNC route: {}", e);
+        if let Some(ref token) = workspace.vnc_token {
+            match docker.get_container_ip(cid, "openworkspace-engin").await {
+                Ok(ip) => {
+                    if let Err(e) = crate::vnc_trafik::write_vnc_route(token, &ip) {
+                        tracing::error!("Failed to write Traefik VNC route: {}", e);
+                    }
+                    state.vnc_cache.insert(token, "running", workspace.owner_id);
                 }
-                // Populate cache
-                if let Some(ref token) = vnc_token {
-                    state.vnc_cache.insert(token, "running", instance.5);
-                }
+                Err(e) => tracing::error!("Failed to get container IP for Traefik route: {}", e),
             }
-            Err(e) => tracing::error!("Failed to get container IP for Traefik route: {}", e),
         }
     }
-    repo.update_status(instance_id, "running").await.map_err(|e| {
-        tracing::error!("Failed to update instance status: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
+    repo.update_status(workspace.id, "running").await.map_err(|e| {
+        tracing::error!("Failed to update workspace status: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to update status"})))
     })?;
 
-    tracing::info!("Instance '{}' (#{}) started", name, instance_number);
+    tracing::info!("Workspace '{}' (#{}) started", workspace.name, workspace.instance_number);
 
     Ok(Json(serde_json::json!({
         "status": "running",
@@ -487,61 +525,253 @@ async fn start_instance(
     })))
 }
 
-async fn stop_instance(
+async fn stop_workspace(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     _auth: AuthUser,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let repo = InstanceRepository::new(&state.db);
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let repo = WorkspaceRepository::new(&state.db);
 
-    let instance = repo
+    let workspace = repo
         .find_by_id(id)
         .await
         .map_err(|e| {
-            tracing::error!("Failed to find instance {}: {}", id, e);
-            StatusCode::INTERNAL_SERVER_ERROR
+            tracing::error!("Failed to find workspace {}: {}", id, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal error"})))
         })?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .ok_or((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Workspace not found"}))))?;
 
-    let (instance_id, name, _, container_id, status, _, _, vnc_token) = instance;
-
-    if status == "stopped" {
-        return Err(StatusCode::CONFLICT);
+    if workspace.status == "stopped" {
+        return Err((StatusCode::CONFLICT, Json(serde_json::json!({"error": "Workspace is already stopped"}))).into_response());
     }
 
-    if let Some(cid) = container_id {
+    // If paused, unpause first before stopping
+    if workspace.status == "paused" {
+        if let Some(ref cid) = workspace.container_id {
+            let docker = DockerClient::new().await.map_err(|e| {
+                tracing::error!("Failed to connect to Docker: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+            let _ = docker.unpause_container_by_id(cid).await;
+        }
+    }
+
+    if let Some(ref cid) = workspace.container_id {
         let docker = DockerClient::new().await.map_err(|e| {
             tracing::error!("Failed to connect to Docker: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Docker unavailable"})))
         })?;
 
-        match docker.stop_container_by_id(&cid).await {
+        match docker.stop_container_by_id(cid).await {
             Ok(()) => {
-                tracing::info!("Container for '{}' stopped (id: {})", name, &cid[..12]);
+                tracing::info!("Container for '{}' stopped (id: {})", workspace.name, &cid[..12]);
             }
             Err(e) => {
-                tracing::warn!("Failed to stop container for '{}': {} (updating DB anyway)", name, e);
+                tracing::warn!("Failed to stop container for '{}': {} (updating DB anyway)", workspace.name, e);
             }
         }
     }
 
     // Delete Traefik route
-    if let Some(ref token) = vnc_token {
+    if let Some(ref token) = workspace.vnc_token {
         if let Err(e) = crate::vnc_trafik::delete_vnc_route(token) {
             tracing::error!("Failed to delete Traefik VNC route: {}", e);
         }
         state.vnc_cache.remove(token);
     }
 
-    repo.update_status(instance_id, "stopped").await.map_err(|e| {
-        tracing::error!("Failed to update instance status: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
+    repo.update_status(workspace.id, "stopped").await.map_err(|e| {
+        tracing::error!("Failed to update workspace status: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to update status"})))
     })?;
 
-    tracing::info!("Instance '{}' stopped", name);
+    tracing::info!("Workspace '{}' stopped", workspace.name);
 
     Ok(Json(serde_json::json!({ "status": "stopped" })))
 }
+
+async fn pause_workspace(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    _auth: AuthUser,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let repo = WorkspaceRepository::new(&state.db);
+
+    let workspace = repo
+        .find_by_id(id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to find workspace {}: {}", id, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal error"})))
+        })?
+        .ok_or((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Workspace not found"}))))?;
+
+    if workspace.status != "running" {
+        return Err((StatusCode::CONFLICT, Json(serde_json::json!({"error": "Workspace must be running to pause"}))).into_response());
+    }
+
+    let cid = workspace.container_id.as_ref().ok_or(StatusCode::CONFLICT)?;
+
+    let docker = DockerClient::new().await.map_err(|e| {
+        tracing::error!("Failed to connect to Docker: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Docker unavailable"})))
+    })?;
+
+    docker.pause_container_by_id(cid).await.map_err(|e| {
+        tracing::error!("Failed to pause container for '{}': {}", workspace.name, e);
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to pause container"})))
+    })?;
+
+    repo.update_status(workspace.id, "paused").await.map_err(|e| {
+        tracing::error!("Failed to update workspace status: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to update status"})))
+    })?;
+
+    tracing::info!("Workspace '{}' paused", workspace.name);
+
+    Ok(Json(serde_json::json!({ "status": "paused" })))
+}
+
+async fn unpause_workspace(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    _auth: AuthUser,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let repo = WorkspaceRepository::new(&state.db);
+
+    let workspace = repo
+        .find_by_id(id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to find workspace {}: {}", id, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal error"})))
+        })?
+        .ok_or((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Workspace not found"}))))?;
+
+    if workspace.status != "paused" {
+        return Err((StatusCode::CONFLICT, Json(serde_json::json!({"error": "Workspace must be paused to resume"}))).into_response());
+    }
+
+    let cid = workspace.container_id.as_ref().ok_or(StatusCode::CONFLICT)?;
+
+    let docker = DockerClient::new().await.map_err(|e| {
+        tracing::error!("Failed to connect to Docker: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Docker unavailable"})))
+    })?;
+
+    docker.unpause_container_by_id(cid).await.map_err(|e| {
+        tracing::error!("Failed to unpause container for '{}': {}", workspace.name, e);
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to resume container"})))
+    })?;
+
+    repo.update_status(workspace.id, "running").await.map_err(|e| {
+        tracing::error!("Failed to update workspace status: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to update status"})))
+    })?;
+
+    tracing::info!("Workspace '{}' unpaused", workspace.name);
+
+    Ok(Json(serde_json::json!({ "status": "running" })))
+}
+
+// ── Registry endpoints ───────────────────────────────────────────
+
+async fn get_registry(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let repo = RegistryRepository::new(&state.db);
+
+    let cached = repo
+        .get_cached()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    match cached {
+        Some(json) => Ok(Json(json)),
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+async fn sync_registry(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if auth.role != "admin" {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let repo = RegistryRepository::new(&state.db);
+
+    let url = repo
+        .get_url()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::BAD_REQUEST)?;
+
+    let body = reqwest::get(&url)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to fetch registry from '{}': {}", url, e);
+            StatusCode::BAD_GATEWAY
+        })?
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to parse registry JSON from '{}': {}", url, e);
+            StatusCode::BAD_GATEWAY
+        })?;
+
+    repo.set_cached(&body)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    tracing::info!("Registry synced from '{}'", url);
+
+    Ok(Json(body))
+}
+
+async fn get_registry_url(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if auth.role != "admin" {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let repo = RegistryRepository::new(&state.db);
+
+    let url = repo
+        .get_url()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(serde_json::json!({
+        "url": url
+    })))
+}
+
+async fn set_registry_url(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(input): Json<SetRegistryUrlRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if auth.role != "admin" {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let repo = RegistryRepository::new(&state.db);
+
+    repo.set_url(&input.url)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    tracing::info!("Registry URL set to '{}'", input.url);
+
+    Ok(Json(serde_json::json!({ "url": input.url })))
+}
+
+// ── Docker raw endpoints ─────────────────────────────────────────
 
 #[derive(Deserialize)]
 struct CreateDockerContainerRequest {
@@ -647,20 +877,18 @@ async fn vnc_verify(
         }
         None => {
             // Cache miss: fall back to DB, then populate cache
-            let repo = InstanceRepository::new(&state.db);
-            let instance = repo
+            let repo = WorkspaceRepository::new(&state.db);
+            let workspace = repo
                 .find_by_vnc_token(vnc_token)
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
                 .ok_or(StatusCode::NOT_FOUND)?;
 
-            let (_id, _name, _instance_number, _container_id, status, owner_id, _vnc_token) = &instance;
-
-            if status != "running" {
+            if workspace.status != "running" {
                 return Err(StatusCode::NOT_FOUND);
             }
 
-            state.vnc_cache.insert(vnc_token, status, *owner_id);
+            state.vnc_cache.insert(vnc_token, &workspace.status, workspace.owner_id);
         }
     }
 
