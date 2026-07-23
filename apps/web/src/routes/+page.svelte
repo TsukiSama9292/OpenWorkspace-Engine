@@ -1,105 +1,79 @@
 <script>
   import { onMount } from 'svelte';
   import { api } from '$lib/api';
+  import { formatMemory } from './utils.js';
+  import './dashboard.css';
 
-  let workspaces = $state([]);
+  let activeTab = $state('configs');
+  let configs = $state([]);
+  let instances = $state([]);
   let loading = $state(true);
 
   onMount(async () => {
-    const res = await api.get('/workspaces');
-    if (res.data) {
-      workspaces = res.data.workspaces;
-    }
+    const [configRes, instanceRes] = await Promise.all([
+      api.get('/configs'),
+      api.get('/instances'),
+    ]);
+    if (configRes.data) configs = configRes.data.configs;
+    if (instanceRes.data) instances = instanceRes.data.instances;
     loading = false;
   });
 </script>
 
 <div class="dashboard">
   <div class="header">
-    <h1>Workspaces</h1>
-    <a href="/workspaces/new/" class="btn">New Workspace</a>
+    <h1>Dashboard</h1>
+    <a href="/configs/new/" class="btn">New Config</a>
+  </div>
+
+  <div class="tabs">
+    <button class="tab" class:active={activeTab === 'configs'} onclick={() => activeTab = 'configs'}>
+      Configs ({configs.length})
+    </button>
+    <button class="tab" class:active={activeTab === 'instances'} onclick={() => activeTab = 'instances'}>
+      Instances ({instances.length})
+    </button>
   </div>
 
   {#if loading}
-    <p>Loading...</p>
-  {:else if workspaces.length === 0}
-    <p class="empty">No workspaces yet. Create one to get started.</p>
+    <p class="loading">Loading...</p>
+  {:else if activeTab === 'configs'}
+    {#if configs.length === 0}
+      <p class="empty">No configs yet. Create one to get started.</p>
+    {:else}
+      <div class="grid">
+        {#each configs as config}
+          <a href="/configs/{config.id}/" class="card">
+            <h3>{config.name}</h3>
+            <p class="card-meta">{config.image}</p>
+            <p class="card-resources">{config.cores} cores · {formatMemory(config.memory)}</p>
+            <div class="card-footer">
+              <span class="instance-count">{config.instance_count} instance{config.instance_count !== 1 ? 's' : ''}</span>
+            </div>
+          </a>
+        {/each}
+      </div>
+    {/if}
   {:else}
-    <div class="grid">
-      {#each workspaces as ws}
-        <a href="/workspaces/{ws.id}/" class="card">
-          <h3>{ws.name}</h3>
-          <div class="card-footer">
-            <span class="status" class:running={ws.status === 'running'} class:paused={ws.status === 'paused'}>
-              {ws.status}
-            </span>
-            {#if ws.owner_username}
-              <span class="owner">{ws.owner_username}</span>
-            {/if}
-          </div>
-        </a>
-      {/each}
-    </div>
+    {#if instances.length === 0}
+      <p class="empty">No instances running.</p>
+    {:else}
+      <div class="grid">
+        {#each instances as inst}
+          <a href="/instances/{inst.id}/" class="card">
+            <h3>{inst.name}</h3>
+            <p class="card-meta">{inst.config_name || 'Unknown config'}</p>
+            <div class="card-footer">
+              <span class="status" class:running={inst.status === 'running'} class:paused={inst.status === 'paused'} class:stopped={inst.status === 'stopped'}>
+                {inst.status}
+              </span>
+              {#if inst.owner_username}
+                <span class="owner">{inst.owner_username}</span>
+              {/if}
+            </div>
+          </a>
+        {/each}
+      </div>
+    {/if}
   {/if}
 </div>
-
-<style>
-  .dashboard {
-    max-width: 960px;
-    margin: 0 auto;
-  }
-  .header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 1.5rem;
-  }
-  h1 {
-    color: var(--text-primary, #fff);
-  }
-  .btn {
-    padding: 0.5rem 1rem;
-    background: var(--accent, #6366f1);
-    color: white;
-    text-decoration: none;
-    border-radius: 4px;
-  }
-  .empty {
-    color: var(--text-secondary, #888);
-  }
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-    gap: 1rem;
-  }
-  .card {
-    background: var(--bg-secondary, #1a1a2e);
-    padding: 1.25rem;
-    border-radius: 8px;
-    text-decoration: none;
-    border: 1px solid var(--border, #333);
-  }
-  .card h3 {
-    margin: 0 0 0.75rem;
-    color: var(--text-primary, #fff);
-  }
-  .card-footer {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-  .status {
-    font-size: 0.85rem;
-    color: var(--text-secondary, #888);
-  }
-  .status.running {
-    color: #22c55e;
-  }
-  .status.paused {
-    color: #f59e0b;
-  }
-  .owner {
-    font-size: 0.8rem;
-    color: var(--text-secondary, #888);
-  }
-</style>

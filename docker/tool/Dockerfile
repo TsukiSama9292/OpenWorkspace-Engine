@@ -29,6 +29,7 @@ RUN apt-get update && apt-get upgrade -y && \
         ca-certificates \
         lsb-release \
         gnupg \
+        postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 # =========================
@@ -74,10 +75,9 @@ USER ${USERNAME}
 WORKDIR /home/${USERNAME}
 
 # =========================
-# 5. 安裝 uv
+# 5. 安裝 Cargo + Rust
 # =========================
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 # =========================
 # 6. 安裝 nvm + node
 # =========================
@@ -103,10 +103,10 @@ RUN mkdir -p /home/${USERNAME}/workspace/CLIvsMCP
 # =========================
 RUN curl -fsSL https://opencode.ai/install | bash
 RUN curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | sh
-
+RUN curl -fsSL https://get.pnpm.io/install.sh | sh -
 ENV PATH="/home/${USERNAME}/.local/bin:/usr/local/bin:${PATH}"
 
-WORKDIR /home/${USERNAME}/workspace/CLIvsMCP
+WORKDIR /home/${USERNAME}/workspace/OpenWorkspace-Engine
 
 # codegraph install --yes
 

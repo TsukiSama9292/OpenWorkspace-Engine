@@ -1,12 +1,9 @@
 use dashmap::DashMap;
 use std::sync::Arc;
-use uuid::Uuid;
 
 #[derive(Clone, Debug)]
 pub struct CacheEntry {
     pub status: String,
-    #[allow(dead_code)]
-    pub owner_id: Uuid,
 }
 
 #[derive(Clone)]
@@ -21,12 +18,11 @@ impl VncCache {
         }
     }
 
-    pub fn insert(&self, vnc_token: &str, status: &str, owner_id: Uuid) {
+    pub fn insert(&self, vnc_token: &str, status: &str) {
         self.inner.insert(
             vnc_token.to_string(),
             CacheEntry {
                 status: status.to_string(),
-                owner_id,
             },
         );
     }
@@ -39,10 +35,4 @@ impl VncCache {
         self.inner.get(vnc_token).map(|r| r.clone())
     }
 
-    #[allow(dead_code)]
-    pub fn is_running(&self, vnc_token: &str) -> Option<bool> {
-        self.inner
-            .get(vnc_token)
-            .map(|r| r.status == "running")
-    }
 }

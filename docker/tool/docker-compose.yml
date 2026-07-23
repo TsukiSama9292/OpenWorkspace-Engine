@@ -17,4 +17,5 @@ services:
     ipc: private
     volumes:
       - ../../:/home/user/workspace/OpenWorkspace-Engine/
+      - ~/.local/share/opencode/:/home/user/.local/share/opencode/
       - /var/run/docker.sock:/var/run/docker.sock

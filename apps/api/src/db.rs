@@ -5,6 +5,8 @@ fn generate_vnc_token() -> String {
     Uuid::new_v4().as_simple().to_string()
 }
 
+// ── User Repository ────────────────────────────────────────────
+
 pub struct UserRepository<'a> {
     pub db: &'a PgPool,
 }
@@ -85,31 +87,32 @@ impl<'a> UserRepository<'a> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Workspace {
+// ── Workspace Config ───────────────────────────────────────────
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct WorkspaceConfig {
     pub id: Uuid,
     pub name: String,
-    pub instance_number: i32,
-    pub container_id: Option<String>,
-    pub status: String,
+    pub description: Option<String>,
     pub owner_id: Uuid,
+    pub image: String,
+    pub cores: i32,
+    pub memory: i64,
+    pub gpu_count: i32,
+    pub docker_registry: Option<String>,
+    pub run_config: serde_json::Value,
+    pub exec_config: serde_json::Value,
+    pub volume_mappings: serde_json::Value,
+    pub persistent_storage_path: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    pub vnc_token: Option<String>,
-    pub image: Option<String>,
-    pub cores: Option<i32>,
-    pub memory: Option<i64>,
-    pub gpu_count: Option<i32>,
-    pub persistent_storage: Option<bool>,
-    pub volume_host_path: Option<String>,
-    pub volume_container_path: Option<String>,
-    pub owner_username: Option<String>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-pub struct WorkspaceRepository<'a> {
+pub struct WorkspaceConfigRepository<'a> {
     pub db: &'a PgPool,
 }
 
-impl<'a> WorkspaceRepository<'a> {
+impl<'a> WorkspaceConfigRepository<'a> {
     pub fn new(db: &'a PgPool) -> Self {
         Self { db }
     }
@@ -117,75 +120,223 @@ impl<'a> WorkspaceRepository<'a> {
     pub async fn create(
         &self,
         name: &str,
+        description: Option<&str>,
         owner_id: Uuid,
         image: &str,
         cores: i32,
         memory: i64,
         gpu_count: i32,
-        persistent_storage: bool,
-        volume_host_path: Option<&str>,
-        volume_container_path: &str,
-    ) -> Result<Workspace, sqlx::Error> {
+        docker_registry: Option<&str>,
+        run_config: &serde_json::Value,
+        exec_config: &serde_json::Value,
+        volume_mappings: &serde_json::Value,
+        persistent_storage_path: Option<&str>,
+    ) -> Result<WorkspaceConfig, sqlx::Error> {
         let id = Uuid::new_v4();
-        let vnc_token = generate_vnc_token();
-        sqlx::query_as::<_, Workspace>(
-            "INSERT INTO workspaces (id, name, owner_id, vnc_token, image, cores, memory, gpu_count, persistent_storage, volume_host_path, volume_container_path)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-             RETURNING id, name, instance_number, container_id, status, owner_id, created_at, vnc_token, image, cores, memory, gpu_count, persistent_storage, volume_host_path, volume_container_path, NULL AS owner_username",
+        sqlx::query_as::<_, WorkspaceConfig>(
+            "INSERT INTO workspace_configs (id, name, description, owner_id, image, cores, memory, gpu_count, docker_registry, run_config, exec_config, volume_mappings, persistent_storage_path)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+             RETURNING *",
         )
         .bind(id)
         .bind(name)
+        .bind(description)
         .bind(owner_id)
-        .bind(&vnc_token)
         .bind(image)
         .bind(cores)
         .bind(memory)
         .bind(gpu_count)
-        .bind(persistent_storage)
-        .bind(volume_host_path)
-        .bind(volume_container_path)
+        .bind(docker_registry)
+        .bind(run_config)
+        .bind(exec_config)
+        .bind(volume_mappings)
+        .bind(persistent_storage_path)
         .fetch_one(self.db)
         .await
     }
 
-    pub async fn find_by_id(&self, id: Uuid) -> Result<Option<Workspace>, sqlx::Error> {
-        sqlx::query_as::<_, Workspace>(
-            "SELECT w.id, w.name, w.instance_number, w.container_id, w.status, w.owner_id, w.created_at, w.vnc_token, w.image, w.cores, w.memory, w.gpu_count, w.persistent_storage, w.volume_host_path, w.volume_container_path, u.username AS owner_username FROM workspaces w LEFT JOIN users u ON w.owner_id = u.id WHERE w.id = $1",
+    pub async fn find_by_id(&self, id: Uuid) -> Result<Option<WorkspaceConfig>, sqlx::Error> {
+        sqlx::query_as::<_, WorkspaceConfig>("SELECT * FROM workspace_configs WHERE id = $1")
+            .bind(id)
+            .fetch_optional(self.db)
+            .await
+    }
+
+    pub async fn list_by_owner(&self, owner_id: Uuid) -> Result<Vec<WorkspaceConfig>, sqlx::Error> {
+        sqlx::query_as::<_, WorkspaceConfig>(
+            "SELECT * FROM workspace_configs WHERE owner_id = $1 ORDER BY created_at",
         )
-        .bind(id)
-        .fetch_optional(self.db)
+        .bind(owner_id)
+        .fetch_all(self.db)
         .await
     }
 
-    pub async fn find_by_vnc_token(&self, token: &str) -> Result<Option<Workspace>, sqlx::Error> {
-        sqlx::query_as::<_, Workspace>(
-            "SELECT w.id, w.name, w.instance_number, w.container_id, w.status, w.owner_id, w.created_at, w.vnc_token, w.image, w.cores, w.memory, w.gpu_count, w.persistent_storage, w.volume_host_path, w.volume_container_path, u.username AS owner_username FROM workspaces w LEFT JOIN users u ON w.owner_id = u.id WHERE w.vnc_token = $1",
+    pub async fn list_all(&self) -> Result<Vec<WorkspaceConfig>, sqlx::Error> {
+        sqlx::query_as::<_, WorkspaceConfig>("SELECT * FROM workspace_configs ORDER BY created_at")
+            .fetch_all(self.db)
+            .await
+    }
+
+    pub async fn count_instances(&self, config_id: Uuid) -> Result<i64, sqlx::Error> {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM workspace_instances WHERE config_id = $1",
+        )
+        .bind(config_id)
+        .fetch_one(self.db)
+        .await
+    }
+
+    pub async fn update(
+        &self,
+        id: Uuid,
+        name: &str,
+        description: Option<&str>,
+        image: &str,
+        cores: i32,
+        memory: i64,
+        gpu_count: i32,
+        docker_registry: Option<&str>,
+        run_config: &serde_json::Value,
+        exec_config: &serde_json::Value,
+        volume_mappings: &serde_json::Value,
+        persistent_storage_path: Option<&str>,
+    ) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE workspace_configs SET name = $1, description = $2, image = $3, cores = $4, memory = $5, gpu_count = $6, docker_registry = $7, run_config = $8, exec_config = $9, volume_mappings = $10, persistent_storage_path = $11, updated_at = NOW() WHERE id = $12",
+        )
+        .bind(name)
+        .bind(description)
+        .bind(image)
+        .bind(cores)
+        .bind(memory)
+        .bind(gpu_count)
+        .bind(docker_registry)
+        .bind(run_config)
+        .bind(exec_config)
+        .bind(volume_mappings)
+        .bind(persistent_storage_path)
+        .bind(id)
+        .execute(self.db)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn delete(&self, id: Uuid) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query("DELETE FROM workspace_configs WHERE id = $1")
+            .bind(id)
+            .execute(self.db)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+}
+
+// ── Workspace Instance ─────────────────────────────────────────
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct WorkspaceInstance {
+    pub id: Uuid,
+    pub config_id: Uuid,
+    pub name: String,
+    pub instance_number: i32,
+    pub owner_id: Uuid,
+    pub container_id: Option<String>,
+    pub status: String,
+    pub vnc_token: String,
+    pub mount_persistent: bool,
+    pub resolved_volume_host_path: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+pub struct WorkspaceInstanceRepository<'a> {
+    pub db: &'a PgPool,
+}
+
+impl<'a> WorkspaceInstanceRepository<'a> {
+    pub fn new(db: &'a PgPool) -> Self {
+        Self { db }
+    }
+
+    pub async fn launch(
+        &self,
+        config_id: Uuid,
+        owner_id: Uuid,
+        config_name: &str,
+        mount_persistent: bool,
+        resolved_volume_host_path: Option<&str>,
+    ) -> Result<WorkspaceInstance, sqlx::Error> {
+        let id = Uuid::new_v4();
+        let vnc_token = generate_vnc_token();
+
+        // Auto-generate instance name: "{config_name}-{next_number}"
+        let next_number: (i32,) = sqlx::query_as(
+            "SELECT COALESCE(MAX(instance_number), 0) + 1 FROM workspace_instances WHERE config_id = $1",
+        )
+        .bind(config_id)
+        .fetch_one(self.db)
+        .await?;
+        let name = format!("{}-{}", config_name, next_number.0);
+
+        sqlx::query_as::<_, WorkspaceInstance>(
+            "INSERT INTO workspace_instances (id, config_id, name, instance_number, owner_id, container_id, status, vnc_token, mount_persistent, resolved_volume_host_path)
+             VALUES ($1, $2, $3, $4, $5, NULL, 'stopped', $6, $7, $8)
+             RETURNING *",
+        )
+        .bind(id)
+        .bind(config_id)
+        .bind(&name)
+        .bind(next_number.0)
+        .bind(owner_id)
+        .bind(&vnc_token)
+        .bind(mount_persistent)
+        .bind(resolved_volume_host_path)
+        .fetch_one(self.db)
+        .await
+    }
+
+    pub async fn find_by_id(&self, id: Uuid) -> Result<Option<WorkspaceInstance>, sqlx::Error> {
+        sqlx::query_as::<_, WorkspaceInstance>("SELECT * FROM workspace_instances WHERE id = $1")
+            .bind(id)
+            .fetch_optional(self.db)
+            .await
+    }
+
+    pub async fn find_by_vnc_token(&self, token: &str) -> Result<Option<WorkspaceInstance>, sqlx::Error> {
+        sqlx::query_as::<_, WorkspaceInstance>(
+            "SELECT * FROM workspace_instances WHERE vnc_token = $1",
         )
         .bind(token)
         .fetch_optional(self.db)
         .await
     }
 
-    pub async fn list_by_owner(&self, owner_id: Uuid) -> Result<Vec<Workspace>, sqlx::Error> {
-        sqlx::query_as::<_, Workspace>(
-            "SELECT w.id, w.name, w.instance_number, w.container_id, w.status, w.owner_id, w.created_at, w.vnc_token, w.image, w.cores, w.memory, w.gpu_count, w.persistent_storage, w.volume_host_path, w.volume_container_path, u.username AS owner_username FROM workspaces w LEFT JOIN users u ON w.owner_id = u.id WHERE w.owner_id = $1 ORDER BY w.created_at",
+    pub async fn list_by_owner(&self, owner_id: Uuid) -> Result<Vec<WorkspaceInstance>, sqlx::Error> {
+        sqlx::query_as::<_, WorkspaceInstance>(
+            "SELECT * FROM workspace_instances WHERE owner_id = $1 ORDER BY created_at",
         )
         .bind(owner_id)
         .fetch_all(self.db)
         .await
     }
 
-    pub async fn list_all(&self) -> Result<Vec<Workspace>, sqlx::Error> {
-        sqlx::query_as::<_, Workspace>(
-            "SELECT w.id, w.name, w.instance_number, w.container_id, w.status, w.owner_id, w.created_at, w.vnc_token, w.image, w.cores, w.memory, w.gpu_count, w.persistent_storage, w.volume_host_path, w.volume_container_path, u.username AS owner_username FROM workspaces w LEFT JOIN users u ON w.owner_id = u.id ORDER BY w.created_at",
+    pub async fn list_all(&self) -> Result<Vec<WorkspaceInstance>, sqlx::Error> {
+        sqlx::query_as::<_, WorkspaceInstance>("SELECT * FROM workspace_instances ORDER BY created_at")
+            .fetch_all(self.db)
+            .await
+    }
+
+    pub async fn list_by_config(&self, config_id: Uuid) -> Result<Vec<WorkspaceInstance>, sqlx::Error> {
+        sqlx::query_as::<_, WorkspaceInstance>(
+            "SELECT * FROM workspace_instances WHERE config_id = $1 ORDER BY created_at",
         )
+        .bind(config_id)
         .fetch_all(self.db)
         .await
     }
 
     pub async fn update_status(&self, id: Uuid, status: &str) -> Result<bool, sqlx::Error> {
         let result =
-            sqlx::query("UPDATE workspaces SET status = $1, updated_at = NOW() WHERE id = $2")
+            sqlx::query("UPDATE workspace_instances SET status = $1, updated_at = NOW() WHERE id = $2")
                 .bind(status)
                 .bind(id)
                 .execute(self.db)
@@ -199,7 +350,7 @@ impl<'a> WorkspaceRepository<'a> {
         container_id: &str,
     ) -> Result<bool, sqlx::Error> {
         let result = sqlx::query(
-            "UPDATE workspaces SET container_id = $1, updated_at = NOW() WHERE id = $2",
+            "UPDATE workspace_instances SET container_id = $1, updated_at = NOW() WHERE id = $2",
         )
         .bind(container_id)
         .bind(id)
@@ -209,13 +360,15 @@ impl<'a> WorkspaceRepository<'a> {
     }
 
     pub async fn delete(&self, id: Uuid) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query("DELETE FROM workspaces WHERE id = $1")
+        let result = sqlx::query("DELETE FROM workspace_instances WHERE id = $1")
             .bind(id)
             .execute(self.db)
             .await?;
         Ok(result.rows_affected() > 0)
     }
 }
+
+// ── Registry Repository ────────────────────────────────────────
 
 pub struct RegistryRepository<'a> {
     pub db: &'a PgPool,

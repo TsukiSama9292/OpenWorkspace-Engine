@@ -28,6 +28,18 @@ pub struct DockerClient {
     docker: Docker,
 }
 
+/// Full configuration for creating a container from a workspace config.
+pub struct ContainerConfig {
+    pub image: String,
+    pub cores: i32,
+    pub memory: i64,
+    pub gpu_count: i32,
+    pub run_config: serde_json::Value,
+    pub exec_config: serde_json::Value,
+    pub volume_mappings: serde_json::Value,
+    pub persistent_volume: Option<String>,
+}
+
 impl DockerClient {
     pub async fn new() -> Result<Self, String> {
         let docker = Docker::connect_with_local_defaults().map_err(|e| e.to_string())?;
@@ -83,25 +95,26 @@ impl DockerClient {
         Ok(container.id)
     }
 
-    pub async fn create_kasm_container(
+    /// Create a container from a full workspace config, applying all Docker settings.
+    pub async fn create_container_from_config(
         &self,
-        name: &str,
+        container_name: &str,
         instance_number: i32,
+        config: &ContainerConfig,
     ) -> Result<String, String> {
-        let image = "kasmweb/desktop:1.19.0-rolling-daily";
-        let container_name = format!("ow-kasm-{}", instance_number);
+        let image = &config.image;
 
         tracing::info!(
-            "Pulling KasmVNC image '{}' for instance '{}' (#{})...",
+            "Pulling image '{}' for instance '{}' (#{})...",
             image,
-            name,
+            container_name,
             instance_number
         );
 
         self.docker
             .create_image(
                 Some(CreateImageOptions {
-                    from_image: image,
+                    from_image: image.as_str(),
                     ..Default::default()
                 }),
                 None,
@@ -111,34 +124,115 @@ impl DockerClient {
             .await
             .map_err(|e| e.to_string())?;
 
+        // ── Build environment variables ──
+        let mut env = vec![
+            "VNCOPTIONS=-disableBasicAuth",
+            "KASM_VNC_PORT=6901",
+            "DISPLAY=:1",
+        ];
+        if let Some(user_env) = config.run_config.get("environment").and_then(|v| v.as_array()) {
+            for item in user_env {
+                if let Some(s) = item.as_str() {
+                    env.push(s);
+                }
+            }
+        }
+
+        // ── Exposed ports ──
         let mut exposed_ports = std::collections::HashMap::new();
         exposed_ports.insert("6901/tcp", std::collections::HashMap::<(), ()>::new());
 
-        let config = Config {
-            image: Some(image),
-            env: Some(vec![
-                "VNCOPTIONS=-disableBasicAuth",
-                "KASM_VNC_PORT=6901",
-                "DISPLAY=:1",
-            ]),
+        // ── Build volume binds ──
+        let mut binds = Vec::new();
+
+        // Config volume_mappings
+        if let Some(mappings) = config.volume_mappings.as_object() {
+            for (host_path, container_path) in mappings {
+                if let Some(container_path_str) = container_path.as_str() {
+                    binds.push(format!("{}:{}:rw", host_path, container_path_str));
+                }
+            }
+        }
+
+        // Persistent storage volume
+        if let Some(ref persistent_path) = config.persistent_volume {
+            binds.push(format!("{}:/home/kasm_user/persistent:rw", persistent_path));
+        }
+
+        // ── DNS ──
+        let dns: Option<Vec<String>> = config
+            .run_config
+            .get("dns")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            });
+
+        // ── SHM size ──
+        let shm_size: Option<i64> = config
+            .run_config
+            .get("shm_size")
+            .and_then(|v| v.as_i64());
+
+        // ── Network mode ──
+        let network_mode: Option<String> = config
+            .run_config
+            .get("network_mode")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        // ── Hostname ──
+        let hostname: Option<&str> = config
+            .run_config
+            .get("hostname")
+            .and_then(|v| v.as_str());
+
+        let host_config = bollard::models::HostConfig {
+            privileged: Some(false),
+            nano_cpus: Some((config.cores as i64) * 1_000_000_000),
+            memory: Some(config.memory),
+            dns,
+            shm_size,
+            network_mode,
+            binds: if binds.is_empty() { None } else { Some(binds) },
+            device_requests: if config.gpu_count > 0 {
+                Some(vec![bollard::models::DeviceRequest {
+                    driver: Some("nvidia".to_string()),
+                    count: Some(config.gpu_count as i64),
+                    capabilities: Some(vec![vec!["gpu".to_string()]]),
+                    ..Default::default()
+                }])
+            } else {
+                None
+            },
+            ..Default::default()
+        };
+
+        let container_config = Config {
+            image: Some(image.as_str()),
+            env: Some(env),
             exposed_ports: Some(exposed_ports),
-            host_config: Some(bollard::models::HostConfig {
-                privileged: Some(false),
-                ..Default::default()
-            }),
+            hostname,
+            host_config: Some(host_config),
             ..Default::default()
         };
 
         let options = Some(CreateContainerOptions {
-            name: container_name,
+            name: container_name.to_string(),
             ..Default::default()
         });
 
-        let container = self.docker.create_container(options, config).await.map_err(|e| e.to_string())?;
+        let container = self
+            .docker
+            .create_container(options, container_config)
+            .await
+            .map_err(|e| e.to_string())?;
 
         tracing::info!(
             "Connecting container '{}' (id: {}) to network 'openworkspace-engin'...",
-            name,
+            container_name,
             &container.id[..12]
         );
 
@@ -153,7 +247,7 @@ impl DockerClient {
             .await
             .map_err(|e| e.to_string())?;
 
-        tracing::info!("Injecting kasmvnc.yaml into container '{}'...", name);
+        tracing::info!("Injecting kasmvnc.yaml into container '{}'...", container_name);
 
         let mut header = tar::Header::new_gnu();
         header.set_size(KASMVNC_YAML.len() as u64);
@@ -184,16 +278,64 @@ impl DockerClient {
             .await
             .map_err(|e| format!("upload_to_container failed: {}", e))?;
 
-        tracing::info!("Starting container '{}'...", name);
+        tracing::info!("Starting container '{}'...", container_name);
 
         self.docker
             .start_container(&container.id, None::<StartContainerOptions<String>>)
             .await
             .map_err(|e| e.to_string())?;
 
+        // ── Exec post-start commands ──
+        if let Some(commands) = config.exec_config.as_object() {
+            for (name, cmd_obj) in commands {
+                if let Some(cmd_str) = cmd_obj.get("cmd").and_then(|v| v.as_str()) {
+                    tracing::info!(
+                        "Executing post-start command '{}' in container '{}'...",
+                        name,
+                        container_name
+                    );
+                    let exec_options = bollard::exec::CreateExecOptions {
+                        cmd: Some(vec!["bash", "-c", cmd_str]),
+                        ..Default::default()
+                    };
+                    let exec = self
+                        .docker
+                        .create_exec(&container.id, exec_options)
+                        .await;
+                    match exec {
+                        Ok(exec_output) => {
+                            let start_result = self
+                                .docker
+                                .start_exec(
+                                    &exec_output.id,
+                                    None::<bollard::exec::StartExecOptions>,
+                                )
+                                .await;
+                            if let Err(e) = start_result {
+                                tracing::warn!(
+                                    "Failed to execute command '{}' in container '{}': {}",
+                                    name,
+                                    container_name,
+                                    e
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to create exec for command '{}' in container '{}': {}",
+                                name,
+                                container_name,
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
         tracing::info!(
-            "KasmVNC container '{}' (#{}) started successfully (id: {})",
-            name,
+            "Container '{}' (#{}) started successfully (id: {})",
+            container_name,
             instance_number,
             &container.id[..12]
         );
@@ -240,14 +382,14 @@ impl DockerClient {
         &self,
         container_id: &str,
     ) -> Result<(), bollard::errors::Error> {
-        self.docker.pause_container(container_id, None).await
+        self.docker.pause_container(container_id).await
     }
 
     pub async fn unpause_container_by_id(
         &self,
         container_id: &str,
     ) -> Result<(), bollard::errors::Error> {
-        self.docker.unpause_container(container_id, None).await
+        self.docker.unpause_container(container_id).await
     }
 
     pub async fn get_container_ip(
