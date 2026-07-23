@@ -10,7 +10,7 @@ impl MigrationTrait for Migration {
             .alter_table(
                 Table::alter()
                     .table(Instances::Table)
-                    .add_column_if_not_exists(string(Instances::VncToken).unique_key().null())
+                    .add_column_if_not_exists(string_null(Instances::VncToken).unique_key())
                     .to_owned(),
             )
             .await

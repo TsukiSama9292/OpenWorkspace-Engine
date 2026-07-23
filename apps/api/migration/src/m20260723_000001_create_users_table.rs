@@ -42,7 +42,7 @@ impl MigrationTrait for Migration {
                             .unique_key()
                             .not_null(),
                     )
-                    .col(string(Instances::ContainerId).null())
+                    .col(string_null(Instances::ContainerId))
                     .col(string(Instances::Status).not_null().default("stopped"))
                     .col(uuid(Instances::OwnerId).not_null())
                     .col(
