@@ -1,0 +1,5 @@
+!static-routers.yml
+!static-services.yml
+!static-transports.yml
+!.gitignore
+*.yml
