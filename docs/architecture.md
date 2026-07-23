@@ -174,8 +174,14 @@ sequenceDiagram
     T->>A: ForwardAuth: GET /api/vnc/verify<br/>Cookie: ow_token=JWT<br/>X-Forwarded-Uri: /vnc/{token}/websockify
     A->>A: Decode JWT → user_id, role
     A->>A: Extract VNC token from URI
-    A->>A: DB lookup: instance exists + status=running
-    A-->>T: 200 OK + X-Forwarded-User + X-Forwarded-Role
+    A->>A: Cache lookup (DashMap, O(1))
+    alt Cache hit
+        A-->>T: 200 OK + X-Forwarded-User
+    else Cache miss
+        A->>A: DB lookup: instance exists + status=running
+        A->>A: Populate cache
+        A-->>T: 200 OK + X-Forwarded-User
+    end
     T->>K: Proxy to KasmVNC
 ```
 
@@ -274,7 +280,7 @@ vnc-auth:
       - "X-Forwarded-Role"
 ```
 
-Traefik calls `/api/vnc/verify` before proxying any WebSocket request to a KasmVNC instance. The API validates the JWT cookie and instance ownership.
+Traefik calls `/api/vnc/verify` before proxying any WebSocket request to a KasmVNC instance. The API validates the JWT cookie and instance ownership via an in-memory cache (`DashMap`), falling back to PostgreSQL on cache miss.
 
 ### TLS Handling
 
@@ -367,4 +373,10 @@ erDiagram
 - Each KasmVNC container gets its own IP; no port conflicts (no host port mapping)
 - Traefik proxies to container IPs directly, no port allocation needed
 
-**Bottleneck:** PostgreSQL connection pool for instance lookups during ForwardAuth. Each WebSocket upgrade triggers one DB query (lookup by vnc_token). Connection pooling via SQLx's PgPool handles this.
+**In-memory VNC cache (`DashMap`):**
+- `vnc_token → { status, owner_id }` mapping stored in a lock-free concurrent HashMap
+- Populated on API startup from DB (all running instances)
+- Synchronized on instance create/start/stop/delete events
+- `vnc_verify` reads cache first (O(1) hash lookup, no async); falls back to DB on cache miss
+- Eliminates PostgreSQL round-trip on every WebSocket handshake
+- Cache is per-process; sufficient for single-API deployment

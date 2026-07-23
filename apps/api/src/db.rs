@@ -146,12 +146,13 @@ impl<'a> InstanceRepository<'a> {
             i32,
             Option<String>,
             String,
+            Uuid,
             Option<String>,
         )>,
         sqlx::Error,
     > {
         sqlx::query_as(
-            "SELECT id, name, instance_number, container_id, status, vnc_token FROM instances WHERE vnc_token = $1",
+            "SELECT id, name, instance_number, container_id, status, owner_id, vnc_token FROM instances WHERE vnc_token = $1",
         )
         .bind(token)
         .fetch_optional(self.db)

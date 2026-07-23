@@ -2,9 +2,10 @@ mod auth;
 mod db;
 mod docker;
 mod routes;
+mod vnc_cache;
 mod vnc_trafik;
 
-use db::UserRepository;
+use db::{InstanceRepository, UserRepository};
 use routes::{api_routes, AppState};
 use sqlx::postgres::PgPoolOptions;
 use tower_http::cors::{Any, CorsLayer};
@@ -54,9 +55,29 @@ async fn main() {
         .await
         .expect("Failed to seed admin user");
 
-    tracing::info!("Admin seed done, starting server...");
+    tracing::info!("Admin seed done, populating VNC cache...");
 
-    let state = AppState { db };
+    let vnc_cache = vnc_cache::VncCache::new();
+    let instance_repo = InstanceRepository::new(&db);
+    match instance_repo.list_all().await {
+        Ok(instances) => {
+            let mut count = 0;
+            for (_id, _name, _instance_number, _container_id, status, _owner_id, _created_at, vnc_token) in &instances {
+                if status == "running" {
+                    if let Some(token) = vnc_token {
+                        vnc_cache.insert(token, status, *_owner_id);
+                        count += 1;
+                    }
+                }
+            }
+            tracing::info!("VNC cache loaded: {} running instances", count);
+        }
+        Err(e) => {
+            tracing::warn!("Failed to load instances for VNC cache: {}", e);
+        }
+    }
+
+    let state = AppState { db, vnc_cache };
 
     let cors = CorsLayer::new()
         .allow_origin(Any)

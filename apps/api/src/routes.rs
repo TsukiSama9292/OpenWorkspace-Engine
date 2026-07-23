@@ -13,10 +13,12 @@ use uuid::Uuid;
 use crate::auth::{clear_cookie, create_token, set_cookie, Claims, AuthUser};
 use crate::db::{InstanceRepository, UserRepository};
 use crate::docker::DockerClient;
+use crate::vnc_cache::VncCache;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
+    pub vnc_cache: VncCache,
 }
 
 #[derive(Deserialize)]
@@ -286,6 +288,8 @@ async fn create_instance(
                     if let Err(e) = crate::vnc_trafik::write_vnc_route(&vnc_token, &ip) {
                         tracing::error!("Failed to write Traefik VNC route: {}", e);
                     }
+                    // Populate cache
+                    state.vnc_cache.insert(&vnc_token, "running", auth.user_id);
                 }
                 Err(e) => tracing::error!("Failed to get container IP for Traefik route: {}", e),
             }
@@ -371,6 +375,7 @@ async fn delete_instance(
         if let Err(e) = crate::vnc_trafik::delete_vnc_route(token) {
             tracing::error!("Failed to delete Traefik VNC route: {}", e);
         }
+        state.vnc_cache.remove(token);
     }
 
     if let Some(container_id) = instance.3 {
@@ -461,6 +466,10 @@ async fn start_instance(
                 if let Err(e) = crate::vnc_trafik::write_vnc_route(vnc_token.as_deref().unwrap_or(""), &ip) {
                     tracing::error!("Failed to write Traefik VNC route: {}", e);
                 }
+                // Populate cache
+                if let Some(ref token) = vnc_token {
+                    state.vnc_cache.insert(token, "running", instance.5);
+                }
             }
             Err(e) => tracing::error!("Failed to get container IP for Traefik route: {}", e),
         }
@@ -521,6 +530,7 @@ async fn stop_instance(
         if let Err(e) = crate::vnc_trafik::delete_vnc_route(token) {
             tracing::error!("Failed to delete Traefik VNC route: {}", e);
         }
+        state.vnc_cache.remove(token);
     }
 
     repo.update_status(instance_id, "stopped").await.map_err(|e| {
@@ -628,17 +638,30 @@ async fn vnc_verify(
         .and_then(|rest| rest.strip_suffix("/websockify"))
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
-    let repo = InstanceRepository::new(&state.db);
-    let instance = repo
-        .find_by_vnc_token(vnc_token)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    // Fast path: check in-memory cache (no DB query)
+    match state.vnc_cache.get(vnc_token) {
+        Some(entry) => {
+            if entry.status != "running" {
+                return Err(StatusCode::NOT_FOUND);
+            }
+        }
+        None => {
+            // Cache miss: fall back to DB, then populate cache
+            let repo = InstanceRepository::new(&state.db);
+            let instance = repo
+                .find_by_vnc_token(vnc_token)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                .ok_or(StatusCode::NOT_FOUND)?;
 
-    let (_id, _name, _instance_number, _container_id, status, _owner_id) = &instance;
+            let (_id, _name, _instance_number, _container_id, status, owner_id, _vnc_token) = &instance;
 
-    if status != "running" {
-        return Err(StatusCode::NOT_FOUND);
+            if status != "running" {
+                return Err(StatusCode::NOT_FOUND);
+            }
+
+            state.vnc_cache.insert(vnc_token, status, *owner_id);
+        }
     }
 
     let mut resp_headers = axum::http::HeaderMap::new();
