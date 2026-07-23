@@ -5,7 +5,8 @@ mod routes;
 mod vnc_cache;
 mod vnc_trafik;
 
-use db::{WorkspaceRepository, UserRepository};
+use db::{WorkspaceInstanceRepository, UserRepository};
+use migration::{Migrator, MigratorTrait};
 use routes::{api_routes, AppState};
 use sqlx::postgres::PgPoolOptions;
 use tower_http::cors::{Any, CorsLayer};
@@ -43,8 +44,10 @@ async fn main() {
 
     tracing::info!("Database connected, running migrations...");
 
-    sqlx::migrate!("./migrations")
-        .run(&db)
+    let migrator_db = sea_orm::Database::connect(&database_url)
+        .await
+        .expect("Failed to connect for migrations");
+    Migrator::up(&migrator_db, None)
         .await
         .expect("Failed to run migrations");
 
@@ -58,22 +61,20 @@ async fn main() {
     tracing::info!("Admin seed done, populating VNC cache...");
 
     let vnc_cache = vnc_cache::VncCache::new();
-    let workspace_repo = WorkspaceRepository::new(&db);
-    match workspace_repo.list_all().await {
-        Ok(workspaces) => {
+    let instance_repo = WorkspaceInstanceRepository::new(&db);
+    match instance_repo.list_all().await {
+        Ok(instances) => {
             let mut count = 0;
-            for ws in &workspaces {
-                if ws.status == "running" {
-                    if let Some(ref token) = ws.vnc_token {
-                        vnc_cache.insert(token, &ws.status, ws.owner_id);
-                        count += 1;
-                    }
+            for inst in &instances {
+                if inst.status == "running" {
+                    vnc_cache.insert(&inst.vnc_token, &inst.status);
+                    count += 1;
                 }
             }
-            tracing::info!("VNC cache loaded: {} running workspaces", count);
+            tracing::info!("VNC cache loaded: {} running instances", count);
         }
         Err(e) => {
-            tracing::warn!("Failed to load workspaces for VNC cache: {}", e);
+            tracing::warn!("Failed to load instances for VNC cache: {}", e);
         }
     }
 
