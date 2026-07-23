@@ -1,9 +1,10 @@
 <script>
+  import { page } from '$app/stores';
   import { onMount } from 'svelte';
-  import VncViewer from '$lib/components/VncViewer.svelte';
-  import StatusBar from '$lib/components/StatusBar.svelte';
-  import Clipboard from '$lib/components/Clipboard.svelte';
-  import Settings from '$lib/components/Settings.svelte';
+  import VncViewer from '$lib/vnc-components/VncViewer.svelte';
+  import StatusBar from '$lib/vnc-components/StatusBar.svelte';
+  import Clipboard from '$lib/vnc-components/Clipboard.svelte';
+  import Settings from '$lib/vnc-components/Settings.svelte';
   import { theme } from '$lib/stores/theme.js';
 
   let viewer = $state(null);
@@ -23,12 +24,13 @@
 
   let isFullscreen = $state(false);
 
+  const token = $derived($page.params.token);
+
   function getWebSocketUrl() {
     if (typeof window === 'undefined') return '';
     const loc = window.location;
     const protocol = loc.protocol === 'https:' ? 'wss:' : 'ws:';
-    const base = loc.pathname.endsWith('/') ? loc.pathname : loc.pathname + '/';
-    return `${protocol}//${loc.host}${base}websockify`;
+    return `${protocol}//${loc.host}/vnc/${token}/websockify`;
   }
 
   async function handleFullscreen() {

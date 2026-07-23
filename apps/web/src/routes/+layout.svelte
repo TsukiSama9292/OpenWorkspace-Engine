@@ -13,7 +13,7 @@
     auth.check().then(() => { authChecked = true; });
   });
 
-  let showNav = $derived($isAuthenticated && $page.url.pathname !== '/login/');
+  let showNav = $derived($isAuthenticated && $page.url.pathname !== '/login/' && !$page.url.pathname.startsWith('/vnc/'));
 
   $effect(() => {
     if (authChecked && !$isAuthenticated && $page.url.pathname !== '/login/') {

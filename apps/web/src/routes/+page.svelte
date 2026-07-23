@@ -12,6 +12,12 @@
     }
     loading = false;
   });
+
+  function openVnc(token, e) {
+    e.preventDefault();
+    e.stopPropagation();
+    window.open(`/vnc/${token}/`, '_blank');
+  }
 </script>
 
 <div class="dashboard">
@@ -29,9 +35,20 @@
       {#each instances as instance}
         <a href="/instances/{instance.id}/" class="card">
           <h3>{instance.name}</h3>
-          <span class="status" class:running={instance.status === 'running'}>
-            {instance.status}
-          </span>
+          <div class="card-footer">
+            <span class="status" class:running={instance.status === 'running'}>
+              {instance.status}
+            </span>
+            {#if instance.status === 'running' && instance.vnc_token}
+              <button class="vnc-btn" onclick={(e) => openVnc(instance.vnc_token, e)} title="Open VNC">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="2" y="3" width="20" height="14" rx="2"/>
+                  <path d="M8 21h8M12 17v4"/>
+                </svg>
+                VNC
+              </button>
+            {/if}
+          </div>
         </a>
       {/each}
     </div>
@@ -78,11 +95,33 @@
     margin: 0 0 0.75rem;
     color: var(--text-primary, #fff);
   }
+  .card-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
   .status {
     font-size: 0.85rem;
     color: var(--text-secondary, #888);
   }
   .status.running {
     color: #22c55e;
+  }
+  .vnc-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    background: var(--accent, #4ecca3);
+    color: #0a0a1a;
+    border: none;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+    text-decoration: none;
+  }
+  .vnc-btn:hover {
+    opacity: 0.9;
   }
 </style>

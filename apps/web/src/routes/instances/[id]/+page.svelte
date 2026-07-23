@@ -5,7 +5,6 @@
 
   let instance = $state(null);
   let loading = $state(true);
-  let showVnc = $state(false);
 
   const id = $derived($page.params.id);
 
@@ -17,8 +16,10 @@
     loading = false;
   });
 
-  async function toggleVnc() {
-    showVnc = !showVnc;
+  function openVnc() {
+    if (instance?.vnc_token) {
+      window.open(`/vnc/${instance.vnc_token}/`, '_blank');
+    }
   }
 
   async function startInstance() {
@@ -58,9 +59,7 @@
       </div>
       <div class="actions">
         {#if instance.status === 'running'}
-          <button onclick={toggleVnc}>
-            {showVnc ? 'Close VNC' : 'Open VNC'}
-          </button>
+          <button class="vnc-btn" onclick={openVnc}>Open VNC</button>
           <button onclick={stopInstance}>Stop</button>
         {:else}
           <button onclick={startInstance}>Start</button>
@@ -68,16 +67,6 @@
         <button onclick={deleteInstance} class="danger">Delete</button>
       </div>
     </div>
-
-    {#if showVnc && instance.status === 'running'}
-      <div class="vnc-container">
-        <iframe
-          src="/kasm{instance.instance_number}/"
-          title="VNC"
-          sandbox="allow-scripts allow-same-origin"
-        ></iframe>
-      </div>
-    {/if}
   {/if}
 </div>
 
@@ -115,20 +104,13 @@
     color: var(--text-primary, #fff);
     cursor: pointer;
   }
+  button.vnc-btn {
+    background: var(--accent, #6366f1);
+    border-color: var(--accent, #6366f1);
+    color: white;
+  }
   button.danger {
     border-color: #ef4444;
     color: #ef4444;
-  }
-  .vnc-container {
-    margin-top: 1rem;
-    border: 1px solid var(--border, #333);
-    border-radius: 8px;
-    overflow: hidden;
-    aspect-ratio: 16/9;
-  }
-  iframe {
-    width: 100%;
-    height: 100%;
-    border: none;
   }
 </style>

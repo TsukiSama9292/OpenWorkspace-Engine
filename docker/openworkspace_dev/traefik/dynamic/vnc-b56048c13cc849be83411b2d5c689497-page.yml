@@ -1,0 +1,7 @@
+http:
+  routers:
+    vnc-b56048c13cc849be83411b2d5c689497-page:
+      rule: "PathPrefix(`/vnc/b56048c13cc849be83411b2d5c689497`)"
+      service: "web-service"
+      entryPoints:
+        - web

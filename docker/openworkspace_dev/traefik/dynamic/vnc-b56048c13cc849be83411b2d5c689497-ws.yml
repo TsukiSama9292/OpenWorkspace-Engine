@@ -1,0 +1,15 @@
+http:
+  routers:
+    vnc-b56048c13cc849be83411b2d5c689497-ws:
+      rule: "PathPrefix(`/vnc/b56048c13cc849be83411b2d5c689497/websockify`)"
+      service: "vnc-b56048c13cc849be83411b2d5c689497"
+      entryPoints:
+        - web
+      middlewares:
+        - "vnc-auth"
+  services:
+    vnc-b56048c13cc849be83411b2d5c689497:
+      loadBalancer:
+        serversTransport: "kasm-insecure"
+        servers:
+          - url: "https://172.16.0.4:6901"

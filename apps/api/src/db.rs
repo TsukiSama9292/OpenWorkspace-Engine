@@ -1,6 +1,10 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+fn generate_vnc_token() -> String {
+    Uuid::new_v4().as_simple().to_string()
+}
+
 pub struct UserRepository<'a> {
     pub db: &'a PgPool,
 }
@@ -94,14 +98,16 @@ impl<'a> InstanceRepository<'a> {
         &self,
         name: &str,
         owner_id: Uuid,
-    ) -> Result<(Uuid, i32), sqlx::Error> {
+    ) -> Result<(Uuid, i32, String), sqlx::Error> {
         let id = Uuid::new_v4();
-        sqlx::query_as::<_, (Uuid, i32)>(
-            "INSERT INTO instances (id, name, owner_id) VALUES ($1, $2, $3) RETURNING id, instance_number",
+        let vnc_token = generate_vnc_token();
+        sqlx::query_as::<_, (Uuid, i32, String)>(
+            "INSERT INTO instances (id, name, owner_id, vnc_token) VALUES ($1, $2, $3, $4) RETURNING id, instance_number, vnc_token",
         )
         .bind(id)
         .bind(name)
         .bind(owner_id)
+        .bind(&vnc_token)
         .fetch_one(self.db)
         .await
     }
@@ -118,13 +124,36 @@ impl<'a> InstanceRepository<'a> {
             String,
             Uuid,
             chrono::DateTime<chrono::Utc>,
+            Option<String>,
         )>,
         sqlx::Error,
     > {
         sqlx::query_as(
-            "SELECT id, name, instance_number, container_id, status, owner_id, created_at FROM instances WHERE id = $1",
+            "SELECT id, name, instance_number, container_id, status, owner_id, created_at, vnc_token FROM instances WHERE id = $1",
         )
         .bind(id)
+        .fetch_optional(self.db)
+        .await
+    }
+
+    pub async fn find_by_vnc_token(
+        &self,
+        token: &str,
+    ) -> Result<
+        Option<(
+            Uuid,
+            String,
+            i32,
+            Option<String>,
+            String,
+            Option<String>,
+        )>,
+        sqlx::Error,
+    > {
+        sqlx::query_as(
+            "SELECT id, name, instance_number, container_id, status, vnc_token FROM instances WHERE vnc_token = $1",
+        )
+        .bind(token)
         .fetch_optional(self.db)
         .await
     }
@@ -141,11 +170,12 @@ impl<'a> InstanceRepository<'a> {
             String,
             Uuid,
             chrono::DateTime<chrono::Utc>,
+            Option<String>,
         )>,
         sqlx::Error,
     > {
         sqlx::query_as(
-            "SELECT id, name, instance_number, container_id, status, owner_id, created_at FROM instances WHERE owner_id = $1 ORDER BY created_at",
+            "SELECT id, name, instance_number, container_id, status, owner_id, created_at, vnc_token FROM instances WHERE owner_id = $1 ORDER BY created_at",
         )
         .bind(owner_id)
         .fetch_all(self.db)
@@ -163,11 +193,12 @@ impl<'a> InstanceRepository<'a> {
             String,
             Uuid,
             chrono::DateTime<chrono::Utc>,
+            Option<String>,
         )>,
         sqlx::Error,
     > {
         sqlx::query_as(
-            "SELECT id, name, instance_number, container_id, status, owner_id, created_at FROM instances ORDER BY created_at",
+            "SELECT id, name, instance_number, container_id, status, owner_id, created_at, vnc_token FROM instances ORDER BY created_at",
         )
         .fetch_all(self.db)
         .await

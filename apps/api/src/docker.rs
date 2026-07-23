@@ -1,6 +1,6 @@
 use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, StartContainerOptions,
-    StopContainerOptions,
+    StopContainerOptions, UploadToContainerOptions,
 };
 use bollard::image::CreateImageOptions;
 use bollard::models::ContainerSummary;
@@ -8,6 +8,21 @@ use bollard::network::ConnectNetworkOptions;
 use bollard::Docker;
 use futures_util::stream::TryStreamExt;
 use std::default::Default;
+
+const KASMVNC_YAML: &str = r#"network:
+  ssl:
+    pem_certificate: ${HOME}/.vnc/self.pem
+    pem_key: ${HOME}/.vnc/self.pem
+    require_ssl: false
+  udp:
+    public_ip: 127.0.0.1
+runtime_configuration:
+  allow_override_standard_vnc_server_settings: true
+  allow_override_list:
+    - pointer.enabled
+server:
+  allow_environment_variables_to_override_config_settings: true
+"#;
 
 pub struct DockerClient {
     docker: Docker,
@@ -138,6 +153,37 @@ impl DockerClient {
             .await
             .map_err(|e| e.to_string())?;
 
+        tracing::info!("Injecting kasmvnc.yaml into container '{}'...", name);
+
+        let mut header = tar::Header::new_gnu();
+        header.set_size(KASMVNC_YAML.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+
+        let mut tar_buf: Vec<u8> = Vec::new();
+        {
+            let mut ar = tar::Builder::new(&mut tar_buf);
+            ar.append_data(
+                &mut header,
+                "etc/kasmvnc/kasmvnc.yaml",
+                KASMVNC_YAML.as_bytes(),
+            )
+            .map_err(|e| e.to_string())?;
+            ar.finish().map_err(|e| e.to_string())?;
+        }
+
+        self.docker
+            .upload_to_container(
+                &container.id,
+                Some(UploadToContainerOptions {
+                    path: "/",
+                    ..Default::default()
+                }),
+                tar_buf.into(),
+            )
+            .await
+            .map_err(|e| format!("upload_to_container failed: {}", e))?;
+
         tracing::info!("Starting container '{}'...", name);
 
         self.docker
@@ -188,5 +234,24 @@ impl DockerClient {
             Ok(info) => Ok(info.state.and_then(|s| s.status).map(|s| format!("{:?}", s))),
             Err(e) => Err(e),
         }
+    }
+
+    pub async fn get_container_ip(
+        &self,
+        container_id: &str,
+        network_name: &str,
+    ) -> Result<String, String> {
+        let info = self
+            .docker
+            .inspect_container(container_id, None)
+            .await
+            .map_err(|e| format!("inspect failed: {}", e))?;
+
+        info.network_settings
+            .and_then(|ns| ns.networks)
+            .and_then(|networks| networks.get(network_name).cloned())
+            .and_then(|net| net.ip_address)
+            .filter(|ip| !ip.is_empty())
+            .ok_or_else(|| format!("no IP on network '{}' for container {}", network_name, &container_id[..12]))
     }
 }

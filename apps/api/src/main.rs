@@ -2,6 +2,7 @@ mod auth;
 mod db;
 mod docker;
 mod routes;
+mod vnc_trafik;
 
 use db::UserRepository;
 use routes::{api_routes, AppState};

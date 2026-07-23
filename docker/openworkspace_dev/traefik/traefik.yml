@@ -1,17 +1,17 @@
-# 1. 監聽埠口
 entryPoints:
   web:
     address: ":80"
   websecure:
     address: ":443"
 
-# 2. 啟用檔案 Provider，並監聽動態設定檔的變動
 providers:
   file:
-    filename: "/etc/traefik/dynamic.yml"
-    watch: true # 啟用熱重載，改設定免重啟
+    directory: "/etc/traefik/dynamic"
+    watch: true
 
-# 3. (選填) 啟用 Traefik Dashboard 儀表板
 api:
   dashboard: true
-  insecure: true # 開啟 http://localhost:8080/dashboard/
+  insecure: true
+
+log:
+  level: INFO

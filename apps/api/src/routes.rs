@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{header, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -10,7 +10,7 @@ use serde::Deserialize;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::auth::{clear_cookie, create_token, set_cookie, AuthUser};
+use crate::auth::{clear_cookie, create_token, set_cookie, Claims, AuthUser};
 use crate::db::{InstanceRepository, UserRepository};
 use crate::docker::DockerClient;
 
@@ -59,6 +59,7 @@ pub fn api_routes() -> Router<AppState> {
         .route("/api/instances/{id}/stop", post(stop_instance))
         .route("/api/docker/containers", get(list_docker_containers))
         .route("/api/docker/containers/create", post(create_docker_container))
+        .route("/api/vnc/verify", get(vnc_verify))
 }
 
 async fn health() -> Json<serde_json::Value> {
@@ -228,7 +229,8 @@ async fn list_instances(
         .map(|i| {
             serde_json::json!({
                 "id": i.0, "name": i.1, "instance_number": i.2,
-                "container_id": i.3, "status": i.4, "owner_id": i.5
+                "container_id": i.3, "status": i.4, "owner_id": i.5,
+                "vnc_token": i.7
             })
         })
         .collect();
@@ -243,7 +245,7 @@ async fn create_instance(
 ) -> Response {
     let repo = InstanceRepository::new(&state.db);
 
-    let (id, instance_number) = match repo
+    let (id, instance_number, vnc_token) = match repo
         .create(&input.name, auth.user_id)
         .await
     {
@@ -255,10 +257,11 @@ async fn create_instance(
     };
 
     tracing::info!(
-        "Instance '{}' created (id={}, #{})",
+        "Instance '{}' created (id={}, #{}, token={})",
         input.name,
         id,
-        instance_number
+        instance_number,
+        vnc_token
     );
 
     let docker = match DockerClient::new().await {
@@ -276,6 +279,17 @@ async fn create_instance(
         Ok(container_id) => {
             repo.update_container_id(id, &container_id).await.ok();
             repo.update_status(id, "running").await.ok();
+
+            // Write Traefik route
+            match docker.get_container_ip(&container_id, "openworkspace-engin").await {
+                Ok(ip) => {
+                    if let Err(e) = crate::vnc_trafik::write_vnc_route(&vnc_token, &ip) {
+                        tracing::error!("Failed to write Traefik VNC route: {}", e);
+                    }
+                }
+                Err(e) => tracing::error!("Failed to get container IP for Traefik route: {}", e),
+            }
+
             tracing::info!(
                 "KasmVNC container started for instance '{}' (container={})",
                 input.name,
@@ -287,7 +301,8 @@ async fn create_instance(
                     "name": input.name,
                     "instance_number": instance_number,
                     "container_id": container_id,
-                    "status": "running"
+                    "status": "running",
+                    "vnc_token": vnc_token
                 }
             }))
             .into_response()
@@ -304,7 +319,8 @@ async fn create_instance(
                     "id": id,
                     "name": input.name,
                     "instance_number": instance_number,
-                    "status": "error"
+                    "status": "error",
+                    "vnc_token": vnc_token
                 }
             }))
             .into_response()
@@ -328,7 +344,8 @@ async fn get_instance(
     Ok(Json(serde_json::json!({
         "instance": {
             "id": instance.0, "name": instance.1, "instance_number": instance.2,
-            "container_id": instance.3, "status": instance.4, "owner_id": instance.5
+            "container_id": instance.3, "status": instance.4, "owner_id": instance.5,
+            "vnc_token": instance.7
         }
     })))
 }
@@ -348,6 +365,13 @@ async fn delete_instance(
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
+
+    // Delete Traefik route
+    if let Some(ref token) = instance.7 {
+        if let Err(e) = crate::vnc_trafik::delete_vnc_route(token) {
+            tracing::error!("Failed to delete Traefik VNC route: {}", e);
+        }
+    }
 
     if let Some(container_id) = instance.3 {
         if let Ok(docker) = DockerClient::new().await {
@@ -382,7 +406,7 @@ async fn start_instance(
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let (instance_id, name, instance_number, container_id, status, _, _) = instance;
+    let (instance_id, name, instance_number, container_id, status, _, _, vnc_token) = instance;
 
     if status == "running" {
         return Err(StatusCode::CONFLICT);
@@ -430,6 +454,16 @@ async fn start_instance(
 
     if let Some(ref cid) = new_container_id {
         repo.update_container_id(instance_id, cid).await.ok();
+
+        // Write Traefik route
+        match docker.get_container_ip(cid, "openworkspace-engin").await {
+            Ok(ip) => {
+                if let Err(e) = crate::vnc_trafik::write_vnc_route(vnc_token.as_deref().unwrap_or(""), &ip) {
+                    tracing::error!("Failed to write Traefik VNC route: {}", e);
+                }
+            }
+            Err(e) => tracing::error!("Failed to get container IP for Traefik route: {}", e),
+        }
     }
     repo.update_status(instance_id, "running").await.map_err(|e| {
         tracing::error!("Failed to update instance status: {}", e);
@@ -460,7 +494,7 @@ async fn stop_instance(
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let (instance_id, name, _, container_id, status, _, _) = instance;
+    let (instance_id, name, _, container_id, status, _, _, vnc_token) = instance;
 
     if status == "stopped" {
         return Err(StatusCode::CONFLICT);
@@ -479,6 +513,13 @@ async fn stop_instance(
             Err(e) => {
                 tracing::warn!("Failed to stop container for '{}': {} (updating DB anyway)", name, e);
             }
+        }
+    }
+
+    // Delete Traefik route
+    if let Some(ref token) = vnc_token {
+        if let Err(e) = crate::vnc_trafik::delete_vnc_route(token) {
+            tracing::error!("Failed to delete Traefik VNC route: {}", e);
         }
     }
 
@@ -540,4 +581,69 @@ async fn create_docker_container(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(serde_json::json!({ "container_id": container_id })))
+}
+
+// ── VNC ForwardAuth Verify ─────────────────────────────────────────
+
+async fn vnc_verify(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<axum::http::HeaderMap, StatusCode> {
+    let secret = std::env::var("JWT_SECRET").expect("JWT_SECRET must be set");
+
+    let cookie = headers
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let token = cookie
+        .split(';')
+        .find(|c| c.trim().starts_with("ow_token="))
+        .and_then(|c| c.trim().strip_prefix("ow_token="))
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let token_data = jsonwebtoken::decode::<Claims>(
+        token,
+        &jsonwebtoken::DecodingKey::from_secret(secret.as_bytes()),
+        &jsonwebtoken::Validation::default(),
+    )
+    .map_err(|_| StatusCode::UNAUTHORIZED)?;
+
+    let user_id: Uuid = token_data
+        .claims
+        .sub
+        .parse()
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+
+    let role = token_data.claims.role;
+
+    // Extract VNC token from the forwarded URI: /vnc/{token}/websockify
+    let forwarded_uri = headers
+        .get("X-Forwarded-Uri")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let vnc_token = forwarded_uri
+        .strip_prefix("/vnc/")
+        .and_then(|rest| rest.strip_suffix("/websockify"))
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let repo = InstanceRepository::new(&state.db);
+    let instance = repo
+        .find_by_vnc_token(vnc_token)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let (_id, _name, _instance_number, _container_id, status, _owner_id) = &instance;
+
+    if status != "running" {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let mut resp_headers = axum::http::HeaderMap::new();
+    resp_headers.insert("X-Forwarded-User", user_id.to_string().parse().unwrap());
+    resp_headers.insert("X-Forwarded-Role", role.parse().unwrap());
+
+    Ok(resp_headers)
 }
