@@ -5,7 +5,7 @@ x-default-opts: &default-opts
   privileged: false
   ipc: private
   networks:
-    - openworkspace-engin
+    - ow-network
 
 services:
   traefik:
@@ -15,7 +15,7 @@ services:
     command:
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
-      - "--providers.docker.network=openworkspace-engin"
+      - "--providers.docker.network=ow-network"
       # 💥 新增這兩行：啟用檔案 Provider 來讀取 local/static 服務
       - "--providers.file.filename=/etc/traefik/dynamic.yml"
       - "--providers.file.watch=true"
@@ -54,7 +54,7 @@ services:
       start_period: 5s
 
 networks:
-  openworkspace-engin:
+  ow-network:
     external: true
 
 volumes:

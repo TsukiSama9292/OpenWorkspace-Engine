@@ -16,7 +16,7 @@ graph TB
     end
 
     subgraph "Host Machine"
-        subgraph Docker Network: openworkspace-engin
+        subgraph Docker Network: ow-network
             TRAEFIK[Traefik<br/>:80]
             KASM1["KasmVNC Instance #1<br/>:6901"]
             KASM2["KasmVNC Instance #2<br/>:6901"]
@@ -224,7 +224,7 @@ stateDiagram-v2
    - `VNCOPTIONS=-disableBasicAuth` (disable HTTP Basic Auth on websockify)
    - `KASM_VNC_PORT=6901`
    - `DISPLAY=:1`
-3. **Connect to network** — `openworkspace-engin` (Docker bridge)
+3. **Connect to network** — `ow-network` (Docker bridge)
 4. **Inject config** — Upload `kasmvnc.yaml` to `/etc/kasmvnc/kasmvnc.yaml` via tar stream
 5. **Start container**
 6. **Get IP** — Query Docker API for container IP on the bridge network
@@ -304,7 +304,7 @@ graph LR
         TRAEFIK_DASH["Traefik :8080"]
     end
 
-    subgraph "openworkspace-engin (Docker Bridge)"
+    subgraph "ow-network (Docker Bridge)"
         TRAEFIK_N["Traefik"]
         KASM1_N["KasmVNC #1"]
         KASM2_N["KasmVNC #2"]
@@ -321,7 +321,7 @@ graph LR
 ```
 
 - **Traefik ↔ API/Vite:** via `host.docker.internal` (host.docker.internal extra_hosts in compose)
-- **Traefik ↔ KasmVNC:** direct container IP on `openworkspace-engin` bridge network
+- **Traefik ↔ KasmVNC:** direct container IP on `ow-network` bridge network
 - **API ↔ Docker daemon:** Unix socket (`/var/run/docker.sock`)
 
 ## Database Schema

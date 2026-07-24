@@ -178,7 +178,7 @@ async fn launch_instance(
             instance_repo.update_container_id(instance.id, &container_id).await.ok();
             instance_repo.update_status(instance.id, "running").await.ok();
 
-            match docker.get_container_ip(&container_id, "openworkspace-engin").await {
+            match docker.get_container_ip(&container_id, "ow-network").await {
                 Ok(ip) => {
                     if let Err(e) = crate::vnc_trafik::write_vnc_route(&instance.vnc_token, &ip) {
                         tracing::error!("Failed to write Traefik VNC route: {}", e);
@@ -400,7 +400,7 @@ async fn start_instance(
     if let Some(ref cid) = new_container_id {
         instance_repo.update_container_id(instance.id, cid).await.ok();
 
-        match docker.get_container_ip(cid, "openworkspace-engin").await {
+        match docker.get_container_ip(cid, "ow-network").await {
             Ok(ip) => {
                 if let Err(e) = crate::vnc_trafik::write_vnc_route(&instance.vnc_token, &ip) {
                     tracing::error!("Failed to write Traefik VNC route: {}", e);

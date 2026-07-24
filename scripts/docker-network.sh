@@ -1,6 +1,6 @@
 #!/bin/bash
 
-NETWORK_NAME="openworkspace-engin"
+NETWORK_NAME="ow-network"
 
 # 檢查 Docker 網路是否已存在
 if docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then

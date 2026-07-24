@@ -17,7 +17,7 @@ Traefik (port 80)
 - Traefik v3.7.4 反向代理 (Docker labels 自動發現)
 - nginx 靜態檔案服務
 - PostgreSQL 18
-- Docker 網路 `openworkspace-engin`
+- Docker 網路 `ow-network`
 
 **Compose 位置**: `docker/openworkspace/docker-compose.yml`
 
@@ -102,7 +102,7 @@ labels:
 ### 3.6 Docker 控制 (bollard)
 - [ ] 建立/啟動/停止/刪除 container
 - [ ] Container naming: `ow-{instance_id}`
-- [ ] 自動加入 `openworkspace-engin` network
+- [ ] 自動加入 `ow-network` network
 - [ ] 動態加入 Traefik labels (websockify route)
 
 ### 3.7 Dockerfile

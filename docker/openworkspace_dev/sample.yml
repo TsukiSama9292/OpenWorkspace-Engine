@@ -5,7 +5,7 @@ x-default-opts: &default-opts
   privileged: false
   ipc: private
   networks:
-    - openworkspace-engin
+    - ow-network
 
 services:
   traefik:
@@ -15,7 +15,7 @@ services:
     command:
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
-      - "--providers.docker.network=openworkspace-engin"
+      - "--providers.docker.network=ow-network"
       - "--entrypoints.web.address=:80"
       - "--api.insecure=true"
       - "--log.level=DEBUG"
@@ -104,7 +104,7 @@ services:
       traefik.http.services.kasm2.loadbalancer.server.scheme: "https"
 
 networks:
-  openworkspace-engin:
+  ow-network:
     external: true
 
 volumes:

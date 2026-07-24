@@ -263,14 +263,14 @@ impl DockerClient {
             .map_err(|e| e.to_string())?;
 
         tracing::info!(
-            "Connecting container '{}' (id: {}) to network 'openworkspace-engin'...",
+            "Connecting container '{}' (id: {}) to network 'ow-network'...",
             container_name,
             &container.id[..12]
         );
 
         self.docker
             .connect_network(
-                "openworkspace-engin",
+                "ow-network",
                 ConnectNetworkOptions {
                     container: container.id.clone(),
                     ..Default::default()

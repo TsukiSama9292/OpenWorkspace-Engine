@@ -77,7 +77,7 @@ OpenWorkspace-Engine/
 | `pnpm run dev:stop` | Stop Docker infrastructure |
 | `pnpm run docker:dev:up` | Start Traefik + PostgreSQL |
 | `pnpm run docker:dev:down` | Stop Traefik + PostgreSQL |
-| `pnpm run init` | Create `openworkspace-engin` Docker network |
+| `pnpm run init` | Create `ow-network` Docker network |
 | `pnpm run build` | Build SvelteKit for production |
 | `pnpm run check` | Type-check SvelteKit |
 | `pnpm run lint` | Lint SvelteKit |
@@ -128,7 +128,7 @@ pnpm check      # Type-check
 ```mermaid
 flowchart TD
     A["pnpm run dev"] --> B["kill-dev.sh<br/>Kill stale processes"]
-    B --> C["docker-network.sh<br/>Create openworkspace-engin"]
+    B --> C["docker-network.sh<br/>Create ow-network"]
     C --> D["docker compose up -d<br/>Start Traefik + PostgreSQL"]
     D --> E["concurrently"]
     E --> F["cargo run<br/>API :3000"]

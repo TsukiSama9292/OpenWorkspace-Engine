@@ -214,7 +214,7 @@ POST /api/instances
 
 **What happens:**
 1. DB record created (UUID, instance_number, vnc_token)
-2. KasmVNC container pulled and started on `openworkspace-engin` network
+2. KasmVNC container pulled and started on `ow-network` network
 3. `kasmvnc.yaml` injected into container
 4. Traefik route YAML files written to `traefik/dynamic/`
 

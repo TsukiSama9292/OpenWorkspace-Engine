@@ -3,11 +3,12 @@
   "private": true,
   "scripts": {
     "init": "bash ./scripts/docker-network.sh",
+    "clean": "chmod +x ./scripts/* && ./scripts/clean.sh",
     "dev": "bash ./scripts/kill-dev.sh && pnpm run init && pnpm run docker:dev:up && concurrently --kill-others --names api,web --prefix-colors blue,green \"pnpm run dev:api\" \"pnpm run dev:web\"",
     "dev:api": "cd apps/api && RUST_LOG=info cargo run",
     "dev:web": "pnpm --filter web dev",
     "dev:stop": "pnpm run docker:dev:down",
-    "dev:remove": "docker compose -f docker/openworkspace_dev/docker-compose.yml down -v && echo '✅ 已移除開發環境 volumes'",
+    "dev:remove": "docker compose -f docker/openworkspace_dev/docker-compose.yml down -v && pnpm run clean && echo '✅ 已移除開發環境 volumes 和 network'",
     "build": "turbo run build --filter=web",
     "build:web": "pnpm --filter web build",
     "api": "cd apps/api && RUST_LOG=info cargo run",
