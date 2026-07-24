@@ -54,6 +54,32 @@ No lint script exists in vnc-ui. Root `turbo lint` runs if configured per-packag
 - 21 unit tests in `src/tests/` — run with `pnpm test` from `apps/vnc-ui/`
 - Playwright E2E configured but not actively run (requires live VNC containers)
 
+## Rust API — zero-warning policy
+
+`apps/api/` must compile with **zero warnings**. This is enforced — do not use `#[allow(dead_code)]`, `#[allow(unused)]`, `#[allow(warnings)]`, or any suppression attribute to silence compiler warnings.
+
+### Check command
+
+```bash
+cd /home/user/workspace/OpenWorkspace-Engine/apps/api \
+  && cargo test --no-run 2>&1 | grep -i warning; \
+  cargo test --no-run --features docker 2>&1 | grep -i warning
+```
+
+Both invocations must produce **no output**. The first checks default features; the second checks the `docker` feature gate.
+
+### How to fix warnings
+
+The test harness (`tests/common/mod.rs`) is compiled independently by each integration-test binary. Items unused by *any single binary* trigger `dead_code`. The fix pattern:
+
+1. **Split shared code into focused submodules** — e.g. `common/pg.rs` for Postgres setup, so binaries that only need `ensure_pg` don't compile `TestContext`.
+2. **Use `#[path]`** when a test file needs one submodule without the parent: `#[path = "common/pg.rs"] mod pg;`.
+3. **Move single-use helpers** (like `ensure_network`) into the test file that uses them, rather than keeping them in the shared module.
+4. **Convert `ctx.client.get(…)` to `ctx.get(…)`** (and `post`, `put`, `delete`) so the helper methods are exercised across all test files.
+5. **Add `test_context_helpers`** — a small test in each binary that calls every `TestContext` method at least once, ensuring no method is dead in any binary.
+
+Never suppress a warning. Always fix the root cause.
+
 ## .gitignore
 
 `build/`, `.svelte-kit/`, `node_modules/` are gitignored. Do not commit compiled output.

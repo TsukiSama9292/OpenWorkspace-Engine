@@ -7,7 +7,7 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
-use super::AppState;
+use super::super::AppState;
 use crate::auth::AuthUser;
 use crate::db::{UserRepository, WorkspaceConfigRepository, WorkspaceInstance, WorkspaceInstanceRepository};
 use crate::docker::{ContainerConfig, DockerClient};
@@ -70,7 +70,6 @@ async fn list_instances(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     };
 
-    // Batch-fetch config names
     let mut config_names = std::collections::HashMap::new();
     for inst in &instances {
         if !config_names.contains_key(&inst.config_id) {
@@ -80,7 +79,6 @@ async fn list_instances(
         }
     }
 
-    // Batch-fetch owner usernames
     let user_repo = UserRepository::new(&state.db);
     let mut owner_usernames = std::collections::HashMap::new();
     for inst in &instances {
@@ -138,7 +136,7 @@ async fn launch_instance(
         .launch(input.config_id, auth.user_id, &config.name, mount, resolved_path)
         .await
         .map_err(|e| {
-            tracing::error!("Failed to launch instance: {}", e);
+            tracing::error!("Failed to launch instance (config={}, owner={}): {}", input.config_id, auth.user_id, e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "Failed to launch instance"})),
@@ -152,7 +150,6 @@ async fn launch_instance(
         config.name
     );
 
-    // Create Docker container from config
     let docker = DockerClient::new().await.map_err(|e| {
         tracing::error!("Failed to connect to Docker: {}", e);
         (
@@ -170,6 +167,7 @@ async fn launch_instance(
         exec_config: config.exec_config.clone(),
         volume_mappings: config.volume_mappings.clone(),
         persistent_volume: resolved_path.map(|s| s.to_string()),
+        command: None,
     };
 
     match docker
@@ -180,7 +178,6 @@ async fn launch_instance(
             instance_repo.update_container_id(instance.id, &container_id).await.ok();
             instance_repo.update_status(instance.id, "running").await.ok();
 
-            // Write Traefik route
             match docker.get_container_ip(&container_id, "openworkspace-engin").await {
                 Ok(ip) => {
                     if let Err(e) = crate::vnc_trafik::write_vnc_route(&instance.vnc_token, &ip) {
@@ -213,7 +210,7 @@ async fn launch_instance(
             let mut inst = instance;
             inst.status = "error".to_string();
             let owner_username = user_repo.find_by_id(inst.owner_id).await.ok().flatten().map(|u| u.1);
-            Ok(Json(serde_json::json!({ "instance": instance_to_json(&inst, Some(&config.name), owner_username.as_deref()) })))
+            Ok(Json(serde_json::json!({ "instance": instance_to_json(&inst, Some(&config.name), owner_username.as_deref()), "docker_error": e })))
         }
     }
 }
@@ -258,7 +255,6 @@ async fn delete_instance(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    // Delete Traefik route
     if let Err(e) = crate::vnc_trafik::delete_vnc_route(&instance.vnc_token) {
         tracing::error!("Failed to delete Traefik VNC route: {}", e);
     }
@@ -323,7 +319,7 @@ async fn start_instance(
         Some(ref cid) => {
             match docker.inspect_container_state(cid).await {
                 Ok(Some(state_str)) => {
-                    if state_str.contains("Running") {
+                    if state_str.to_lowercase().contains("running") {
                         tracing::info!("Container for '{}' already running, updating DB", instance.name);
                     } else {
                         tracing::info!("Starting stopped container for '{}' (id: {})", instance.name, &cid[..12]);
@@ -350,6 +346,7 @@ async fn start_instance(
                             exec_config: config.exec_config,
                             volume_mappings: config.volume_mappings,
                             persistent_volume: instance.resolved_volume_host_path.clone(),
+                            command: None,
                         };
                         let new_id = docker.create_container_from_config(&instance.name, instance.instance_number, &container_config).await.map_err(|e| {
                             tracing::error!("Failed to create container for '{}': {}", instance.name, e);
@@ -381,6 +378,7 @@ async fn start_instance(
                     exec_config: config.exec_config,
                     volume_mappings: config.volume_mappings,
                     persistent_volume: instance.resolved_volume_host_path.clone(),
+                    command: None,
                 };
                 let new_id = docker.create_container_from_config(&instance.name, instance.instance_number, &container_config).await.map_err(|e| {
                     tracing::error!("Failed to create container for '{}': {}", instance.name, e);

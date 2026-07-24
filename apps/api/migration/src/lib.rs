@@ -5,6 +5,7 @@ mod m20260723_000001_create_users_table;
 mod m20260723_000002_add_vnc_token;
 mod m20260723_000003_create_workspace_tables;
 mod m20260723_000004_split_config_instance;
+mod m20260723_000005_drop_instance_number_unique;
 
 pub struct Migrator;
 
@@ -16,6 +17,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260723_000002_add_vnc_token::Migration),
             Box::new(m20260723_000003_create_workspace_tables::Migration),
             Box::new(m20260723_000004_split_config_instance::Migration),
+            Box::new(m20260723_000005_drop_instance_number_unique::Migration),
         ]
     }
 }

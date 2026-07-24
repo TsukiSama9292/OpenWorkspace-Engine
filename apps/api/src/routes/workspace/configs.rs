@@ -7,7 +7,7 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
-use super::AppState;
+use super::super::AppState;
 use crate::auth::AuthUser;
 use crate::db::{WorkspaceConfig, WorkspaceConfigRepository};
 

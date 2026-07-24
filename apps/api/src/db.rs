@@ -1,95 +1,190 @@
-use sqlx::PgPool;
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Insert, Order, PaginatorTrait, QueryFilter, QueryOrder, Set};
+use sea_orm::sea_query::OnConflict;
 use uuid::Uuid;
 
 fn generate_vnc_token() -> String {
     Uuid::new_v4().as_simple().to_string()
 }
 
-// ── User Repository ────────────────────────────────────────────
+// ── Entity Models ─────────────────────────────────────────────
 
-pub struct UserRepository<'a> {
-    pub db: &'a PgPool,
-}
+pub mod user {
+    use sea_orm::entity::prelude::*;
+    use serde::{Deserialize, Serialize};
 
-impl<'a> UserRepository<'a> {
-    pub fn new(db: &'a PgPool) -> Self {
-        Self { db }
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
+    #[sea_orm(table_name = "users")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: Uuid,
+        pub username: String,
+        pub password_hash: String,
+        pub role: String,
+        pub created_at: DateTimeUtc,
+        pub updated_at: DateTimeUtc,
     }
 
-    pub async fn seed_admin(&self) -> Result<(), sqlx::Error> {
-        let existing = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE role = 'admin'")
-            .fetch_one(self.db)
-            .await?;
-        if existing > 0 {
-            return Ok(());
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {
+        #[sea_orm(has_many = "super::workspace_instance::Entity")]
+        WorkspaceInstances,
+    }
+
+    impl Related<super::workspace_instance::Entity> for Entity {
+        fn to() -> RelationDef {
+            Relation::WorkspaceInstances.def()
         }
-        let password = std::env::var("ADMIN_PASSWORD").unwrap_or_else(|_| "admin".to_string());
-        let password_hash = bcrypt::hash(&password, 10).expect("Failed to hash admin password");
-        self.create("admin", &password_hash, "admin").await?;
-        tracing::info!("Seeded default admin user (username: admin)");
-        Ok(())
     }
 
-    pub async fn find_by_username(
-        &self,
-        username: &str,
-    ) -> Result<Option<(Uuid, String, String, String)>, sqlx::Error> {
-        sqlx::query_as(
-            "SELECT id, username, password_hash, role FROM users WHERE username = $1",
-        )
-        .bind(username)
-        .fetch_optional(self.db)
-        .await
-    }
-
-    pub async fn find_by_id(
-        &self,
-        id: Uuid,
-    ) -> Result<Option<(Uuid, String, String, String, chrono::DateTime<chrono::Utc>)>, sqlx::Error>
-    {
-        sqlx::query_as("SELECT id, username, password_hash, role, created_at FROM users WHERE id = $1")
-            .bind(id)
-            .fetch_optional(self.db)
-            .await
-    }
-
-    pub async fn create(
-        &self,
-        username: &str,
-        password_hash: &str,
-        role: &str,
-    ) -> Result<Uuid, sqlx::Error> {
-        let id = Uuid::new_v4();
-        sqlx::query("INSERT INTO users (id, username, password_hash, role) VALUES ($1, $2, $3, $4)")
-            .bind(id)
-            .bind(username)
-            .bind(password_hash)
-            .bind(role)
-            .execute(self.db)
-            .await?;
-        Ok(id)
-    }
-
-    pub async fn list_all(
-        &self,
-    ) -> Result<Vec<(Uuid, String, String, chrono::DateTime<chrono::Utc>)>, sqlx::Error> {
-        sqlx::query_as("SELECT id, username, role, created_at FROM users ORDER BY created_at")
-            .fetch_all(self.db)
-            .await
-    }
-
-    pub async fn delete(&self, id: Uuid) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query("DELETE FROM users WHERE id = $1")
-            .bind(id)
-            .execute(self.db)
-            .await?;
-        Ok(result.rows_affected() > 0)
-    }
+    impl ActiveModelBehavior for ActiveModel {}
 }
 
-// ── Workspace Config ───────────────────────────────────────────
+pub mod workspace_config {
+    use sea_orm::entity::prelude::*;
+    use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
+    #[sea_orm(table_name = "workspace_configs")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: Uuid,
+        pub name: String,
+        pub description: Option<String>,
+        pub owner_id: Uuid,
+        pub image: String,
+        pub cores: i32,
+        pub memory: i64,
+        pub gpu_count: i32,
+        pub docker_registry: Option<String>,
+        pub run_config: Json,
+        pub exec_config: Json,
+        pub volume_mappings: Json,
+        pub persistent_storage_path: Option<String>,
+        pub created_at: DateTimeUtc,
+        pub updated_at: DateTimeUtc,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {
+        #[sea_orm(
+            belongs_to = "super::user::Entity",
+            from = "Column::OwnerId",
+            to = "super::user::Column::Id"
+        )]
+        User,
+        #[sea_orm(has_many = "super::workspace_instance::Entity")]
+        WorkspaceInstances,
+    }
+
+    impl Related<super::user::Entity> for Entity {
+        fn to() -> RelationDef {
+            Relation::User.def()
+        }
+    }
+
+    impl Related<super::workspace_instance::Entity> for Entity {
+        fn to() -> RelationDef {
+            Relation::WorkspaceInstances.def()
+        }
+    }
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub mod workspace_instance {
+    use sea_orm::entity::prelude::*;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
+    #[sea_orm(table_name = "workspace_instances")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: Uuid,
+        pub config_id: Uuid,
+        pub name: String,
+        pub instance_number: i32,
+        pub owner_id: Uuid,
+        pub container_id: Option<String>,
+        pub status: String,
+        pub vnc_token: String,
+        pub mount_persistent: bool,
+        pub resolved_volume_host_path: Option<String>,
+        pub created_at: DateTimeUtc,
+        pub updated_at: DateTimeUtc,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {
+        #[sea_orm(
+            belongs_to = "super::workspace_config::Entity",
+            from = "Column::ConfigId",
+            to = "super::workspace_config::Column::Id"
+        )]
+        WorkspaceConfig,
+        #[sea_orm(
+            belongs_to = "super::user::Entity",
+            from = "Column::OwnerId",
+            to = "super::user::Column::Id"
+        )]
+        User,
+    }
+
+    impl Related<super::workspace_config::Entity> for Entity {
+        fn to() -> RelationDef {
+            Relation::WorkspaceConfig.def()
+        }
+    }
+
+    impl Related<super::user::Entity> for Entity {
+        fn to() -> RelationDef {
+            Relation::User.def()
+        }
+    }
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub mod registry_config {
+    use sea_orm::entity::prelude::*;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
+    #[sea_orm(table_name = "registry_config")]
+    pub struct Model {
+        #[sea_orm(primary_key)]
+        pub id: i32,
+        pub registry_url: String,
+        pub updated_at: DateTimeUtc,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub mod registry_cache {
+    use sea_orm::entity::prelude::*;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
+    #[sea_orm(table_name = "registry_cache")]
+    pub struct Model {
+        #[sea_orm(primary_key)]
+        pub id: i32,
+        pub registry_json: Json,
+        pub synced_at: DateTimeUtc,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+// ── Public Model Types (for callers) ──────────────────────────
+
+#[derive(Debug, Clone)]
 pub struct WorkspaceConfig {
     pub id: Uuid,
     pub name: String,
@@ -108,12 +203,153 @@ pub struct WorkspaceConfig {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+impl From<workspace_config::Model> for WorkspaceConfig {
+    fn from(m: workspace_config::Model) -> Self {
+        Self {
+            id: m.id,
+            name: m.name,
+            description: m.description,
+            owner_id: m.owner_id,
+            image: m.image,
+            cores: m.cores,
+            memory: m.memory,
+            gpu_count: m.gpu_count,
+            docker_registry: m.docker_registry,
+            run_config: m.run_config.into(),
+            exec_config: m.exec_config.into(),
+            volume_mappings: m.volume_mappings.into(),
+            persistent_storage_path: m.persistent_storage_path,
+            created_at: m.created_at,
+            updated_at: m.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkspaceInstance {
+    pub id: Uuid,
+    pub config_id: Uuid,
+    pub name: String,
+    pub instance_number: i32,
+    pub owner_id: Uuid,
+    pub container_id: Option<String>,
+    pub status: String,
+    pub vnc_token: String,
+    pub mount_persistent: bool,
+    pub resolved_volume_host_path: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<workspace_instance::Model> for WorkspaceInstance {
+    fn from(m: workspace_instance::Model) -> Self {
+        Self {
+            id: m.id,
+            config_id: m.config_id,
+            name: m.name,
+            instance_number: m.instance_number,
+            owner_id: m.owner_id,
+            container_id: m.container_id,
+            status: m.status,
+            vnc_token: m.vnc_token,
+            mount_persistent: m.mount_persistent,
+            resolved_volume_host_path: m.resolved_volume_host_path,
+            created_at: m.created_at,
+            updated_at: m.updated_at,
+        }
+    }
+}
+
+// ── User Repository ───────────────────────────────────────────
+
+pub struct UserRepository<'a> {
+    pub db: &'a DatabaseConnection,
+}
+
+impl<'a> UserRepository<'a> {
+    pub fn new(db: &'a DatabaseConnection) -> Self {
+        Self { db }
+    }
+
+    pub async fn seed_admin(&self, admin_password: &str) -> Result<(), sea_orm::DbErr> {
+        let existing = user::Entity::find()
+            .filter(user::Column::Role.eq("admin"))
+            .count(self.db)
+            .await?;
+        if existing > 0 {
+            return Ok(());
+        }
+        let password_hash = bcrypt::hash(admin_password, 10).expect("Failed to hash admin password");
+        self.create("admin", &password_hash, "admin").await?;
+        tracing::info!("Seeded default admin user (username: admin)");
+        Ok(())
+    }
+
+    pub async fn find_by_username(
+        &self,
+        username: &str,
+    ) -> Result<Option<(Uuid, String, String, String)>, sea_orm::DbErr> {
+        let model = user::Entity::find()
+            .filter(user::Column::Username.eq(username))
+            .one(self.db)
+            .await?;
+        Ok(model.map(|m| (m.id, m.username, m.password_hash, m.role)))
+    }
+
+    pub async fn find_by_id(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<(Uuid, String, String, String, chrono::DateTime<chrono::Utc>)>, sea_orm::DbErr>
+    {
+        let model = user::Entity::find_by_id(id).one(self.db).await?;
+        Ok(model.map(|m| (m.id, m.username, m.password_hash, m.role, m.created_at)))
+    }
+
+    pub async fn create(
+        &self,
+        username: &str,
+        password_hash: &str,
+        role: &str,
+    ) -> Result<Uuid, sea_orm::DbErr> {
+        let id = Uuid::new_v4();
+        let model = user::ActiveModel {
+            id: Set(id),
+            username: Set(username.to_string()),
+            password_hash: Set(password_hash.to_string()),
+            role: Set(role.to_string()),
+            ..Default::default()
+        };
+        model.insert(self.db).await?;
+        Ok(id)
+    }
+
+    pub async fn list_all(
+        &self,
+    ) -> Result<Vec<(Uuid, String, String, chrono::DateTime<chrono::Utc>)>, sea_orm::DbErr> {
+        let models = user::Entity::find()
+            .order_by_asc(user::Column::CreatedAt)
+            .all(self.db)
+            .await?;
+        Ok(models
+            .into_iter()
+            .map(|m| (m.id, m.username, m.role, m.created_at))
+            .collect())
+    }
+
+    pub async fn delete(&self, id: Uuid) -> Result<bool, sea_orm::DbErr> {
+        let result = user::Entity::delete_by_id(id).exec(self.db).await?;
+        Ok(result.rows_affected > 0)
+    }
+}
+
+// ── Workspace Config Repository ───────────────────────────────
+
 pub struct WorkspaceConfigRepository<'a> {
-    pub db: &'a PgPool,
+    pub db: &'a DatabaseConnection,
 }
 
 impl<'a> WorkspaceConfigRepository<'a> {
-    pub fn new(db: &'a PgPool) -> Self {
+    pub fn new(db: &'a DatabaseConnection) -> Self {
         Self { db }
     }
 
@@ -131,59 +367,56 @@ impl<'a> WorkspaceConfigRepository<'a> {
         exec_config: &serde_json::Value,
         volume_mappings: &serde_json::Value,
         persistent_storage_path: Option<&str>,
-    ) -> Result<WorkspaceConfig, sqlx::Error> {
+    ) -> Result<WorkspaceConfig, sea_orm::DbErr> {
         let id = Uuid::new_v4();
-        sqlx::query_as::<_, WorkspaceConfig>(
-            "INSERT INTO workspace_configs (id, name, description, owner_id, image, cores, memory, gpu_count, docker_registry, run_config, exec_config, volume_mappings, persistent_storage_path)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-             RETURNING *",
-        )
-        .bind(id)
-        .bind(name)
-        .bind(description)
-        .bind(owner_id)
-        .bind(image)
-        .bind(cores)
-        .bind(memory)
-        .bind(gpu_count)
-        .bind(docker_registry)
-        .bind(run_config)
-        .bind(exec_config)
-        .bind(volume_mappings)
-        .bind(persistent_storage_path)
-        .fetch_one(self.db)
-        .await
+        let model = workspace_config::ActiveModel {
+            id: Set(id),
+            name: Set(name.to_string()),
+            description: Set(description.map(|s| s.to_string())),
+            owner_id: Set(owner_id),
+            image: Set(image.to_string()),
+            cores: Set(cores),
+            memory: Set(memory),
+            gpu_count: Set(gpu_count),
+            docker_registry: Set(docker_registry.map(|s| s.to_string())),
+            run_config: Set(run_config.clone().into()),
+            exec_config: Set(exec_config.clone().into()),
+            volume_mappings: Set(volume_mappings.clone().into()),
+            persistent_storage_path: Set(persistent_storage_path.map(|s| s.to_string())),
+            ..Default::default()
+        };
+        let inserted = model.insert(self.db).await?;
+        Ok(inserted.into())
     }
 
-    pub async fn find_by_id(&self, id: Uuid) -> Result<Option<WorkspaceConfig>, sqlx::Error> {
-        sqlx::query_as::<_, WorkspaceConfig>("SELECT * FROM workspace_configs WHERE id = $1")
-            .bind(id)
-            .fetch_optional(self.db)
-            .await
+    pub async fn find_by_id(&self, id: Uuid) -> Result<Option<WorkspaceConfig>, sea_orm::DbErr> {
+        let model = workspace_config::Entity::find_by_id(id).one(self.db).await?;
+        Ok(model.map(|m| m.into()))
     }
 
-    pub async fn list_by_owner(&self, owner_id: Uuid) -> Result<Vec<WorkspaceConfig>, sqlx::Error> {
-        sqlx::query_as::<_, WorkspaceConfig>(
-            "SELECT * FROM workspace_configs WHERE owner_id = $1 ORDER BY created_at",
-        )
-        .bind(owner_id)
-        .fetch_all(self.db)
-        .await
+    pub async fn list_by_owner(&self, owner_id: Uuid) -> Result<Vec<WorkspaceConfig>, sea_orm::DbErr> {
+        let models = workspace_config::Entity::find()
+            .filter(workspace_config::Column::OwnerId.eq(owner_id))
+            .order_by_asc(workspace_config::Column::CreatedAt)
+            .all(self.db)
+            .await?;
+        Ok(models.into_iter().map(|m| m.into()).collect())
     }
 
-    pub async fn list_all(&self) -> Result<Vec<WorkspaceConfig>, sqlx::Error> {
-        sqlx::query_as::<_, WorkspaceConfig>("SELECT * FROM workspace_configs ORDER BY created_at")
-            .fetch_all(self.db)
-            .await
+    pub async fn list_all(&self) -> Result<Vec<WorkspaceConfig>, sea_orm::DbErr> {
+        let models = workspace_config::Entity::find()
+            .order_by_asc(workspace_config::Column::CreatedAt)
+            .all(self.db)
+            .await?;
+        Ok(models.into_iter().map(|m| m.into()).collect())
     }
 
-    pub async fn count_instances(&self, config_id: Uuid) -> Result<i64, sqlx::Error> {
-        sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM workspace_instances WHERE config_id = $1",
-        )
-        .bind(config_id)
-        .fetch_one(self.db)
-        .await
+    pub async fn count_instances(&self, config_id: Uuid) -> Result<i64, sea_orm::DbErr> {
+        let count = workspace_instance::Entity::find()
+            .filter(workspace_instance::Column::ConfigId.eq(config_id))
+            .count(self.db)
+            .await?;
+        Ok(count as i64)
     }
 
     pub async fn update(
@@ -200,60 +433,46 @@ impl<'a> WorkspaceConfigRepository<'a> {
         exec_config: &serde_json::Value,
         volume_mappings: &serde_json::Value,
         persistent_storage_path: Option<&str>,
-    ) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query(
-            "UPDATE workspace_configs SET name = $1, description = $2, image = $3, cores = $4, memory = $5, gpu_count = $6, docker_registry = $7, run_config = $8, exec_config = $9, volume_mappings = $10, persistent_storage_path = $11, updated_at = NOW() WHERE id = $12",
-        )
-        .bind(name)
-        .bind(description)
-        .bind(image)
-        .bind(cores)
-        .bind(memory)
-        .bind(gpu_count)
-        .bind(docker_registry)
-        .bind(run_config)
-        .bind(exec_config)
-        .bind(volume_mappings)
-        .bind(persistent_storage_path)
-        .bind(id)
-        .execute(self.db)
-        .await?;
-        Ok(result.rows_affected() > 0)
+    ) -> Result<bool, sea_orm::DbErr> {
+        let result = workspace_config::Entity::update(workspace_config::ActiveModel {
+            id: Set(id),
+            name: Set(name.to_string()),
+            description: Set(description.map(|s| s.to_string())),
+            image: Set(image.to_string()),
+            cores: Set(cores),
+            memory: Set(memory),
+            gpu_count: Set(gpu_count),
+            docker_registry: Set(docker_registry.map(|s| s.to_string())),
+            run_config: Set(run_config.clone().into()),
+            exec_config: Set(exec_config.clone().into()),
+            volume_mappings: Set(volume_mappings.clone().into()),
+            persistent_storage_path: Set(persistent_storage_path.map(|s| s.to_string())),
+            ..Default::default()
+        })
+        .filter(workspace_config::Column::Id.eq(id))
+        .exec(self.db)
+        .await;
+        match result {
+            Ok(_) => Ok(true),
+            Err(sea_orm::DbErr::RecordNotFound(_)) | Err(sea_orm::DbErr::RecordNotUpdated) => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
-    pub async fn delete(&self, id: Uuid) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query("DELETE FROM workspace_configs WHERE id = $1")
-            .bind(id)
-            .execute(self.db)
-            .await?;
-        Ok(result.rows_affected() > 0)
+    pub async fn delete(&self, id: Uuid) -> Result<bool, sea_orm::DbErr> {
+        let result = workspace_config::Entity::delete_by_id(id).exec(self.db).await?;
+        Ok(result.rows_affected > 0)
     }
 }
 
-// ── Workspace Instance ─────────────────────────────────────────
-
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub struct WorkspaceInstance {
-    pub id: Uuid,
-    pub config_id: Uuid,
-    pub name: String,
-    pub instance_number: i32,
-    pub owner_id: Uuid,
-    pub container_id: Option<String>,
-    pub status: String,
-    pub vnc_token: String,
-    pub mount_persistent: bool,
-    pub resolved_volume_host_path: Option<String>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-}
+// ── Workspace Instance Repository ─────────────────────────────
 
 pub struct WorkspaceInstanceRepository<'a> {
-    pub db: &'a PgPool,
+    pub db: &'a DatabaseConnection,
 }
 
 impl<'a> WorkspaceInstanceRepository<'a> {
-    pub fn new(db: &'a PgPool) -> Self {
+    pub fn new(db: &'a DatabaseConnection) -> Self {
         Self { db }
     }
 
@@ -264,154 +483,173 @@ impl<'a> WorkspaceInstanceRepository<'a> {
         config_name: &str,
         mount_persistent: bool,
         resolved_volume_host_path: Option<&str>,
-    ) -> Result<WorkspaceInstance, sqlx::Error> {
+    ) -> Result<WorkspaceInstance, sea_orm::DbErr> {
         let id = Uuid::new_v4();
         let vnc_token = generate_vnc_token();
 
         // Auto-generate instance name: "{config_name}-{next_number}"
-        let next_number: (i32,) = sqlx::query_as(
-            "SELECT COALESCE(MAX(instance_number), 0) + 1 FROM workspace_instances WHERE config_id = $1",
-        )
-        .bind(config_id)
-        .fetch_one(self.db)
-        .await?;
-        let name = format!("{}-{}", config_name, next_number.0);
+        let max_number = workspace_instance::Entity::find()
+            .filter(workspace_instance::Column::ConfigId.eq(config_id))
+            .order_by(workspace_instance::Column::InstanceNumber, Order::Desc)
+            .one(self.db)
+            .await?
+            .map(|m| m.instance_number)
+            .unwrap_or(0);
+        let next_number = max_number + 1;
+        let name = format!("{}-{}", config_name, next_number);
 
-        sqlx::query_as::<_, WorkspaceInstance>(
-            "INSERT INTO workspace_instances (id, config_id, name, instance_number, owner_id, container_id, status, vnc_token, mount_persistent, resolved_volume_host_path)
-             VALUES ($1, $2, $3, $4, $5, NULL, 'stopped', $6, $7, $8)
-             RETURNING *",
-        )
-        .bind(id)
-        .bind(config_id)
-        .bind(&name)
-        .bind(next_number.0)
-        .bind(owner_id)
-        .bind(&vnc_token)
-        .bind(mount_persistent)
-        .bind(resolved_volume_host_path)
-        .fetch_one(self.db)
-        .await
+        let model = workspace_instance::ActiveModel {
+            id: Set(id),
+            config_id: Set(config_id),
+            name: Set(name),
+            instance_number: Set(next_number),
+            owner_id: Set(owner_id),
+            container_id: Set(None),
+            status: Set("stopped".to_string()),
+            vnc_token: Set(vnc_token),
+            mount_persistent: Set(mount_persistent),
+            resolved_volume_host_path: Set(resolved_volume_host_path.map(|s| s.to_string())),
+            ..Default::default()
+        };
+        let inserted = model.insert(self.db).await?;
+        Ok(inserted.into())
     }
 
-    pub async fn find_by_id(&self, id: Uuid) -> Result<Option<WorkspaceInstance>, sqlx::Error> {
-        sqlx::query_as::<_, WorkspaceInstance>("SELECT * FROM workspace_instances WHERE id = $1")
-            .bind(id)
-            .fetch_optional(self.db)
-            .await
+    pub async fn find_by_id(&self, id: Uuid) -> Result<Option<WorkspaceInstance>, sea_orm::DbErr> {
+        let model = workspace_instance::Entity::find_by_id(id).one(self.db).await?;
+        Ok(model.map(|m| m.into()))
     }
 
-    pub async fn find_by_vnc_token(&self, token: &str) -> Result<Option<WorkspaceInstance>, sqlx::Error> {
-        sqlx::query_as::<_, WorkspaceInstance>(
-            "SELECT * FROM workspace_instances WHERE vnc_token = $1",
-        )
-        .bind(token)
-        .fetch_optional(self.db)
-        .await
+    pub async fn find_by_vnc_token(&self, token: &str) -> Result<Option<WorkspaceInstance>, sea_orm::DbErr> {
+        let model = workspace_instance::Entity::find()
+            .filter(workspace_instance::Column::VncToken.eq(token))
+            .one(self.db)
+            .await?;
+        Ok(model.map(|m| m.into()))
     }
 
-    pub async fn list_by_owner(&self, owner_id: Uuid) -> Result<Vec<WorkspaceInstance>, sqlx::Error> {
-        sqlx::query_as::<_, WorkspaceInstance>(
-            "SELECT * FROM workspace_instances WHERE owner_id = $1 ORDER BY created_at",
-        )
-        .bind(owner_id)
-        .fetch_all(self.db)
-        .await
+    pub async fn list_by_owner(&self, owner_id: Uuid) -> Result<Vec<WorkspaceInstance>, sea_orm::DbErr> {
+        let models = workspace_instance::Entity::find()
+            .filter(workspace_instance::Column::OwnerId.eq(owner_id))
+            .order_by_asc(workspace_instance::Column::CreatedAt)
+            .all(self.db)
+            .await?;
+        Ok(models.into_iter().map(|m| m.into()).collect())
     }
 
-    pub async fn list_all(&self) -> Result<Vec<WorkspaceInstance>, sqlx::Error> {
-        sqlx::query_as::<_, WorkspaceInstance>("SELECT * FROM workspace_instances ORDER BY created_at")
-            .fetch_all(self.db)
-            .await
+    pub async fn list_all(&self) -> Result<Vec<WorkspaceInstance>, sea_orm::DbErr> {
+        let models = workspace_instance::Entity::find()
+            .order_by_asc(workspace_instance::Column::CreatedAt)
+            .all(self.db)
+            .await?;
+        Ok(models.into_iter().map(|m| m.into()).collect())
     }
 
-    pub async fn list_by_config(&self, config_id: Uuid) -> Result<Vec<WorkspaceInstance>, sqlx::Error> {
-        sqlx::query_as::<_, WorkspaceInstance>(
-            "SELECT * FROM workspace_instances WHERE config_id = $1 ORDER BY created_at",
-        )
-        .bind(config_id)
-        .fetch_all(self.db)
-        .await
+    pub async fn list_by_config(&self, config_id: Uuid) -> Result<Vec<WorkspaceInstance>, sea_orm::DbErr> {
+        let models = workspace_instance::Entity::find()
+            .filter(workspace_instance::Column::ConfigId.eq(config_id))
+            .order_by_asc(workspace_instance::Column::CreatedAt)
+            .all(self.db)
+            .await?;
+        Ok(models.into_iter().map(|m| m.into()).collect())
     }
 
-    pub async fn update_status(&self, id: Uuid, status: &str) -> Result<bool, sqlx::Error> {
-        let result =
-            sqlx::query("UPDATE workspace_instances SET status = $1, updated_at = NOW() WHERE id = $2")
-                .bind(status)
-                .bind(id)
-                .execute(self.db)
-                .await?;
-        Ok(result.rows_affected() > 0)
+    pub async fn update_status(&self, id: Uuid, status: &str) -> Result<bool, sea_orm::DbErr> {
+        let result = workspace_instance::Entity::update(workspace_instance::ActiveModel {
+            id: Set(id),
+            status: Set(status.to_string()),
+            ..Default::default()
+        })
+        .filter(workspace_instance::Column::Id.eq(id))
+        .exec(self.db)
+        .await;
+        match result {
+            Ok(_) => Ok(true),
+            Err(sea_orm::DbErr::RecordNotFound(_)) | Err(sea_orm::DbErr::RecordNotUpdated) => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
     pub async fn update_container_id(
         &self,
         id: Uuid,
         container_id: &str,
-    ) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query(
-            "UPDATE workspace_instances SET container_id = $1, updated_at = NOW() WHERE id = $2",
-        )
-        .bind(container_id)
-        .bind(id)
-        .execute(self.db)
-        .await?;
-        Ok(result.rows_affected() > 0)
+    ) -> Result<bool, sea_orm::DbErr> {
+        let result = workspace_instance::Entity::update(workspace_instance::ActiveModel {
+            id: Set(id),
+            container_id: Set(Some(container_id.to_string())),
+            ..Default::default()
+        })
+        .filter(workspace_instance::Column::Id.eq(id))
+        .exec(self.db)
+        .await;
+        match result {
+            Ok(_) => Ok(true),
+            Err(sea_orm::DbErr::RecordNotFound(_)) | Err(sea_orm::DbErr::RecordNotUpdated) => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
-    pub async fn delete(&self, id: Uuid) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query("DELETE FROM workspace_instances WHERE id = $1")
-            .bind(id)
-            .execute(self.db)
-            .await?;
-        Ok(result.rows_affected() > 0)
+    pub async fn delete(&self, id: Uuid) -> Result<bool, sea_orm::DbErr> {
+        let result = workspace_instance::Entity::delete_by_id(id).exec(self.db).await?;
+        Ok(result.rows_affected > 0)
     }
 }
 
-// ── Registry Repository ────────────────────────────────────────
+// ── Registry Repository ───────────────────────────────────────
 
 pub struct RegistryRepository<'a> {
-    pub db: &'a PgPool,
+    pub db: &'a DatabaseConnection,
 }
 
 impl<'a> RegistryRepository<'a> {
-    pub fn new(db: &'a PgPool) -> Self {
+    pub fn new(db: &'a DatabaseConnection) -> Self {
         Self { db }
     }
 
-    pub async fn get_url(&self) -> Result<Option<String>, sqlx::Error> {
-        sqlx::query_scalar::<_, String>("SELECT registry_url FROM registry_config WHERE id = 1")
-            .fetch_optional(self.db)
-            .await
+    pub async fn get_url(&self) -> Result<Option<String>, sea_orm::DbErr> {
+        let model = registry_config::Entity::find_by_id(1).one(self.db).await?;
+        Ok(model.map(|m| m.registry_url))
     }
 
-    pub async fn set_url(&self, url: &str) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "INSERT INTO registry_config (id, registry_url, updated_at) VALUES (1, $1, NOW())
-             ON CONFLICT (id) DO UPDATE SET registry_url = $1, updated_at = NOW()",
-        )
-        .bind(url)
-        .execute(self.db)
-        .await?;
+    pub async fn set_url(&self, url: &str) -> Result<(), sea_orm::DbErr> {
+        let model = registry_config::ActiveModel {
+            id: Set(1),
+            registry_url: Set(url.to_string()),
+            ..Default::default()
+        };
+        Insert::one(model)
+            .on_conflict(
+                OnConflict::column(registry_config::Column::Id)
+                    .update_column(registry_config::Column::RegistryUrl)
+                    .update_column(registry_config::Column::UpdatedAt)
+                    .to_owned(),
+            )
+            .exec(self.db)
+            .await?;
         Ok(())
     }
 
-    pub async fn get_cached(&self) -> Result<Option<serde_json::Value>, sqlx::Error> {
-        sqlx::query_scalar::<_, serde_json::Value>(
-            "SELECT registry_json FROM registry_cache WHERE id = 1",
-        )
-        .fetch_optional(self.db)
-        .await
+    pub async fn get_cached(&self) -> Result<Option<serde_json::Value>, sea_orm::DbErr> {
+        let model = registry_cache::Entity::find_by_id(1).one(self.db).await?;
+        Ok(model.map(|m| m.registry_json.into()))
     }
 
-    pub async fn set_cached(&self, json: &serde_json::Value) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "INSERT INTO registry_cache (id, registry_json, synced_at) VALUES (1, $1, NOW())
-             ON CONFLICT (id) DO UPDATE SET registry_json = $1, synced_at = NOW()",
-        )
-        .bind(json)
-        .execute(self.db)
-        .await?;
+    pub async fn set_cached(&self, json: &serde_json::Value) -> Result<(), sea_orm::DbErr> {
+        let model = registry_cache::ActiveModel {
+            id: Set(1),
+            registry_json: Set(json.clone().into()),
+            ..Default::default()
+        };
+        Insert::one(model)
+            .on_conflict(
+                OnConflict::column(registry_cache::Column::Id)
+                    .update_column(registry_cache::Column::RegistryJson)
+                    .update_column(registry_cache::Column::SyncedAt)
+                    .to_owned(),
+            )
+            .exec(self.db)
+            .await?;
         Ok(())
     }
 }

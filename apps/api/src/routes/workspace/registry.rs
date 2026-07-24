@@ -6,7 +6,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use super::AppState;
+use super::super::AppState;
 use crate::auth::AuthUser;
 use crate::db::RegistryRepository;
 

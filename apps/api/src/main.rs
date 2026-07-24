@@ -1,14 +1,8 @@
-mod auth;
-mod db;
-mod docker;
-mod routes;
-mod vnc_cache;
-mod vnc_trafik;
-
-use db::{WorkspaceInstanceRepository, UserRepository};
+use openworkspace_api::core::Settings;
+use openworkspace_api::db::{WorkspaceInstanceRepository, UserRepository};
+use openworkspace_api::routes::{api_routes, AppState};
 use migration::{Migrator, MigratorTrait};
-use routes::{api_routes, AppState};
-use sqlx::postgres::PgPoolOptions;
+use sea_orm::Database;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
@@ -24,17 +18,19 @@ async fn main() {
         )
         .init();
 
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let settings = Settings::new().expect("Failed to load settings");
 
     tracing::info!("Connecting to database...");
 
     let db = loop {
-        match PgPoolOptions::new()
-            .max_connections(5)
-            .connect(&database_url)
-            .await
-        {
-            Ok(pool) => break pool,
+        match Database::connect(&settings.database_url).await {
+            Ok(conn) => {
+                // Run migrations on the connection
+                Migrator::up(&conn, None)
+                    .await
+                    .expect("Failed to run migrations");
+                break conn;
+            }
             Err(e) => {
                 tracing::warn!("Database not ready, retrying in 2s: {}", e);
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -42,25 +38,16 @@ async fn main() {
         }
     };
 
-    tracing::info!("Database connected, running migrations...");
-
-    let migrator_db = sea_orm::Database::connect(&database_url)
-        .await
-        .expect("Failed to connect for migrations");
-    Migrator::up(&migrator_db, None)
-        .await
-        .expect("Failed to run migrations");
-
     tracing::info!("Migrations done, seeding admin user...");
 
     UserRepository::new(&db)
-        .seed_admin()
+        .seed_admin(&settings.admin_password)
         .await
         .expect("Failed to seed admin user");
 
     tracing::info!("Admin seed done, populating VNC cache...");
 
-    let vnc_cache = vnc_cache::VncCache::new();
+    let vnc_cache = openworkspace_api::vnc_cache::VncCache::new();
     let instance_repo = WorkspaceInstanceRepository::new(&db);
     match instance_repo.list_all().await {
         Ok(instances) => {
@@ -78,7 +65,7 @@ async fn main() {
         }
     }
 
-    let state = AppState { db, vnc_cache };
+    let state = AppState { db, vnc_cache, settings: settings.clone() };
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -90,9 +77,10 @@ async fn main() {
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+    let bind = settings.bind_address();
+    let listener = tokio::net::TcpListener::bind(&bind)
         .await
         .unwrap();
-    tracing::info!("Server running on http://0.0.0.0:3000");
+    tracing::info!("Server running on http://{}", bind);
     axum::serve(listener, app).await.unwrap();
 }

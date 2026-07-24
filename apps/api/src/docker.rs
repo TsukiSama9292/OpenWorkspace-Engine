@@ -38,6 +38,7 @@ pub struct ContainerConfig {
     pub exec_config: serde_json::Value,
     pub volume_mappings: serde_json::Value,
     pub persistent_volume: Option<String>,
+    pub command: Option<Vec<String>>,
 }
 
 impl DockerClient {
@@ -104,25 +105,34 @@ impl DockerClient {
     ) -> Result<String, String> {
         let image = &config.image;
 
-        tracing::info!(
-            "Pulling image '{}' for instance '{}' (#{})...",
-            image,
-            container_name,
-            instance_number
-        );
+        if self.docker.inspect_image(image).await.is_err() {
+            tracing::info!(
+                "Pulling image '{}' for instance '{}' (#{})...",
+                image,
+                container_name,
+                instance_number
+            );
 
-        self.docker
-            .create_image(
-                Some(CreateImageOptions {
-                    from_image: image.as_str(),
-                    ..Default::default()
-                }),
-                None,
-                None,
-            )
-            .try_collect::<Vec<_>>()
-            .await
-            .map_err(|e| e.to_string())?;
+            self.docker
+                .create_image(
+                    Some(CreateImageOptions {
+                        from_image: image.as_str(),
+                        ..Default::default()
+                    }),
+                    None,
+                    None,
+                )
+                .try_collect::<Vec<_>>()
+                .await
+                .map_err(|e| e.to_string())?;
+        } else {
+            tracing::debug!(
+                "Image '{}' already cached, skipping pull for instance '{}' (#{})",
+                image,
+                container_name,
+                instance_number
+            );
+        }
 
         // ── Build environment variables ──
         let mut env = vec![
@@ -191,8 +201,16 @@ impl DockerClient {
 
         let host_config = bollard::models::HostConfig {
             privileged: Some(false),
-            nano_cpus: Some((config.cores as i64) * 1_000_000_000),
-            memory: Some(config.memory),
+            nano_cpus: if config.cores > 0 {
+                Some((config.cores as i64) * 1_000_000_000)
+            } else {
+                None
+            },
+            memory: if config.memory > 0 {
+                Some(config.memory)
+            } else {
+                None
+            },
             dns,
             shm_size,
             network_mode,
@@ -210,8 +228,22 @@ impl DockerClient {
             ..Default::default()
         };
 
+        let cmd: Option<Vec<&str>> = config.command.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect())
+            .or_else(|| {
+                config
+                    .run_config
+                    .get("command")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str())
+                            .collect()
+                    })
+            });
+
         let container_config = Config {
             image: Some(image.as_str()),
+            cmd,
             env: Some(env),
             exposed_ports: Some(exposed_ports),
             hostname,
@@ -373,7 +405,7 @@ impl DockerClient {
         container_id: &str,
     ) -> Result<Option<String>, bollard::errors::Error> {
         match self.docker.inspect_container(container_id, None).await {
-            Ok(info) => Ok(info.state.and_then(|s| s.status).map(|s| format!("{:?}", s))),
+            Ok(info) => Ok(info.state.and_then(|s| s.status).map(|s| format!("{:?}", s).trim_matches('"').to_lowercase())),
             Err(e) => Err(e),
         }
     }

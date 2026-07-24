@@ -6,7 +6,7 @@ use axum::{
 };
 use uuid::Uuid;
 
-use super::AppState;
+use super::super::AppState;
 use crate::auth::Claims;
 use crate::db::WorkspaceInstanceRepository;
 
@@ -18,7 +18,7 @@ async fn vnc_verify(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
 ) -> Result<axum::http::HeaderMap, StatusCode> {
-    let secret = std::env::var("JWT_SECRET").expect("JWT_SECRET must be set");
+    let secret = &state.settings.jwt_secret;
 
     let cookie = headers
         .get(header::COOKIE)

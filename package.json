@@ -7,6 +7,7 @@
     "dev:api": "cd apps/api && RUST_LOG=info cargo run",
     "dev:web": "pnpm --filter web dev",
     "dev:stop": "pnpm run docker:dev:down",
+    "dev:remove": "docker compose -f docker/openworkspace_dev/docker-compose.yml down -v && echo '✅ 已移除開發環境 volumes'",
     "build": "turbo run build --filter=web",
     "build:web": "pnpm --filter web build",
     "api": "cd apps/api && RUST_LOG=info cargo run",

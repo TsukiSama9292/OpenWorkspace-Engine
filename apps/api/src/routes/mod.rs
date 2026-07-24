@@ -1,20 +1,19 @@
 mod auth;
-mod configs;
-mod docker_raw;
-mod instances;
-mod registry;
+mod proxy;
 mod users;
-mod vnc;
+mod workspace;
 
 use axum::Router;
-use sqlx::PgPool;
+use sea_orm::DatabaseConnection;
 
+use crate::core::Settings;
 use crate::vnc_cache::VncCache;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub db: PgPool,
+    pub db: DatabaseConnection,
     pub vnc_cache: VncCache,
+    pub settings: Settings,
 }
 
 pub fn api_routes() -> Router<AppState> {
@@ -22,9 +21,6 @@ pub fn api_routes() -> Router<AppState> {
         .route("/health", axum::routing::get(|| async { axum::Json(serde_json::json!({ "status": "ok" })) }))
         .merge(auth::routes())
         .merge(users::routes())
-        .merge(configs::routes())
-        .merge(instances::routes())
-        .merge(registry::routes())
-        .merge(docker_raw::routes())
-        .merge(vnc::routes())
+        .merge(workspace::routes())
+        .merge(proxy::routes())
 }
