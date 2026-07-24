@@ -7,7 +7,7 @@ use openworkspace_api::docker::DockerClient;
 
 async fn setup() -> DockerClient {
     ensure_network().await;
-    DockerClient::new().await.expect("Docker not available")
+    DockerClient::with_network("ow-test").await.expect("Docker not available")
 }
 
 #[tokio::test]
@@ -20,7 +20,7 @@ async fn test_list_containers_not_empty() {
 #[tokio::test]
 async fn test_create_start_stop_remove_lifecycle() {
     let client = setup().await;
-    let name = format!("test_docker_lifecycle_{}", std::process::id());
+    let name = format!("ow_test_docker_lifecycle_{}", std::process::id());
 
     let id = client.create_container(&name, "busybox:1").await.unwrap();
     let _guard = DockerContainerGuard::new(&id);
@@ -39,7 +39,7 @@ async fn test_pause_unpause() {
     use openworkspace_api::docker::ContainerConfig;
 
     let client = setup().await;
-    let name = format!("test_docker_pause_{}", std::process::id());
+    let name = format!("ow_test_docker_pause_{}", std::process::id());
 
     let config = ContainerConfig {
         image: "busybox:1".to_string(),
@@ -71,7 +71,7 @@ async fn test_pause_unpause() {
 #[tokio::test]
 async fn test_get_container_ip() {
     let client = setup().await;
-    let name = format!("test_docker_ip_{}", std::process::id());
+    let name = format!("ow_test_docker_ip_{}", std::process::id());
 
     let id = client.create_container(&name, "busybox:1").await.unwrap();
     let _guard = DockerContainerGuard::new(&id);
@@ -91,7 +91,7 @@ async fn test_create_container_from_config() {
     use openworkspace_api::docker::ContainerConfig;
 
     let client = setup().await;
-    let name = format!("test_docker_config_{}", std::process::id());
+    let name = format!("ow_test_docker_config_{}", std::process::id());
 
     let config = ContainerConfig {
         image: "busybox:1".to_string(),
@@ -121,7 +121,7 @@ async fn test_create_container_from_config_with_env_and_dns() {
     use openworkspace_api::docker::ContainerConfig;
 
     let client = setup().await;
-    let name = format!("test_docker_config_env_{}", std::process::id());
+    let name = format!("ow_test_docker_config_env_{}", std::process::id());
 
     let config = ContainerConfig {
         image: "busybox:1".to_string(),
@@ -155,7 +155,7 @@ async fn test_create_container_from_config_with_volume() {
     use std::fs;
 
     let client = setup().await;
-    let name = format!("test_docker_config_vol_{}", std::process::id());
+    let name = format!("ow_test_docker_config_vol_{}", std::process::id());
     let tmp_dir = std::env::temp_dir().join(format!("ow_test_vol_{}", std::process::id()));
     fs::create_dir_all(&tmp_dir).unwrap();
 
@@ -202,7 +202,7 @@ async fn test_create_container_from_config_with_exec() {
     use openworkspace_api::docker::ContainerConfig;
 
     let client = setup().await;
-    let name = format!("test_docker_exec_{}", std::process::id());
+    let name = format!("ow_test_docker_exec_{}", std::process::id());
 
     let config = ContainerConfig {
         image: "busybox:1".to_string(),
@@ -234,7 +234,7 @@ async fn test_create_container_from_config_with_hostname() {
     use openworkspace_api::docker::ContainerConfig;
 
     let client = setup().await;
-    let name = format!("test_docker_hostname_{}", std::process::id());
+    let name = format!("ow_test_docker_hostname_{}", std::process::id());
 
     let config = ContainerConfig {
         image: "busybox:1".to_string(),
@@ -263,7 +263,7 @@ async fn test_create_container_from_config_command_from_run_config() {
     use openworkspace_api::docker::ContainerConfig;
 
     let client = setup().await;
-    let name = format!("test_docker_run_cmd_{}", std::process::id());
+    let name = format!("ow_test_docker_run_cmd_{}", std::process::id());
 
     let config = ContainerConfig {
         image: "busybox:1".to_string(),
@@ -295,7 +295,7 @@ async fn test_create_container_from_config_no_command() {
     use openworkspace_api::docker::ContainerConfig;
 
     let client = setup().await;
-    let name = format!("test_docker_no_cmd_{}", std::process::id());
+    let name = format!("ow_test_docker_no_cmd_{}", std::process::id());
 
     let config = ContainerConfig {
         image: "busybox:1".to_string(),
@@ -320,7 +320,7 @@ async fn test_create_container_from_config_with_shm_size_and_network_mode() {
     use openworkspace_api::docker::ContainerConfig;
 
     let client = setup().await;
-    let name = format!("test_docker_shm_{}", std::process::id());
+    let name = format!("ow_test_docker_shm_{}", std::process::id());
 
     let config = ContainerConfig {
         image: "busybox:1".to_string(),
@@ -329,7 +329,6 @@ async fn test_create_container_from_config_with_shm_size_and_network_mode() {
         gpu_count: 0,
         run_config: serde_json::json!({
             "shm_size": 67108864,
-            "network_mode": "bridge"
         }),
         exec_config: serde_json::json!({}),
         volume_mappings: serde_json::json!({}),
@@ -348,7 +347,7 @@ async fn test_create_container_from_config_with_shm_size_and_network_mode() {
 #[tokio::test]
 async fn test_get_container_ip_wrong_network() {
     let client = setup().await;
-    let name = format!("test_docker_ip_wrong_{}", std::process::id());
+    let name = format!("ow_test_docker_ip_wrong_{}", std::process::id());
 
     let id = client.create_container(&name, "busybox:1").await.unwrap();
     let _guard = DockerContainerGuard::new(&id);
@@ -360,7 +359,7 @@ async fn test_get_container_ip_wrong_network() {
 #[tokio::test]
 async fn test_inspect_container_state_after_remove() {
     let client = setup().await;
-    let name = format!("test_docker_inspect_gone_{}", std::process::id());
+    let name = format!("ow_test_docker_inspect_gone_{}", std::process::id());
 
     let id = client.create_container(&name, "busybox:1").await.unwrap();
     client.remove_container_by_id(&id).await.ok();

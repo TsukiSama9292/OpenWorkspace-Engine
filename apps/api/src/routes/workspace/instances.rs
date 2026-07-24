@@ -150,7 +150,7 @@ async fn launch_instance(
         config.name
     );
 
-    let docker = DockerClient::new().await.map_err(|e| {
+    let docker = DockerClient::with_network(&state.settings.docker_network).await.map_err(|e| {
         tracing::error!("Failed to connect to Docker: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -178,7 +178,7 @@ async fn launch_instance(
             instance_repo.update_container_id(instance.id, &container_id).await.ok();
             instance_repo.update_status(instance.id, "running").await.ok();
 
-            match docker.get_container_ip(&container_id, "ow-network").await {
+            match docker.get_container_ip(&container_id, &docker.network_name).await {
                 Ok(ip) => {
                     if let Err(e) = crate::vnc_trafik::write_vnc_route(&instance.vnc_token, &ip) {
                         tracing::error!("Failed to write Traefik VNC route: {}", e);
@@ -261,7 +261,7 @@ async fn delete_instance(
     state.vnc_cache.remove(&instance.vnc_token);
 
     if let Some(ref container_id) = instance.container_id {
-        if let Ok(docker) = DockerClient::new().await {
+        if let Ok(docker) = DockerClient::with_network(&state.settings.docker_network).await {
             let _ = docker.stop_container_by_id(container_id).await;
             match docker.remove_container_by_id(container_id).await {
                 Ok(()) => tracing::info!("Container removed for instance '{}'", instance.name),
@@ -307,7 +307,7 @@ async fn start_instance(
         ));
     }
 
-    let docker = DockerClient::new().await.map_err(|e| {
+    let docker = DockerClient::with_network(&state.settings.docker_network).await.map_err(|e| {
         tracing::error!("Failed to connect to Docker: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -400,7 +400,7 @@ async fn start_instance(
     if let Some(ref cid) = new_container_id {
         instance_repo.update_container_id(instance.id, cid).await.ok();
 
-        match docker.get_container_ip(cid, "ow-network").await {
+        match docker.get_container_ip(cid, &docker.network_name).await {
             Ok(ip) => {
                 if let Err(e) = crate::vnc_trafik::write_vnc_route(&instance.vnc_token, &ip) {
                     tracing::error!("Failed to write Traefik VNC route: {}", e);
@@ -457,14 +457,14 @@ async fn stop_instance(
 
     if instance.status == "paused" {
         if let Some(ref cid) = instance.container_id {
-            if let Ok(docker) = DockerClient::new().await {
+            if let Ok(docker) = DockerClient::with_network(&state.settings.docker_network).await {
                 let _ = docker.unpause_container_by_id(cid).await;
             }
         }
     }
 
     if let Some(ref cid) = instance.container_id {
-        let docker = DockerClient::new().await.map_err(|e| {
+        let docker = DockerClient::with_network(&state.settings.docker_network).await.map_err(|e| {
             tracing::error!("Failed to connect to Docker: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -534,7 +534,7 @@ async fn pause_instance(
         Json(serde_json::json!({"error": "No container attached"})),
     ))?;
 
-    let docker = DockerClient::new().await.map_err(|e| {
+    let docker = DockerClient::with_network(&state.settings.docker_network).await.map_err(|e| {
         tracing::error!("Failed to connect to Docker: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -597,7 +597,7 @@ async fn unpause_instance(
         Json(serde_json::json!({"error": "No container attached"})),
     ))?;
 
-    let docker = DockerClient::new().await.map_err(|e| {
+    let docker = DockerClient::with_network(&state.settings.docker_network).await.map_err(|e| {
         tracing::error!("Failed to connect to Docker: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,

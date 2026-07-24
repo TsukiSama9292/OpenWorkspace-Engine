@@ -9,7 +9,7 @@ async fn setup_db() -> DatabaseConnection {
 
     static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let counter = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let db_name = format!("db_test_{:04}", counter);
+    let db_name = format!("db_test_{}_{:04}", std::process::id(), counter);
 
     let base_url = common::pg_base_url();
     let (client, conn) = tokio_postgres::connect(&base_url, tokio_postgres::NoTls)

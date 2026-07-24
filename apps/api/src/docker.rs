@@ -4,7 +4,6 @@ use bollard::container::{
 };
 use bollard::image::CreateImageOptions;
 use bollard::models::ContainerSummary;
-use bollard::network::ConnectNetworkOptions;
 use bollard::Docker;
 use futures_util::stream::TryStreamExt;
 use std::default::Default;
@@ -26,6 +25,7 @@ server:
 
 pub struct DockerClient {
     docker: Docker,
+    pub network_name: String,
 }
 
 /// Full configuration for creating a container from a workspace config.
@@ -43,8 +43,12 @@ pub struct ContainerConfig {
 
 impl DockerClient {
     pub async fn new() -> Result<Self, String> {
+        Self::with_network("ow-network").await
+    }
+
+    pub async fn with_network(network_name: &str) -> Result<Self, String> {
         let docker = Docker::connect_with_local_defaults().map_err(|e| e.to_string())?;
-        Ok(Self { docker })
+        Ok(Self { docker, network_name: network_name.to_string() })
     }
 
     pub async fn list_containers(
@@ -186,13 +190,6 @@ impl DockerClient {
             .get("shm_size")
             .and_then(|v| v.as_i64());
 
-        // ── Network mode ──
-        let network_mode: Option<String> = config
-            .run_config
-            .get("network_mode")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
         // ── Hostname ──
         let hostname: Option<&str> = config
             .run_config
@@ -213,7 +210,7 @@ impl DockerClient {
             },
             dns,
             shm_size,
-            network_mode,
+            network_mode: Some(self.network_name.clone()),
             binds: if binds.is_empty() { None } else { Some(binds) },
             device_requests: if config.gpu_count > 0 {
                 Some(vec![bollard::models::DeviceRequest {
@@ -259,23 +256,6 @@ impl DockerClient {
         let container = self
             .docker
             .create_container(options, container_config)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        tracing::info!(
-            "Connecting container '{}' (id: {}) to network 'ow-network'...",
-            container_name,
-            &container.id[..12]
-        );
-
-        self.docker
-            .connect_network(
-                "ow-network",
-                ConnectNetworkOptions {
-                    container: container.id.clone(),
-                    ..Default::default()
-                },
-            )
             .await
             .map_err(|e| e.to_string())?;
 

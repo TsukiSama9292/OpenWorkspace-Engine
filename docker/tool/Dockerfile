@@ -114,7 +114,8 @@ RUN curl -fsSL https://opencode.ai/install | bash
 RUN curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | sh
 RUN wget -qO- https://get.pnpm.io/install.sh | ENV="$HOME/.bashrc" SHELL="$(which bash)" bash -
 ENV PATH="/home/${USERNAME}/.local/bin:/usr/local/bin:${PATH}"
-
+RUN rustup component add llvm-tools-preview
+RUN cargo install cargo-llvm-cov --version 0.8.7 --locked
 # codegraph install --yes
 
 # =========================

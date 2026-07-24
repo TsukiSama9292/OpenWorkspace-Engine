@@ -6,6 +6,7 @@ pub struct Settings {
     pub server_host: String,
     pub server_port: u16,
     pub db_max_connections: u32,
+    pub docker_network: String,
 }
 
 impl Settings {
@@ -45,6 +46,8 @@ impl Settings {
                 .unwrap_or_else(|| "5".to_string())
                 .parse()
                 .map_err(|e| format!("DB_MAX_CONNECTIONS invalid: {}", e))?,
+            docker_network: get("DOCKER_NETWORK")
+                .unwrap_or_else(|| "ow-network".to_string()),
         })
     }
 
@@ -70,6 +73,7 @@ mod tests {
             server_host: "0.0.0.0".to_string(),
             server_port: 3000,
             db_max_connections: 5,
+            docker_network: "ow-network".to_string(),
         };
         assert_eq!(settings.bind_address(), "0.0.0.0:3000");
     }
@@ -83,6 +87,7 @@ mod tests {
             server_host: "127.0.0.1".to_string(),
             server_port: 8080,
             db_max_connections: 10,
+            docker_network: "ow-network".to_string(),
         };
         assert_eq!(settings.bind_address(), "127.0.0.1:8080");
     }
@@ -96,6 +101,7 @@ mod tests {
             server_host: "0.0.0.0".to_string(),
             server_port: 3000,
             db_max_connections: 5,
+            docker_network: "ow-network".to_string(),
         };
         let debug = format!("{:?}", settings);
         assert!(debug.contains("Settings"));
@@ -111,6 +117,7 @@ mod tests {
             server_host: "0.0.0.0".to_string(),
             server_port: 3000,
             db_max_connections: 5,
+            docker_network: "ow-network".to_string(),
         };
         let cloned = settings.clone();
         assert_eq!(settings.database_url, cloned.database_url);

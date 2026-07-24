@@ -25,7 +25,7 @@ async fn test_create_and_list_docker_container() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let name = format!("test_docker_api_{}", std::process::id());
+    let name = format!("ow_test_docker_api_{}", std::process::id());
     let resp = ctx.post("/api/docker/containers/create", &serde_json::json!({
         "name": name,
         "image": "busybox:1",

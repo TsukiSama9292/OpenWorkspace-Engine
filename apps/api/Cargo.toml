@@ -31,7 +31,5 @@ sea-orm = { version = "1", features = ["sqlx-postgres", "runtime-tokio-rustls"] 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json", "cookies"] }
 tower = { version = "0.5", features = ["util"] }
-testcontainers-modules = { version = "0.12.1", features = ["postgres"] }
 postgres = "0.19"
 tokio-postgres = "0.7.18"
-libc = "0.2"

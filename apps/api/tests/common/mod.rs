@@ -27,7 +27,7 @@ impl TestContext {
         ensure_pg().await;
 
         let counter = DB_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let db_name = format!("test_{:04}", counter);
+        let db_name = format!("test_{}_{:04}", std::process::id(), counter);
         let base_url = pg_base_url();
 
         let (client, connection) = 'connect: {
@@ -88,6 +88,7 @@ impl TestContext {
             server_host: "127.0.0.1".to_string(),
             server_port: 0,
             db_max_connections: 5,
+            docker_network: "ow-test".to_string(),
         };
 
         UserRepository::new(&db)
