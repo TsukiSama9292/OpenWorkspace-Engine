@@ -3,10 +3,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/create_test_pg.sh"
+source "$SCRIPT_DIR/remove_test_instance.sh"
 
 cleanup() {
     echo "==> 清理 Postgres 測試容器..."
     destroy_test_pg
+    echo "==> 清理測試環境..."
+    remove_test_instance
 }
 trap cleanup EXIT
 
