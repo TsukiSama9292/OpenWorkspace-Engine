@@ -1,9 +1,6 @@
-[submodule "references_repo/KasmVNC"]
-	path = references_repo/KasmVNC
-	url = https://github.com/kasmtech/KasmVNC.git
 [submodule "references_repo/kasm_workspaces_registry"]
 	path = references_repo/kasm_workspaces_registry
 	url = https://github.com/linuxserver/kasm_workspaces_registry
-[submodule "references_repo/noVNC"]
-	path = references_repo/noVNC
-	url = https://github.com/novnc/noVNC.git
+[submodule "references_repo/kasmtech-noVNC"]
+	path = references_repo/kasmtech-noVNC
+	url = https://github.com/kasmtech/noVNC.git
