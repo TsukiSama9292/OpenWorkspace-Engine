@@ -197,4 +197,59 @@ mod tests {
         let result = delete_vnc_route("test_del_default_token");
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn write_vnc_route_to_readonly_dir_fails() {
+        let result = write_vnc_route_to(&PathBuf::from("/proc"), "errtok", "10.0.0.1");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("write"), "error should mention write: {}", err);
+    }
+
+    #[test]
+    fn write_vnc_route_full_token_content() {
+        let dir = temp_dir();
+        let token = "fulltok123abc";
+        write_vnc_route_to(&dir, token, "172.17.0.5").unwrap();
+
+        let ws = fs::read_to_string(dir.join(format!("vnc-{}-ws.yml", token))).unwrap();
+        assert!(ws.contains(&format!("vnc/{}", token)));
+        assert!(ws.contains("kasm-insecure"));
+        assert!(ws.contains("vnc-auth"));
+        assert!(ws.contains("https://172.17.0.5:6901"));
+        assert!(ws.contains("entryPoints"));
+        assert!(ws.contains("loadBalancer"));
+
+        let page = fs::read_to_string(dir.join(format!("vnc-{}-page.yml", token))).unwrap();
+        assert!(page.contains(&format!("vnc/{}", token)));
+        assert!(page.contains("web-service"));
+        assert!(!page.contains("websockify"));
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_vnc_route_long_token_truncated_in_log() {
+        let dir = temp_dir();
+        let long_token = "a".repeat(64);
+        let result = write_vnc_route_to(&dir, &long_token, "10.0.0.99");
+        assert!(result.is_ok());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn delete_vnc_route_partial_existing() {
+        let dir = temp_dir();
+        let _ = fs::remove_file(dir.join("vnc-partial-ws.yml"));
+        let _ = fs::remove_file(dir.join("vnc-partial-page.yml"));
+
+        fs::write(dir.join("vnc-partial-ws.yml"), "ws-only").unwrap();
+
+        let result = delete_vnc_route_from(&dir, "partial");
+        assert!(result.is_ok());
+        assert!(!dir.join("vnc-partial-ws.yml").exists());
+        assert!(!dir.join("vnc-partial-page.yml").exists());
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
 }

@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{DockerContainerGuard, TestContext};
+use common::TestContext;
 
 #[tokio::test]
 async fn test_list_docker_containers() {
@@ -34,7 +34,6 @@ async fn test_create_and_list_docker_container() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let container_id = body["container_id"].as_str().unwrap();
     assert!(!container_id.is_empty());
-    let _guard = DockerContainerGuard::new(container_id);
 
     let resp = ctx.get("/api/docker/containers").await;
     let body: serde_json::Value = resp.json().await.unwrap();

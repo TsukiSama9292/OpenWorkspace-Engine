@@ -174,4 +174,57 @@ mod tests {
         assert_eq!(settings.db_max_connections, 5);
         assert_eq!(settings.admin_password, "admin");
     }
+
+    #[test]
+    fn test_settings_new_reads_env() {
+        let prev_db = std::env::var("DATABASE_URL").ok();
+        let prev_jwt = std::env::var("JWT_SECRET").ok();
+
+        unsafe {
+            std::env::set_var("DATABASE_URL", "postgres://localhost/new_test_db");
+            std::env::set_var("JWT_SECRET", "new_secret");
+        }
+
+        let result = Settings::new();
+
+        unsafe {
+            if let Some(v) = prev_db {
+                std::env::set_var("DATABASE_URL", v);
+            } else {
+                std::env::remove_var("DATABASE_URL");
+            }
+            if let Some(v) = prev_jwt {
+                std::env::set_var("JWT_SECRET", v);
+            } else {
+                std::env::remove_var("JWT_SECRET");
+            }
+        }
+
+        let settings = result.unwrap();
+        assert_eq!(settings.database_url, "postgres://localhost/new_test_db");
+        assert_eq!(settings.jwt_secret, "new_secret");
+    }
+
+    #[test]
+    fn test_settings_custom_env_values() {
+        let settings = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://remote:5432/prod"),
+            ("JWT_SECRET", "super-secret"),
+            ("ADMIN_PASSWORD", "changeme"),
+            ("SERVER_HOST", "192.168.1.100"),
+            ("SERVER_PORT", "8080"),
+            ("DB_MAX_CONNECTIONS", "20"),
+            ("DOCKER_NETWORK", "custom-network"),
+        ]))
+        .unwrap();
+
+        assert_eq!(settings.database_url, "postgres://remote:5432/prod");
+        assert_eq!(settings.jwt_secret, "super-secret");
+        assert_eq!(settings.admin_password, "changeme");
+        assert_eq!(settings.server_host, "192.168.1.100");
+        assert_eq!(settings.server_port, 8080);
+        assert_eq!(settings.db_max_connections, 20);
+        assert_eq!(settings.docker_network, "custom-network");
+        assert_eq!(settings.bind_address(), "192.168.1.100:8080");
+    }
 }

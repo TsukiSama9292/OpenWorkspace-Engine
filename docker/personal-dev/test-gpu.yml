@@ -1,0 +1,11 @@
+services:
+  gpu-test:
+    image: busybox:1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: ["sh", "-c", "while true; do sleep 3600; done"]

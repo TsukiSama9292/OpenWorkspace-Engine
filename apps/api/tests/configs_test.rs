@@ -266,3 +266,69 @@ async fn test_create_config_with_null_optional_fields() {
     assert_eq!(body["config"]["exec_config"], serde_json::json!({}));
     assert_eq!(body["config"]["volume_mappings"], serde_json::json!({}));
 }
+
+#[tokio::test]
+async fn test_config_to_json_fields_in_response() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/configs", &serde_json::json!({
+        "name": "json-fields",
+        "description": "testing json output",
+        "image": "test:latest",
+        "cores": 4,
+        "memory": 8192,
+        "gpu_count": 1,
+        "docker_registry": "myreg.io",
+        "run_config": {"key": "val"},
+        "exec_config": {"cmd": true},
+        "volume_mappings": {"/h": "/c"},
+        "persistent_storage_path": "/data"
+    })).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let cfg = &body["config"];
+
+    assert!(cfg["id"].is_string());
+    assert_eq!(cfg["name"], "json-fields");
+    assert_eq!(cfg["description"], "testing json output");
+    assert_eq!(cfg["image"], "test:latest");
+    assert_eq!(cfg["cores"], 4);
+    assert_eq!(cfg["memory"], 8192);
+    assert_eq!(cfg["gpu_count"], 1);
+    assert_eq!(cfg["docker_registry"], "myreg.io");
+    assert_eq!(cfg["run_config"]["key"], "val");
+    assert_eq!(cfg["exec_config"]["cmd"], true);
+    assert_eq!(cfg["volume_mappings"]["/h"], "/c");
+    assert_eq!(cfg["persistent_storage_path"], "/data");
+    assert_eq!(cfg["instance_count"], 0);
+    assert!(cfg["owner_id"].is_string());
+    assert!(cfg["created_at"].is_string());
+    assert!(cfg["updated_at"].is_string());
+}
+
+#[tokio::test]
+async fn test_get_config_includes_instance_count() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/configs", &serde_json::json!({
+        "name": "count-config",
+        "image": "busybox:1"
+    })).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let config_id = body["config"]["id"].as_str().unwrap();
+
+    ctx.post("/api/instances", &serde_json::json!({
+        "config_id": config_id
+    })).await;
+    ctx.post("/api/instances", &serde_json::json!({
+        "config_id": config_id
+    })).await;
+
+    let resp = ctx.get(&format!("/api/configs/{}", config_id)).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["config"]["instance_count"], 2);
+}

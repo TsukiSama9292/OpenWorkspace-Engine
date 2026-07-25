@@ -671,3 +671,184 @@ async fn instance_update_container_id_nonexistent() {
     let updated = instance_repo.update_container_id(uuid::Uuid::new_v4(), "abc123").await.unwrap();
     assert!(!updated);
 }
+
+// ── From impl tests ─────────────────────────────────────────
+
+#[test]
+fn config_model_from_converts_all_fields() {
+    let id = uuid::Uuid::new_v4();
+    let owner_id = uuid::Uuid::new_v4();
+    let now = chrono::Utc::now();
+
+    let model = workspace_config::Model {
+        id,
+        name: "test-cfg".to_string(),
+        description: Some("desc".to_string()),
+        owner_id,
+        image: "img:1".to_string(),
+        cores: 4,
+        memory: 8192,
+        gpu_count: 2,
+        docker_registry: Some("reg".to_string()),
+        run_config: serde_json::json!({"key": "val"}),
+        exec_config: serde_json::json!({"exec": true}),
+        volume_mappings: serde_json::json!({"/host": "/container"}),
+        persistent_storage_path: Some("/persist".to_string()),
+        created_at: now,
+        updated_at: now,
+    };
+
+    let config: WorkspaceConfig = model.into();
+    assert_eq!(config.id, id);
+    assert_eq!(config.name, "test-cfg");
+    assert_eq!(config.description, Some("desc".to_string()));
+    assert_eq!(config.owner_id, owner_id);
+    assert_eq!(config.image, "img:1");
+    assert_eq!(config.cores, 4);
+    assert_eq!(config.memory, 8192);
+    assert_eq!(config.gpu_count, 2);
+    assert_eq!(config.docker_registry, Some("reg".to_string()));
+    assert_eq!(config.run_config, serde_json::json!({"key": "val"}));
+    assert_eq!(config.exec_config, serde_json::json!({"exec": true}));
+    assert_eq!(config.volume_mappings, serde_json::json!({"/host": "/container"}));
+    assert_eq!(config.persistent_storage_path, Some("/persist".to_string()));
+}
+
+#[test]
+fn config_model_from_null_optionals() {
+    let model = workspace_config::Model {
+        id: uuid::Uuid::new_v4(),
+        name: "minimal".to_string(),
+        description: None,
+        owner_id: uuid::Uuid::new_v4(),
+        image: "img:1".to_string(),
+        cores: 1,
+        memory: 1024,
+        gpu_count: 0,
+        docker_registry: None,
+        run_config: serde_json::json!({}),
+        exec_config: serde_json::json!({}),
+        volume_mappings: serde_json::json!({}),
+        persistent_storage_path: None,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+
+    let config: WorkspaceConfig = model.into();
+    assert!(config.description.is_none());
+    assert!(config.docker_registry.is_none());
+    assert!(config.persistent_storage_path.is_none());
+}
+
+#[test]
+fn instance_model_from_converts_all_fields() {
+    let id = uuid::Uuid::new_v4();
+    let config_id = uuid::Uuid::new_v4();
+    let owner_id = uuid::Uuid::new_v4();
+    let now = chrono::Utc::now();
+
+    let model = workspace_instance::Model {
+        id,
+        config_id,
+        name: "inst-1".to_string(),
+        instance_number: 1,
+        owner_id,
+        container_id: Some("abc123".to_string()),
+        status: "running".to_string(),
+        vnc_token: "vtok".to_string(),
+        mount_persistent: true,
+        resolved_volume_host_path: Some("/host/path".to_string()),
+        created_at: now,
+        updated_at: now,
+    };
+
+    let inst: WorkspaceInstance = model.into();
+    assert_eq!(inst.id, id);
+    assert_eq!(inst.config_id, config_id);
+    assert_eq!(inst.name, "inst-1");
+    assert_eq!(inst.instance_number, 1);
+    assert_eq!(inst.owner_id, owner_id);
+    assert_eq!(inst.container_id, Some("abc123".to_string()));
+    assert_eq!(inst.status, "running");
+    assert_eq!(inst.vnc_token, "vtok");
+    assert!(inst.mount_persistent);
+    assert_eq!(inst.resolved_volume_host_path, Some("/host/path".to_string()));
+}
+
+#[test]
+fn instance_model_from_none_optionals() {
+    let model = workspace_instance::Model {
+        id: uuid::Uuid::new_v4(),
+        config_id: uuid::Uuid::new_v4(),
+        name: "inst-none".to_string(),
+        instance_number: 1,
+        owner_id: uuid::Uuid::new_v4(),
+        container_id: None,
+        status: "stopped".to_string(),
+        vnc_token: "tok".to_string(),
+        mount_persistent: false,
+        resolved_volume_host_path: None,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+
+    let inst: WorkspaceInstance = model.into();
+    assert!(inst.container_id.is_none());
+    assert!(inst.resolved_volume_host_path.is_none());
+    assert!(!inst.mount_persistent);
+}
+
+#[tokio::test]
+async fn instance_update_container_id_success() {
+    let db = setup_db().await;
+    let config_repo = WorkspaceConfigRepository::new(&db);
+    let instance_repo = WorkspaceInstanceRepository::new(&db);
+    let user_repo = UserRepository::new(&db);
+
+    user_repo.seed_admin("pass").await.unwrap();
+    let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
+
+    let config = config_repo
+        .create("cid-success", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
+        .await
+        .unwrap();
+
+    let inst = instance_repo.launch(config.id, admin.0, "cid-success", false, None).await.unwrap();
+
+    let updated = instance_repo.update_container_id(inst.id, "new_container_999").await.unwrap();
+    assert!(updated);
+
+    let found = instance_repo.find_by_id(inst.id).await.unwrap().unwrap();
+    assert_eq!(found.container_id, Some("new_container_999".to_string()));
+}
+
+#[tokio::test]
+async fn instance_update_status_success() {
+    let db = setup_db().await;
+    let config_repo = WorkspaceConfigRepository::new(&db);
+    let instance_repo = WorkspaceInstanceRepository::new(&db);
+    let user_repo = UserRepository::new(&db);
+
+    user_repo.seed_admin("pass").await.unwrap();
+    let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
+
+    let config = config_repo
+        .create("status-success", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
+        .await
+        .unwrap();
+
+    let inst = instance_repo.launch(config.id, admin.0, "status-success", false, None).await.unwrap();
+    assert_eq!(inst.status, "stopped");
+
+    let updated = instance_repo.update_status(inst.id, "running").await.unwrap();
+    assert!(updated);
+
+    let found = instance_repo.find_by_id(inst.id).await.unwrap().unwrap();
+    assert_eq!(found.status, "running");
+
+    let updated = instance_repo.update_status(inst.id, "paused").await.unwrap();
+    assert!(updated);
+
+    let found = instance_repo.find_by_id(inst.id).await.unwrap().unwrap();
+    assert_eq!(found.status, "paused");
+}

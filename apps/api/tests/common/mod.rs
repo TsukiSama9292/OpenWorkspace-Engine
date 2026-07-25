@@ -1,6 +1,5 @@
 mod docker_guard;
 mod pg;
-pub use docker_guard::*;
 pub use pg::*;
 
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -130,11 +129,6 @@ impl TestContext {
             client,
             db_name,
         }
-    }
-
-    #[allow(dead_code)]
-    pub async fn cleanup(&self) {
-        cleanup_test_containers().await;
     }
 
     pub async fn login_admin(&self) -> reqwest::Response {
