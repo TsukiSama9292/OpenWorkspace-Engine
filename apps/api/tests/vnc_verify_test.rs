@@ -147,9 +147,20 @@ async fn test_vnc_verify_db_hit_not_running() {
         "config_id": config_id
     })).await;
     let launch_body: serde_json::Value = launch_resp.json().await.unwrap();
-    let vnc_token = launch_body["instance"]["vnc_token"].as_str().unwrap();
+    let instance_id = launch_body["instance"]["id"].as_str().unwrap();
+    let vnc_token = launch_body["instance"]["vnc_token"].as_str().unwrap().to_string();
 
-    // Instance is "stopped" by default
+    // Force status to "stopped" — launch_instance may have set it to "running" if Docker succeeded
+    let inst_id = uuid::Uuid::parse_str(instance_id).unwrap();
+    let db_url = common::pg_url(&ctx.db_name);
+    let db = sea_orm::Database::connect(&db_url).await.unwrap();
+    let model = workspace_instance::ActiveModel {
+        id: Set(inst_id),
+        status: Set("stopped".to_string()),
+        ..Default::default()
+    };
+    model.update(&db).await.unwrap();
+
     let token = ctx.login_token().await;
     let resp = ctx
         .client
