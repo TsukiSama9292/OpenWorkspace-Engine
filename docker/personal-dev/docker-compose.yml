@@ -4,7 +4,7 @@ services:
     image: tsukisama9292/private-images:ow-opencode
     build:
       context: ../..
-      dockerfile: docker/tool/Dockerfile
+      dockerfile: docker/personal-dev/Dockerfile
 
     user: "1000:1000"
 
