@@ -16,16 +16,15 @@ noVNC Core Library (apps/web/src/lib/vnc/)
 
   Licensed under the Mozilla Public License, Version 2.0 (MPL-2.0).
   A copy is available at https://www.mozilla.org/en-US/MPL/2.0/
-  or in the references_repo/KasmVNC/kasmweb/LICENSE.txt file.
 
-  The files under apps/web/src/lib/vnc/ are modified versions of the
-  noVNC core library, sourced via the KasmVNC project. These files
-  remain licensed under MPL-2.0 in accordance with its file-level
-  copyleft provisions. All other files in this project are licensed
-  under Apache-2.0.
+  The files under apps/web/src/lib/vnc/ are taken from the KasmVNC
+  fork of noVNC (kasmtech/noVNC), with import paths modified for
+  standalone use. These files remain licensed under MPL-2.0 in
+  accordance with its file-level copyleft provisions. All other files
+  in this project are licensed under Apache-2.0.
 
-  Original noVNC source: https://github.com/novnc/noVNC
-  KasmVNC source: https://github.com/kasmtech/KasmVNC
+  Source: https://github.com/kasmtech/noVNC
+  Commit: e9c0f7088e08ad7030b91c8602ab056dcc8da107
 
 -------------------------------------------------------------------------------
 
