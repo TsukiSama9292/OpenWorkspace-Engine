@@ -127,7 +127,7 @@ graph LR
     P1["Phase 1<br/>MVP 堅實核心<br/>✅ 已完成"] --> P2["Phase 2<br/>全場景開發生態<br/>🔜 進行中"] --> P3["Phase 3<br/>企業級管控與網格<br/>📋 規劃中"]
 ```
 
-### ✅ Phase 1：MVP 核心基礎設施（已完成）
+### ✅ Phase 1：Prototype 核心基礎設施（已完成）
 
 * **動態路由熱加載**：Traefik Docker Provider 自動感知容器增刪，達到零停機路由更新。
 * **無縫身份驗證**：JWT Cookie + Traefik ForwardAuth，構建無懈可擊的多租戶安全隔離。

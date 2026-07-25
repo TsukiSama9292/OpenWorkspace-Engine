@@ -1,0 +1,13 @@
+{
+  "name": "api",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "RUST_LOG=info cargo watch -x run",
+    "build": "cargo build --release",
+    "check": "cargo check",
+    "test": "./scripts/run_tests.sh",
+    "test:cov": "./scripts/run_tests_cov.sh"
+  }
+}

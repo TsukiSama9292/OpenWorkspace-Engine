@@ -18,4 +18,4 @@ create_test_pg
 echo "==> Postgres 就緒 (PG_HOST=$PG_HOST PG_PORT=$PG_PORT)"
 
 echo "==> 執行測試 (cargo nextest run)..."
-cargo nextest run "$@"
+cargo nextest run --features docker "$@"

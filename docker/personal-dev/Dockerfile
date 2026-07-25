@@ -118,6 +118,7 @@ RUN rustup component add llvm-tools-preview
 RUN cargo install cargo-llvm-cov --version 0.8.7 --locked
 RUN cargo install cargo-nextest --version 0.9.140 --locked
 RUN cargo install rustfilt --version 0.2.1 --locked
+RUN cargo install cargo-watch --version 8.5.3 --locked
 # codegraph install --yes
 
 # =========================
