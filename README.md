@@ -92,7 +92,7 @@ graph TD
 | --- | --- | --- |
 | **控制面 API** | **Rust + Axum 0.8** | 零成本抽象、極低記憶體開銷（<20MB），高併發非阻塞 I/O，確保系統穩定度。 |
 | **前端 Dashboard** | **SvelteKit 2 + Svelte 5** | Runes 響應式引擎，編譯為純靜態 SPA，不消耗宿主機 SSR CPU 算力。 |
-| **遠端桌面** | **noVNC (Vendored)** | 瀏覽器原生 HTML5 Canvas 渲染，不需任何外掛，支援流暢 WebSocket 傳輸。 |
+| **遠端桌面** | **KasmVNC** | 瀏覽器原生 HTML5 Canvas 渲染，不需任何外掛，支援流暢 WebSocket 傳輸。 |
 | **動態網關** | **Traefik v3** | 原生支援 Docker Provider，透過 Container Labels 自動偵測與動態路由熱加載。 |
 | **容器編排** | **bollard 0.18** | Rust 原生 Docker API API 綁定，實現精確、非同步的容器生命週期控制。 |
 | **快取與資料庫** | **PostgreSQL 18 + DashMap** | 持久化資料庫搭配 Rust 原生 Concurrent HashMap，提供 $O(1)$ 的極速 Token 驗證。 |
