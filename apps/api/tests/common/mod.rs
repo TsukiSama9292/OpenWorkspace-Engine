@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use openworkspace_api::core::Settings;
 use openworkspace_api::db::UserRepository;
+use openworkspace_api::docker::DockerClient;
 use openworkspace_api::routes::{AppState, api_routes};
 use migration::{Migrator, MigratorTrait};
 use reqwest::Client;
@@ -95,9 +96,14 @@ impl TestContext {
             .await
             .expect("failed to seed admin");
 
+        let docker = DockerClient::with_network(&settings.docker_network)
+            .await
+            .expect("failed to create Docker client for test");
+
         let vnc_cache = openworkspace_api::vnc_cache::VncCache::new();
         let state = AppState {
             db: db.clone(),
+            docker: std::sync::Arc::new(docker),
             vnc_cache,
             settings: settings.clone(),
         };

@@ -1,4 +1,5 @@
 use axum::{
+    extract::State,
     http::StatusCode,
     routing::{get, post},
     Json, Router,
@@ -7,7 +8,6 @@ use serde::Deserialize;
 
 use super::super::AppState;
 use crate::auth::AuthUser;
-use crate::docker::DockerClient;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -22,13 +22,10 @@ struct CreateDockerContainerRequest {
 }
 
 async fn list_docker_containers(
+    State(state): State<AppState>,
     _auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let client = DockerClient::new()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let containers = client
+    let containers = state.docker
         .list_containers(true)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -50,14 +47,11 @@ async fn list_docker_containers(
 }
 
 async fn create_docker_container(
+    State(state): State<AppState>,
     _auth: AuthUser,
     Json(input): Json<CreateDockerContainerRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let client = DockerClient::new()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let container_id = client
+    let container_id = state.docker
         .create_container(&input.name, &input.image)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

@@ -10,7 +10,7 @@ use uuid::Uuid;
 use super::super::AppState;
 use crate::auth::AuthUser;
 use crate::db::{UserRepository, WorkspaceConfigRepository, WorkspaceInstance, WorkspaceInstanceRepository};
-use crate::docker::{ContainerConfig, DockerClient};
+use crate::docker::ContainerConfig;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -150,14 +150,6 @@ async fn launch_instance(
         config.name
     );
 
-    let docker = DockerClient::with_network(&state.settings.docker_network).await.map_err(|e| {
-        tracing::error!("Failed to connect to Docker: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "Docker unavailable"})),
-        )
-    })?;
-
     let container_config = ContainerConfig {
         image: config.image.clone(),
         cores: config.cores,
@@ -170,7 +162,7 @@ async fn launch_instance(
         command: None,
     };
 
-    match docker
+    match state.docker
         .create_container_from_config(&instance.name, instance.instance_number, &container_config)
         .await
     {
@@ -178,7 +170,7 @@ async fn launch_instance(
             instance_repo.update_container_id(instance.id, &container_id).await.ok();
             instance_repo.update_status(instance.id, "running").await.ok();
 
-            match docker.get_container_ip(&container_id, &docker.network_name).await {
+            match state.docker.get_container_ip(&container_id, &state.docker.network_name()).await {
                 Ok(ip) => {
                     if let Err(e) = crate::vnc_trafik::write_vnc_route(&instance.vnc_token, &ip) {
                         tracing::error!("Failed to write Traefik VNC route: {}", e);
@@ -261,12 +253,10 @@ async fn delete_instance(
     state.vnc_cache.remove(&instance.vnc_token);
 
     if let Some(ref container_id) = instance.container_id {
-        if let Ok(docker) = DockerClient::with_network(&state.settings.docker_network).await {
-            let _ = docker.stop_container_by_id(container_id).await;
-            match docker.remove_container_by_id(container_id).await {
-                Ok(()) => tracing::info!("Container removed for instance '{}'", instance.name),
-                Err(e) => tracing::warn!("Failed to remove container for '{}': {}", instance.name, e),
-            }
+        let _ = state.docker.stop_container_by_id(container_id).await;
+        match state.docker.remove_container_by_id(container_id).await {
+            Ok(()) => tracing::info!("Container removed for instance '{}'", instance.name),
+            Err(e) => tracing::warn!("Failed to remove container for '{}': {}", instance.name, e),
         }
     }
 
@@ -307,23 +297,15 @@ async fn start_instance(
         ));
     }
 
-    let docker = DockerClient::with_network(&state.settings.docker_network).await.map_err(|e| {
-        tracing::error!("Failed to connect to Docker: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "Docker unavailable"})),
-        )
-    })?;
-
     let new_container_id = match instance.container_id {
         Some(ref cid) => {
-            match docker.inspect_container_state(cid).await {
+            match state.docker.inspect_container_state(cid).await {
                 Ok(Some(state_str)) => {
                     if state_str.to_lowercase().contains("running") {
                         tracing::info!("Container for '{}' already running, updating DB", instance.name);
                     } else {
                         tracing::info!("Starting stopped container for '{}' (id: {})", instance.name, &cid[..12]);
-                        docker.start_container_by_id(cid).await.map_err(|e| {
+                        state.docker.start_container_by_id(cid).await.map_err(|e| {
                             tracing::error!("Failed to start container for '{}': {}", instance.name, e);
                             (
                                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -348,7 +330,7 @@ async fn start_instance(
                             persistent_volume: instance.resolved_volume_host_path.clone(),
                             command: None,
                         };
-                        let new_id = docker.create_container_from_config(&instance.name, instance.instance_number, &container_config).await.map_err(|e| {
+                        let new_id = state.docker.create_container_from_config(&instance.name, instance.instance_number, &container_config).await.map_err(|e| {
                             tracing::error!("Failed to create container for '{}': {}", instance.name, e);
                             (
                                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -380,7 +362,7 @@ async fn start_instance(
                     persistent_volume: instance.resolved_volume_host_path.clone(),
                     command: None,
                 };
-                let new_id = docker.create_container_from_config(&instance.name, instance.instance_number, &container_config).await.map_err(|e| {
+                let new_id = state.docker.create_container_from_config(&instance.name, instance.instance_number, &container_config).await.map_err(|e| {
                     tracing::error!("Failed to create container for '{}': {}", instance.name, e);
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -400,7 +382,7 @@ async fn start_instance(
     if let Some(ref cid) = new_container_id {
         instance_repo.update_container_id(instance.id, cid).await.ok();
 
-        match docker.get_container_ip(cid, &docker.network_name).await {
+        match state.docker.get_container_ip(cid, &state.docker.network_name()).await {
             Ok(ip) => {
                 if let Err(e) = crate::vnc_trafik::write_vnc_route(&instance.vnc_token, &ip) {
                     tracing::error!("Failed to write Traefik VNC route: {}", e);
@@ -457,22 +439,12 @@ async fn stop_instance(
 
     if instance.status == "paused" {
         if let Some(ref cid) = instance.container_id {
-            if let Ok(docker) = DockerClient::with_network(&state.settings.docker_network).await {
-                let _ = docker.unpause_container_by_id(cid).await;
-            }
+            let _ = state.docker.unpause_container_by_id(cid).await;
         }
     }
 
     if let Some(ref cid) = instance.container_id {
-        let docker = DockerClient::with_network(&state.settings.docker_network).await.map_err(|e| {
-            tracing::error!("Failed to connect to Docker: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Docker unavailable"})),
-            )
-        })?;
-
-        match docker.stop_container_by_id(cid).await {
+        match state.docker.stop_container_by_id(cid).await {
             Ok(()) => {
                 tracing::info!("Container for '{}' stopped (id: {})", instance.name, &cid[..12]);
             }
@@ -534,15 +506,7 @@ async fn pause_instance(
         Json(serde_json::json!({"error": "No container attached"})),
     ))?;
 
-    let docker = DockerClient::with_network(&state.settings.docker_network).await.map_err(|e| {
-        tracing::error!("Failed to connect to Docker: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "Docker unavailable"})),
-        )
-    })?;
-
-    docker.pause_container_by_id(cid).await.map_err(|e| {
+    state.docker.pause_container_by_id(cid).await.map_err(|e| {
         tracing::error!("Failed to pause container for '{}': {}", instance.name, e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -597,15 +561,7 @@ async fn unpause_instance(
         Json(serde_json::json!({"error": "No container attached"})),
     ))?;
 
-    let docker = DockerClient::with_network(&state.settings.docker_network).await.map_err(|e| {
-        tracing::error!("Failed to connect to Docker: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "Docker unavailable"})),
-        )
-    })?;
-
-    docker.unpause_container_by_id(cid).await.map_err(|e| {
+    state.docker.unpause_container_by_id(cid).await.map_err(|e| {
         tracing::error!("Failed to unpause container for '{}': {}", instance.name, e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,

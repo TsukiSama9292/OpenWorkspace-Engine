@@ -5,13 +5,16 @@ mod workspace;
 
 use axum::Router;
 use sea_orm::DatabaseConnection;
+use std::sync::Arc;
 
 use crate::core::Settings;
+use crate::docker::DockerService;
 use crate::vnc_cache::VncCache;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: DatabaseConnection,
+    pub docker: Arc<dyn DockerService>,
     pub vnc_cache: VncCache,
     pub settings: Settings,
 }

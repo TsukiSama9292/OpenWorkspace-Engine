@@ -27,6 +27,8 @@ dashmap = "6"
 reqwest = { version = "0.12", features = ["json"] }
 migration = { path = "migration" }
 sea-orm = { version = "1", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
+async-trait = "0.1"
+mockall = "0.13"
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json", "cookies"] }

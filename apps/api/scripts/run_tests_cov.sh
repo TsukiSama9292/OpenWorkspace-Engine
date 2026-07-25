@@ -18,4 +18,4 @@ create_test_pg
 echo "==> Postgres 就緒 (PG_HOST=$PG_HOST PG_PORT=$PG_PORT)"
 
 echo "==> 執行測試與覆蓋率收集 (cargo llvm-cov nextest)..."
-cargo llvm-cov nextest --features docker --ignore-filename-regex "main\.rs"
+cargo llvm-cov nextest --features docker --ignore-filename-regex "main\.rs" --json --output-path coverage.json

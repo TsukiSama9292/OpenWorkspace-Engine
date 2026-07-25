@@ -3,7 +3,7 @@
 mod common;
 
 use common::ensure_network;
-use openworkspace_api::docker::DockerClient;
+use openworkspace_api::docker::{DockerClient, DockerService};
 
 async fn setup() -> DockerClient {
     ensure_network().await;

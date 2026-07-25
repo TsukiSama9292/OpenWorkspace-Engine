@@ -1,8 +1,10 @@
 use openworkspace_api::core::Settings;
 use openworkspace_api::db::{WorkspaceInstanceRepository, UserRepository};
+use openworkspace_api::docker::{DockerClient, DockerService};
 use openworkspace_api::routes::{api_routes, AppState};
 use migration::{Migrator, MigratorTrait};
 use sea_orm::Database;
+use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
@@ -65,7 +67,12 @@ async fn main() {
         }
     }
 
-    let state = AppState { db, vnc_cache, settings: settings.clone() };
+    let docker_client = DockerClient::with_network(&settings.docker_network)
+        .await
+        .expect("Failed to connect to Docker");
+    let docker: Arc<dyn DockerService> = Arc::new(docker_client);
+
+    let state = AppState { db, docker, vnc_cache, settings: settings.clone() };
 
     let cors = CorsLayer::new()
         .allow_origin(Any)

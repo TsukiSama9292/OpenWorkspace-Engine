@@ -23,11 +23,6 @@ server:
   allow_environment_variables_to_override_config_settings: true
 "#;
 
-pub struct DockerClient {
-    docker: Docker,
-    pub network_name: String,
-}
-
 /// Full configuration for creating a container from a workspace config.
 pub struct ContainerConfig {
     pub image: String,
@@ -41,6 +36,72 @@ pub struct ContainerConfig {
     pub command: Option<Vec<String>>,
 }
 
+/// Trait for Docker operations, allowing mock implementations in tests.
+#[async_trait::async_trait]
+#[mockall::automock]
+pub trait DockerService: Send + Sync {
+    fn network_name(&self) -> &str;
+
+    async fn list_containers(
+        &self,
+        all: bool,
+    ) -> Result<Vec<ContainerSummary>, bollard::errors::Error>;
+
+    async fn create_container(
+        &self,
+        name: &str,
+        image: &str,
+    ) -> Result<String, String>;
+
+    async fn create_container_from_config(
+        &self,
+        container_name: &str,
+        instance_number: i32,
+        config: &ContainerConfig,
+    ) -> Result<String, String>;
+
+    async fn start_container_by_id(
+        &self,
+        container_id: &str,
+    ) -> Result<(), bollard::errors::Error>;
+
+    async fn stop_container_by_id(
+        &self,
+        container_id: &str,
+    ) -> Result<(), bollard::errors::Error>;
+
+    async fn remove_container_by_id(
+        &self,
+        container_id: &str,
+    ) -> Result<(), bollard::errors::Error>;
+
+    async fn inspect_container_state(
+        &self,
+        container_id: &str,
+    ) -> Result<Option<String>, bollard::errors::Error>;
+
+    async fn pause_container_by_id(
+        &self,
+        container_id: &str,
+    ) -> Result<(), bollard::errors::Error>;
+
+    async fn unpause_container_by_id(
+        &self,
+        container_id: &str,
+    ) -> Result<(), bollard::errors::Error>;
+
+    async fn get_container_ip(
+        &self,
+        container_id: &str,
+        network_name: &str,
+    ) -> Result<String, String>;
+}
+
+pub struct DockerClient {
+    docker: Docker,
+    network_name: String,
+}
+
 impl DockerClient {
     pub async fn new() -> Result<Self, String> {
         Self::with_network("ow-network").await
@@ -50,8 +111,15 @@ impl DockerClient {
         let docker = Docker::connect_with_local_defaults().map_err(|e| e.to_string())?;
         Ok(Self { docker, network_name: network_name.to_string() })
     }
+}
 
-    pub async fn list_containers(
+#[async_trait::async_trait]
+impl DockerService for DockerClient {
+    fn network_name(&self) -> &str {
+        &self.network_name
+    }
+
+    async fn list_containers(
         &self,
         all: bool,
     ) -> Result<Vec<ContainerSummary>, bollard::errors::Error> {
@@ -62,7 +130,7 @@ impl DockerClient {
         self.docker.list_containers(options).await
     }
 
-    pub async fn create_container(
+    async fn create_container(
         &self,
         name: &str,
         image: &str,
@@ -101,7 +169,7 @@ impl DockerClient {
     }
 
     /// Create a container from a full workspace config, applying all Docker settings.
-    pub async fn create_container_from_config(
+    async fn create_container_from_config(
         &self,
         container_name: &str,
         instance_number: i32,
@@ -210,7 +278,7 @@ impl DockerClient {
             },
             dns,
             shm_size,
-            network_mode: Some(self.network_name.clone()),
+            network_mode: Some(self.network_name().to_string()),
             binds: if binds.is_empty() { None } else { Some(binds) },
             device_requests: if config.gpu_count > 0 {
                 Some(vec![bollard::models::DeviceRequest {
@@ -355,7 +423,7 @@ impl DockerClient {
         Ok(container.id)
     }
 
-    pub async fn start_container_by_id(
+    async fn start_container_by_id(
         &self,
         container_id: &str,
     ) -> Result<(), bollard::errors::Error> {
@@ -364,7 +432,7 @@ impl DockerClient {
             .await
     }
 
-    pub async fn stop_container_by_id(
+    async fn stop_container_by_id(
         &self,
         container_id: &str,
     ) -> Result<(), bollard::errors::Error> {
@@ -373,14 +441,14 @@ impl DockerClient {
             .await
     }
 
-    pub async fn remove_container_by_id(
+    async fn remove_container_by_id(
         &self,
         container_id: &str,
     ) -> Result<(), bollard::errors::Error> {
         self.docker.remove_container(container_id, None).await
     }
 
-    pub async fn inspect_container_state(
+    async fn inspect_container_state(
         &self,
         container_id: &str,
     ) -> Result<Option<String>, bollard::errors::Error> {
@@ -390,21 +458,21 @@ impl DockerClient {
         }
     }
 
-    pub async fn pause_container_by_id(
+    async fn pause_container_by_id(
         &self,
         container_id: &str,
     ) -> Result<(), bollard::errors::Error> {
         self.docker.pause_container(container_id).await
     }
 
-    pub async fn unpause_container_by_id(
+    async fn unpause_container_by_id(
         &self,
         container_id: &str,
     ) -> Result<(), bollard::errors::Error> {
         self.docker.unpause_container(container_id).await
     }
 
-    pub async fn get_container_ip(
+    async fn get_container_ip(
         &self,
         container_id: &str,
         network_name: &str,
