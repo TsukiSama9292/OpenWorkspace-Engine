@@ -4,3 +4,6 @@
 [submodule "references_repo/kasm_workspaces_registry"]
 	path = references_repo/kasm_workspaces_registry
 	url = https://github.com/linuxserver/kasm_workspaces_registry
+[submodule "references_repo/noVNC"]
+	path = references_repo/noVNC
+	url = https://github.com/novnc/noVNC.git

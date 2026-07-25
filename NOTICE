@@ -1,0 +1,51 @@
+OpenWorkspace Engine
+Copyright 2026 The OpenWorkspace Authors
+
+This product is licensed under the Apache License, Version 2.0.
+A copy of the license is available in the LICENSE file at the root
+of this repository or at http://www.apache.org/licenses/LICENSE-2.0
+
+This product includes software developed by third parties:
+
+-------------------------------------------------------------------------------
+
+noVNC Core Library (apps/web/src/lib/vnc/)
+
+  Copyright (C) 2019-2020 The noVNC Authors
+  Copyright (C) 2020 Kasm Technologies LLC
+
+  Licensed under the Mozilla Public License, Version 2.0 (MPL-2.0).
+  A copy is available at https://www.mozilla.org/en-US/MPL/2.0/
+  or in the references_repo/KasmVNC/kasmweb/LICENSE.txt file.
+
+  The files under apps/web/src/lib/vnc/ are modified versions of the
+  noVNC core library, sourced via the KasmVNC project. These files
+  remain licensed under MPL-2.0 in accordance with its file-level
+  copyleft provisions. All other files in this project are licensed
+  under Apache-2.0.
+
+  Original noVNC source: https://github.com/novnc/noVNC
+  KasmVNC source: https://github.com/kasmtech/KasmVNC
+
+-------------------------------------------------------------------------------
+
+Pako (npm: pako@1)
+
+  Copyright (C) 2014-2017 by Vitaly Puzrin and Andrei Tuputcyn
+
+  Licensed under the MIT License.
+  Used within apps/web/src/lib/vnc/inflator.js and deflator.js.
+
+-------------------------------------------------------------------------------
+
+Codec Test Frames (apps/web/src/lib/vnc/assets/)
+
+  avc.bin  - H.264/AVC reference frame (x264 core 164)
+  hevc.bin - H.265/HEVC reference frame (x265 build 199)
+  av1.bin  - AV1 reference frame
+
+  These small binary files (33-2405 bytes) are encoded test frames
+  used to detect WebCodecs API codec support in the browser. They
+  are not codec implementations. Sourced from the KasmVNC project.
+
+-------------------------------------------------------------------------------
