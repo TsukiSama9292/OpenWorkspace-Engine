@@ -1,20 +1,23 @@
-<script>
+<script lang="ts">
   import '../app.css';
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import { auth, isAuthenticated } from '$lib/stores/auth';
-  import { theme } from '$lib/stores/theme';
 
   let { children } = $props();
   let authChecked = $state(false);
 
   onMount(() => {
-    theme.init();
     auth.check().then(() => { authChecked = true; });
   });
 
-  let showNav = $derived($isAuthenticated && $page.url.pathname !== '/login/' && !$page.url.pathname.startsWith('/vnc/'));
+  let showNav = $derived(
+    $isAuthenticated
+    && $page.url.pathname !== '/'
+    && $page.url.pathname !== '/login/'
+    && !$page.url.pathname.startsWith('/vnc/')
+  );
 
   $effect(() => {
     if (authChecked && !$isAuthenticated && $page.url.pathname !== '/login/') {
@@ -24,51 +27,61 @@
 </script>
 
 {#if showNav}
-  <nav class="navbar">
-    <a href="/" class="brand">OpenWorkspace</a>
-    <div class="links">
+  <nav>
+    <a href="/" class="nav-brand">OpenWorkspace</a>
+    <div class="nav-links">
       <a href="/">Dashboard</a>
       <button onclick={() => auth.logout()}>Logout</button>
     </div>
   </nav>
 {/if}
 
-<main class:with-nav={showNav}>
+<main class={showNav ? 'has-nav' : ''}>
   {@render children()}
 </main>
 
 <style>
-  .navbar {
+  nav {
     display: flex;
     justify-content: space-between;
     align-items: center;
     padding: 0.75rem 1.5rem;
-    background: var(--bg-secondary, #1a1a2e);
-    border-bottom: 1px solid var(--border, #333);
+    background: rgba(18, 18, 22, 0.65);
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   }
-  .brand {
-    font-weight: bold;
+
+  .nav-brand {
+    font-weight: 700;
     font-size: 1.1rem;
-    color: var(--text-primary, #fff);
+    color: #f4f4f5;
     text-decoration: none;
   }
-  .links {
+
+  .nav-links {
     display: flex;
-    gap: 1rem;
+    gap: 1.5rem;
     align-items: center;
   }
-  .links a, .links button {
-    color: var(--text-secondary, #aaa);
+
+  .nav-links a,
+  .nav-links button {
+    color: #71717a;
     text-decoration: none;
     background: none;
     border: none;
-    cursor: pointer;
     font: inherit;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: color 0.2s;
   }
-  .links a:hover, .links button:hover {
-    color: var(--text-primary, #fff);
+
+  .nav-links a:hover,
+  .nav-links button:hover {
+    color: #f4f4f5;
   }
-  main.with-nav {
+
+  main.has-nav {
     padding: 1.5rem;
   }
 </style>

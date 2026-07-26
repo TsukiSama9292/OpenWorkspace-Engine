@@ -35,6 +35,7 @@
     "vitest": "^3.2.7"
   },
   "dependencies": {
+    "@skeletonlabs/skeleton": "^5.0.0",
     "@skeletonlabs/skeleton-svelte": "^5.0.0",
     "pako": "1"
   }

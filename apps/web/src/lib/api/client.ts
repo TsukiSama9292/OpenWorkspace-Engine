@@ -1,11 +1,8 @@
+import type { ApiResult } from '$lib/types';
+
 const BASE = '/api';
 
-interface ApiResponse<T> {
-  data?: T;
-  error?: string;
-}
-
-async function request<T>(method: string, path: string, body?: unknown): Promise<ApiResponse<T>> {
+async function request<T>(method: string, path: string, body?: unknown): Promise<ApiResult<T>> {
   try {
     const opts: RequestInit = {
       method,
@@ -32,8 +29,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     }
 
     return { data: data as T };
-  } catch (e) {
-    console.error('[api]', method, path, e);
+  } catch {
     return { error: 'Network error' };
   }
 }
