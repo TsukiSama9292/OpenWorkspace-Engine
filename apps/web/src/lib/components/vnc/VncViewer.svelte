@@ -32,9 +32,21 @@
     onError: (() => void) | null;
   } = { onConnect: null, onDisconnect: null, onCredentials: null, onClipboard: null, onError: null };
 
+  let prevPassword = password;
+
   onMount(() => {
     if (!url || !container) return;
     connect();
+  });
+
+  $effect(() => {
+    if (password !== prevPassword && rfb) {
+      prevPassword = password;
+      retryCount = 0;
+      connect();
+    } else {
+      prevPassword = password;
+    }
   });
 
   onDestroy(() => {

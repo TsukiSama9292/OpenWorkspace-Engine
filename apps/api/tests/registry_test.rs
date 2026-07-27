@@ -111,7 +111,7 @@ async fn test_context_helpers() {
 async fn test_sync_registry_forbidden_for_non_admin() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
-    ctx.post("/api/auth/register", &serde_json::json!({
+    ctx.post("/api/users", &serde_json::json!({
         "username": "reg_nonadmin_sync",
         "password": "pass123"
     })).await;
@@ -125,7 +125,7 @@ async fn test_sync_registry_forbidden_for_non_admin() {
 async fn test_get_registry_url_forbidden_for_non_admin() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
-    ctx.post("/api/auth/register", &serde_json::json!({
+    ctx.post("/api/users", &serde_json::json!({
         "username": "reg_nonadmin_get",
         "password": "pass123"
     })).await;
@@ -139,7 +139,7 @@ async fn test_get_registry_url_forbidden_for_non_admin() {
 async fn test_set_registry_url_forbidden_for_non_admin() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
-    ctx.post("/api/auth/register", &serde_json::json!({
+    ctx.post("/api/users", &serde_json::json!({
         "username": "reg_nonadmin_set",
         "password": "pass123"
     })).await;

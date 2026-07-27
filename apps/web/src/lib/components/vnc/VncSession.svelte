@@ -8,9 +8,10 @@
 
   interface Props {
     token: string;
+    password?: string;
   }
 
-  let { token }: Props = $props();
+  let { token, password = 'password' }: Props = $props();
 
   let viewer = $state<VncViewer | null>(null);
   let status = $state('idle');
@@ -73,6 +74,7 @@
       bind:this={viewer}
       bind:status
       url={getWebSocketUrl()}
+      {password}
       onClipboardText={settings.clipboardSync ? handleClipboardRemote : null}
     />
   </div>

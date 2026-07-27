@@ -38,6 +38,7 @@ export interface Instance {
   mount_persistent: boolean;
   resolved_volume_host_path?: string;
   vnc_token?: string;
+  vnc_password?: string;
   created_at: string;
   updated_at: string;
 }

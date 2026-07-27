@@ -391,7 +391,7 @@
                     <div class="action-buttons">
                       {#if inst.status === 'running'}
                         {#if inst.vnc_token}
-                          <a href="/vnc/{inst.vnc_token}/" target="_blank" class="launch-btn vnc">VNC</a>
+                           <a href="/vnc/{inst.vnc_token}/" target="_blank" class="launch-btn vnc">VNC</a>
                         {/if}
                         <button class="launch-btn pause" onclick={() => onAction(inst, 'pause')}>Pause</button>
                         <button class="launch-btn stop" onclick={() => onAction(inst, 'stop')}>Stop</button>

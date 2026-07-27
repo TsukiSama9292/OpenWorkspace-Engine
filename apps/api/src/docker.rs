@@ -58,6 +58,7 @@ pub trait DockerService: Send + Sync {
         container_name: &str,
         instance_number: i32,
         config: &ContainerConfig,
+        vnc_password: &str,
     ) -> Result<String, String>;
 
     async fn start_container_by_id(
@@ -169,11 +170,13 @@ impl DockerService for DockerClient {
     }
 
     /// Create a container from a full workspace config, applying all Docker settings.
+    /// Returns container_id.
     async fn create_container_from_config(
         &self,
         container_name: &str,
         instance_number: i32,
         config: &ContainerConfig,
+        vnc_password: &str,
     ) -> Result<String, String> {
         let image = &config.image;
 
@@ -208,10 +211,12 @@ impl DockerService for DockerClient {
 
         // ── Build environment variables ──
         let mut env = vec![
-            "VNCOPTIONS=-disableBasicAuth",
             "KASM_VNC_PORT=6901",
             "DISPLAY=:1",
         ];
+        // Pass VNC password via environment variable
+        let vnc_pw_env = format!("VNC_PW={}", vnc_password);
+        env.push(&vnc_pw_env);
         if let Some(user_env) = config.run_config.get("environment").and_then(|v| v.as_array()) {
             for item in user_env {
                 if let Some(s) = item.as_str() {

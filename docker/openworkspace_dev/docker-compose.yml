@@ -16,8 +16,7 @@ services:
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
       - "--providers.docker.network=ow-network"
-      # 💥 新增這兩行：啟用檔案 Provider 來讀取 local/static 服務
-      - "--providers.file.filename=/etc/traefik/dynamic.yml"
+      - "--providers.file.directory=/etc/traefik/dynamic"
       - "--providers.file.watch=true"
       - "--entrypoints.web.address=:80"
       - "--api.insecure=true"

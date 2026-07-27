@@ -232,7 +232,7 @@ async fn test_list_configs_as_non_admin() {
         "image": "busybox:1"
     })).await;
 
-    ctx.post("/api/auth/register", &serde_json::json!({
+    ctx.post("/api/users", &serde_json::json!({
         "username": "cfglist_nonadmin",
         "password": "pass123"
     })).await;

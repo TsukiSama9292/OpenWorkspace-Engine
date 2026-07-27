@@ -300,7 +300,7 @@ async fn test_list_instances_as_non_admin() {
         "config_id": config_id
     })).await;
 
-    let resp = ctx.post("/api/auth/register", &serde_json::json!({
+    let resp = ctx.post("/api/users", &serde_json::json!({
         "username": "nonadmin_user",
         "password": "pass123"
     })).await;

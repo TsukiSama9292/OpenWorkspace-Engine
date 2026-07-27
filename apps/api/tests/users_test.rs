@@ -54,8 +54,8 @@ async fn test_delete_user_created() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    // Create a user via register endpoint
-    let resp = ctx.post("/api/auth/register", &serde_json::json!({
+    // Create a user via admin endpoint
+    let resp = ctx.post("/api/users", &serde_json::json!({
         "username": "deleteme_test",
         "password": "testpass123",
     })).await;
@@ -102,7 +102,7 @@ async fn test_delete_user_forbidden_for_non_admin() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let resp = ctx.post("/api/auth/register", &serde_json::json!({
+    let resp = ctx.post("/api/users", &serde_json::json!({
         "username": "regular_user_del",
         "password": "pass123",
     })).await;

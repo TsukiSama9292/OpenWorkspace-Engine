@@ -33,19 +33,7 @@ async fn test_register_and_login() {
         "username": username,
         "password": password
     })).await;
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["user"]["username"], username);
-    assert_eq!(body["user"]["role"], "user");
-
-    let resp = ctx.login_user(&username, password).await;
-    assert_eq!(resp.status(), 200);
-
-    let resp = ctx.get("/api/auth/validate").await;
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(body["user_id"].is_string());
-    assert_eq!(body["role"], "user");
+    assert_eq!(resp.status(), 404);
 
 }
 
@@ -98,13 +86,13 @@ async fn test_register_duplicate_username() {
         "username": &username,
         "password": "pass123"
     })).await;
-    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.status(), 404);
 
     let resp = ctx.post("/api/auth/register", &serde_json::json!({
         "username": &username,
         "password": "pass456"
     })).await;
-    assert_eq!(resp.status(), 409);
+    assert_eq!(resp.status(), 404);
 }
 
 #[tokio::test]

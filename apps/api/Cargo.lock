@@ -2002,6 +2002,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "base64",
  "bcrypt",
  "bollard",
  "chrono",
@@ -2012,6 +2013,7 @@ dependencies = [
  "migration",
  "mockall",
  "postgres",
+ "rand 0.8.7",
  "reqwest",
  "sea-orm",
  "serde",

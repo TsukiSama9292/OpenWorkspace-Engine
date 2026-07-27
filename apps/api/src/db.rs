@@ -6,6 +6,19 @@ fn generate_vnc_token() -> String {
     Uuid::new_v4().as_simple().to_string()
 }
 
+pub fn generate_vnc_password() -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    let len = 127;
+    let pool: Vec<u8> = (b'!'..=b'~').collect();
+    (0..len)
+        .map(|_| {
+            let idx = rng.gen_range(0..pool.len());
+            pool[idx] as char
+        })
+        .collect()
+}
+
 // ── Entity Models ─────────────────────────────────────────────
 
 pub mod user {
@@ -107,6 +120,7 @@ pub mod workspace_instance {
         pub container_id: Option<String>,
         pub status: String,
         pub vnc_token: String,
+        pub vnc_password: String,
         pub mount_persistent: bool,
         pub resolved_volume_host_path: Option<String>,
         pub created_at: DateTimeUtc,
@@ -235,6 +249,7 @@ pub struct WorkspaceInstance {
     pub container_id: Option<String>,
     pub status: String,
     pub vnc_token: String,
+    pub vnc_password: String,
     pub mount_persistent: bool,
     pub resolved_volume_host_path: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -252,6 +267,7 @@ impl From<workspace_instance::Model> for WorkspaceInstance {
             container_id: m.container_id,
             status: m.status,
             vnc_token: m.vnc_token,
+            vnc_password: m.vnc_password,
             mount_persistent: m.mount_persistent,
             resolved_volume_host_path: m.resolved_volume_host_path,
             created_at: m.created_at,
@@ -514,6 +530,7 @@ impl<'a> WorkspaceInstanceRepository<'a> {
     ) -> Result<WorkspaceInstance, sea_orm::DbErr> {
         let id = Uuid::new_v4();
         let vnc_token = generate_vnc_token();
+        let vnc_password = generate_vnc_password();
 
         // Auto-generate instance name: "{config_name}-{next_number}"
         let max_number = workspace_instance::Entity::find()
@@ -535,6 +552,7 @@ impl<'a> WorkspaceInstanceRepository<'a> {
             container_id: Set(None),
             status: Set("stopped".to_string()),
             vnc_token: Set(vnc_token),
+            vnc_password: Set(vnc_password),
             mount_persistent: Set(mount_persistent),
             resolved_volume_host_path: Set(resolved_volume_host_path.map(|s| s.to_string())),
             ..Default::default()

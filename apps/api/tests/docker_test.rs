@@ -53,7 +53,7 @@ async fn test_pause_unpause() {
     };
 
     let id = client
-        .create_container_from_config(&name, 1, &config)
+        .create_container_from_config(&name, 1, &config, "test_password")
         .await
         .unwrap();
 
@@ -103,7 +103,7 @@ async fn test_create_container_from_config() {
     };
 
     let id = client
-        .create_container_from_config(&name, 1, &config)
+        .create_container_from_config(&name, 1, &config, "test_password")
         .await
         .unwrap();
     assert!(!id.is_empty());
@@ -135,7 +135,7 @@ async fn test_create_container_from_config_with_env_and_dns() {
     };
 
     let id = client
-        .create_container_from_config(&name, 2, &config)
+        .create_container_from_config(&name, 2, &config, "test_password")
         .await
         .unwrap();
     assert!(!id.is_empty());
@@ -169,7 +169,7 @@ async fn test_create_container_from_config_with_volume() {
     };
 
     let id = client
-        .create_container_from_config(&name, 3, &config)
+        .create_container_from_config(&name, 3, &config, "test_password")
         .await
         .unwrap();
     assert!(!id.is_empty());
@@ -213,7 +213,7 @@ async fn test_create_container_from_config_with_exec() {
     };
 
     let id = client
-        .create_container_from_config(&name, 1, &config)
+        .create_container_from_config(&name, 1, &config, "test_password")
         .await
         .unwrap();
     assert!(!id.is_empty());
@@ -244,7 +244,7 @@ async fn test_create_container_from_config_with_hostname() {
     };
 
     let id = client
-        .create_container_from_config(&name, 1, &config)
+        .create_container_from_config(&name, 1, &config, "test_password")
         .await
         .unwrap();
     assert!(!id.is_empty());
@@ -272,7 +272,7 @@ async fn test_create_container_from_config_command_from_run_config() {
     };
 
     let id = client
-        .create_container_from_config(&name, 1, &config)
+        .create_container_from_config(&name, 1, &config, "test_password")
         .await
         .unwrap();
     assert!(!id.is_empty());
@@ -300,7 +300,7 @@ async fn test_create_container_from_config_no_command() {
         command: None,
     };
 
-    let _result = client.create_container_from_config(&name, 1, &config).await;
+    let _result = client.create_container_from_config(&name, 1, &config, "test_password").await;
 }
 
 #[tokio::test]
@@ -325,7 +325,7 @@ async fn test_create_container_from_config_with_shm_size_and_network_mode() {
     };
 
     let id = client
-        .create_container_from_config(&name, 1, &config)
+        .create_container_from_config(&name, 1, &config, "test_password")
         .await
         .unwrap();
     assert!(!id.is_empty());
@@ -381,7 +381,7 @@ async fn test_create_container_from_config_with_gpu() {
     };
 
     let result = client
-        .create_container_from_config(&name, 1, &config)
+        .create_container_from_config(&name, 1, &config, "test_password")
         .await;
     match result {
         Ok(id) => {
@@ -414,13 +414,13 @@ async fn test_create_container_from_config_image_already_cached() {
     };
 
     let _id1 = client
-        .create_container_from_config(&name1, 1, &config)
+        .create_container_from_config(&name1, 1, &config, "test_password")
         .await
         .unwrap();
 
     let name2 = format!("ow_test_docker_cached2_{}", std::process::id());
     let id2 = client
-        .create_container_from_config(&name2, 2, &config)
+        .create_container_from_config(&name2, 2, &config, "test_password")
         .await
         .unwrap();
 
@@ -447,7 +447,7 @@ async fn test_create_container_from_config_cores_and_memory() {
     };
 
     let id = client
-        .create_container_from_config(&name, 1, &config)
+        .create_container_from_config(&name, 1, &config, "test_password")
         .await
         .unwrap();
     assert!(!id.is_empty());
@@ -500,7 +500,7 @@ async fn test_inspect_container_state_running() {
     };
 
     let id = client
-        .create_container_from_config(&name, 1, &config)
+        .create_container_from_config(&name, 1, &config, "test_password")
         .await
         .unwrap();
 

@@ -37,6 +37,7 @@ fn instance_to_json(inst: &WorkspaceInstance, config_name: Option<&str>, owner_u
         "container_id": inst.container_id,
         "status": inst.status,
         "vnc_token": inst.vnc_token,
+        "vnc_password": inst.vnc_password,
         "mount_persistent": inst.mount_persistent,
         "resolved_volume_host_path": inst.resolved_volume_host_path,
         "config_name": config_name,
@@ -185,7 +186,7 @@ async fn launch_instance(
     };
 
     match state.docker
-        .create_container_from_config(&instance.name, instance.instance_number, &container_config)
+        .create_container_from_config(&instance.name, instance.instance_number, &container_config, &instance.vnc_password)
         .await
     {
         Ok(container_id) => {
@@ -194,7 +195,7 @@ async fn launch_instance(
 
             match state.docker.get_container_ip(&container_id, &state.docker.network_name()).await {
                 Ok(ip) => {
-                    if let Err(e) = crate::vnc_trafik::write_vnc_route(&instance.vnc_token, &ip) {
+                    if let Err(e) = crate::vnc_trafik::write_vnc_route(&instance.vnc_token, &ip, &instance.vnc_password) {
                         tracing::error!("Failed to write Traefik VNC route: {}", e);
                     }
                     state.vnc_cache.insert(&instance.vnc_token, "running");
@@ -374,7 +375,7 @@ async fn start_instance(
                             persistent_volume: instance.resolved_volume_host_path.clone(),
                             command: None,
                         };
-                        let new_id = state.docker.create_container_from_config(&instance.name, instance.instance_number, &container_config).await.map_err(|e| {
+                        let new_id = state.docker.create_container_from_config(&instance.name, instance.instance_number, &container_config, &instance.vnc_password).await.map_err(|e| {
                             tracing::error!("Failed to create container for '{}': {}", instance.name, e);
                             (
                                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -406,7 +407,7 @@ async fn start_instance(
                     persistent_volume: instance.resolved_volume_host_path.clone(),
                     command: None,
                 };
-                let new_id = state.docker.create_container_from_config(&instance.name, instance.instance_number, &container_config).await.map_err(|e| {
+                let new_id = state.docker.create_container_from_config(&instance.name, instance.instance_number, &container_config, &instance.vnc_password).await.map_err(|e| {
                     tracing::error!("Failed to create container for '{}': {}", instance.name, e);
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -428,7 +429,7 @@ async fn start_instance(
 
         match state.docker.get_container_ip(cid, &state.docker.network_name()).await {
             Ok(ip) => {
-                if let Err(e) = crate::vnc_trafik::write_vnc_route(&instance.vnc_token, &ip) {
+                if let Err(e) = crate::vnc_trafik::write_vnc_route(&instance.vnc_token, &ip, &instance.vnc_password) {
                     tracing::error!("Failed to write Traefik VNC route: {}", e);
                 }
                 state.vnc_cache.insert(&instance.vnc_token, "running");
@@ -446,9 +447,10 @@ async fn start_instance(
 
     tracing::info!("Instance '{}' started", instance.name);
 
+    let container_id_str = new_container_id.as_deref();
     Ok(Json(serde_json::json!({
         "status": "running",
-        "container_id": new_container_id
+        "container_id": container_id_str
     })))
 }
 
