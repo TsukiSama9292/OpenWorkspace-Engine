@@ -4,11 +4,11 @@
   import { loadDashboard } from './dashboard-data';
   import { performAction, deleteInstance } from '$lib/api/instance-actions';
   import { launchInstance } from '$lib/api/config-actions';
-  import { auth } from '$lib/stores/auth';
-  import type { Config, Instance } from '$lib/types';
+  import { auth, isManager } from '$lib/stores/auth';
+  import type { Config, Instance, Role } from '$lib/types';
 
   let sidebarOpen = $state(false);
-  let activeTab = $state<'workspaces' | 'templates'>('workspaces');
+  let activeTab = $state<'workspaces' | 'instances' | 'users' | 'templates'>('workspaces');
   let showSettings = $state(false);
   let configs = $state<Config[]>([]);
   let instances = $state<Instance[]>([]);
@@ -17,12 +17,34 @@
   let launchModal = $state<{ open: boolean; config: Config | null }>({ open: false, config: null });
   let launchTarget = $state<'current' | 'tab'>('current');
 
+  let filterUser = $state('');
+  let filterStatus = $state('');
+
+  let isAdmin = $derived($auth?.role === 'admin');
+  let canManage = $derived($isManager);
+
+  let users = $state<{ id: string; username: string; role: string; created_at: string }[]>([]);
+  let usersLoading = $state(false);
+  let showUserModal = $state(false);
+  let editingUser = $state<{ id: string; username: string; role: string } | null>(null);
+  let userForm = $state<{ username: string; password: string; role: string }>({ username: '', password: '', role: 'user' });
+  let userFormError = $state('');
+
   onMount(async () => {
     const data = await loadDashboard();
     configs = data.configs;
     instances = data.instances;
     loading = false;
   });
+
+  async function loadUsers() {
+    if (users.length > 0 || usersLoading) return;
+    usersLoading = true;
+    const { api } = await import('$lib/api/client');
+    const res = await api.get<{ users: { id: string; username: string; role: string; created_at: string }[] }>('/users');
+    users = res.data?.users ?? [];
+    usersLoading = false;
+  }
 
   function copySshCommand(id: string) {
     const cmd = `ssh -J gateway.openworkspace.engine:2222 workspace@${id}`;
@@ -69,15 +91,34 @@
     }
   }
 
-  const runningInstances = $derived(instances.filter(i => i.status === 'running'));
-  const pausedInstances = $derived(instances.filter(i => i.status === 'paused'));
+  const myInstances = $derived(instances);
+  const runningInstances = $derived(myInstances.filter(i => i.status === 'running'));
+  const pausedInstances = $derived(myInstances.filter(i => i.status === 'paused'));
+  const stoppedInstances = $derived(myInstances.filter(i => i.status === 'stopped'));
+  const errorInstances = $derived(myInstances.filter(i => i.status === 'error'));
+
+  const uniqueUsers = $derived([...new Set(instances.map(i => i.owner_username).filter(Boolean))].sort());
+  const filteredInstances = $derived(
+    instances.filter(i => {
+      if (filterUser && i.owner_username !== filterUser) return false;
+      if (filterStatus && i.status !== filterStatus) return false;
+      return true;
+    })
+  );
+
+  const statusColors: Record<string, string> = {
+    running: 'dot-active',
+    paused: 'dot-paused',
+    stopped: 'dot-stopped',
+    error: 'dot-error',
+  };
 
   const templateIcons: Record<string, string> = {
-    pytorch: '🧠',
-    ubuntu: '🐧',
-    rust: '⚙️',
-    python: '🐍',
-    default: '📦',
+    pytorch: '\u{1F9E0}',
+    ubuntu: '\u{1F427}',
+    rust: '\u2699\uFE0F',
+    python: '\u{1F40D}',
+    default: '\u{1F4E6}',
   };
 
   function getTemplateIcon(name: string): string {
@@ -86,6 +127,81 @@
       if (key !== 'default' && lower.includes(key)) return icon;
     }
     return templateIcons.default;
+  }
+
+  function canControlInstance(inst: Instance): boolean {
+    if (inst.owner_id === $auth?.id) return true;
+    if ($auth?.role === 'admin') return true;
+    if ($auth?.role === 'manager' && inst.owner_role === 'user') return true;
+    return false;
+  }
+
+  function canEditUser(user: { role: string }): boolean {
+    if (user.role === 'admin') return false;
+    if ($auth?.role === 'manager' && user.role === 'manager') return false;
+    return true;
+  }
+
+  function canDeleteUser(user: { role: string }): boolean {
+    if (user.role === 'admin') return false;
+    if ($auth?.role === 'manager' && user.role === 'manager') return false;
+    return true;
+  }
+
+  function openEditUser(user: { id: string; username: string; role: string }) {
+    editingUser = user;
+    userForm = { username: user.username, password: '', role: user.role };
+    showUserModal = true;
+    userFormError = '';
+  }
+
+  async function onSubmitUser() {
+    userFormError = '';
+    const { api } = await import('$lib/api/client');
+
+    if (editingUser) {
+      const body: Record<string, string> = {};
+      if (userForm.username) body.username = userForm.username;
+      if (userForm.password) body.password = userForm.password;
+      if (userForm.role) body.role = userForm.role;
+      const res = await api.put<{ user: { id: string; username: string; role: string; created_at: string } }>(`/users/${editingUser.id}`, body);
+      if (res.error) {
+        userFormError = res.error;
+        return;
+      }
+      if (res.data?.user) {
+        users = users.map(u => u.id === editingUser.id ? res.data.user : u);
+      }
+    } else {
+      if (!userForm.username || !userForm.password) {
+        userFormError = 'Username and password are required';
+        return;
+      }
+      const res = await api.post<{ user: { id: string; username: string; role: string; created_at: string } }>('/users', {
+        username: userForm.username,
+        password: userForm.password,
+        role: userForm.role,
+      });
+      if (res.error) {
+        userFormError = res.error;
+        return;
+      }
+      if (res.data?.user) {
+        users = [...users, res.data.user];
+      }
+    }
+    showUserModal = false;
+    editingUser = null;
+    userForm = { username: '', password: '', role: 'user' };
+  }
+
+  async function onDeleteUser(user: { id: string; username: string }) {
+    if (!confirm(`Delete user "${user.username}"?`)) return;
+    const { api } = await import('$lib/api/client');
+    const res = await api.delete(`/users/${user.id}`);
+    if (!res.error) {
+      users = users.filter(u => u.id !== user.id);
+    }
   }
 </script>
 
@@ -117,16 +233,42 @@
         {#if sidebarOpen}<span class="nav-text">Workspaces</span>{/if}
       </button>
 
-      <button
-        class="nav-item"
-        class:active={activeTab === 'templates'}
-        onclick={() => activeTab = 'templates'}
-      >
-        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-        </svg>
-        {#if sidebarOpen}<span class="nav-text">Templates</span>{/if}
-      </button>
+      {#if canManage}
+        <button
+          class="nav-item"
+          class:active={activeTab === 'instances'}
+          onclick={() => activeTab = 'instances'}
+        >
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" />
+          </svg>
+          {#if sidebarOpen}<span class="nav-text">Instances</span>{/if}
+        </button>
+
+        <button
+          class="nav-item"
+          class:active={activeTab === 'users'}
+          onclick={() => { activeTab = 'users'; loadUsers(); }}
+        >
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
+          </svg>
+          {#if sidebarOpen}<span class="nav-text">Users</span>{/if}
+        </button>
+      {/if}
+
+      {#if canManage}
+        <button
+          class="nav-item"
+          class:active={activeTab === 'templates'}
+          onclick={() => activeTab = 'templates'}
+        >
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+          </svg>
+          {#if sidebarOpen}<span class="nav-text">Templates</span>{/if}
+        </button>
+      {/if}
     </nav>
 
     <div class="sidebar-bottom">
@@ -163,7 +305,7 @@
       </div>
       <div class="settings-section">
         <span class="settings-label">License</span>
-        <span class="settings-value">Apache 2.0 — Open Source</span>
+        <span class="settings-value">Apache 2.0 &mdash; Open Source</span>
       </div>
     </div>
   {/if}
@@ -187,52 +329,57 @@
     </div>
   {/if}
 
+  {#if showUserModal}
+    <div class="modal-overlay" onclick={() => { showUserModal = false; editingUser = null; }} role="presentation"></div>
+    <div class="modal-card">
+      <h3 class="modal-title">{editingUser ? 'Edit User' : 'Create User'}</h3>
+      <form onsubmit={(e) => { e.preventDefault(); onSubmitUser(); }}>
+        <div class="modal-field">
+          <label for="user-username" class="modal-label">Username</label>
+          <input id="user-username" class="modal-input" type="text" bind:value={userForm.username} disabled={!!editingUser} required />
+        </div>
+        <div class="modal-field">
+          <label for="user-password" class="modal-label">{editingUser ? 'New Password (leave blank to keep)' : 'Password'}</label>
+          <input id="user-password" class="modal-input" type="password" bind:value={userForm.password} required={!editingUser} />
+        </div>
+        <div class="modal-field">
+          <label for="user-role" class="modal-label">Role</label>
+          <select id="user-role" class="modal-select" bind:value={userForm.role} disabled={editingUser?.role === 'admin'}>
+            <option value="user">User</option>
+            {#if isAdmin}
+              <option value="manager">Manager</option>
+              <option value="admin">Admin</option>
+            {/if}
+          </select>
+        </div>
+        {#if userFormError}
+          <div class="error-badge">{userFormError}</div>
+        {/if}
+        <div class="modal-actions">
+          <button type="button" class="modal-cancel" onclick={() => { showUserModal = false; editingUser = null; }}>Cancel</button>
+          <button type="submit" class="modal-confirm">{editingUser ? 'Save' : 'Create'}</button>
+        </div>
+      </form>
+    </div>
+  {/if}
+
   <main class="main-content">
     {#if loading}
       <p class="loading-text">Loading workspaces...</p>
-    {:else if activeTab === 'workspaces'}
-      {#if runningInstances.length > 0}
-        <section class="ws-section">
-          <h2 class="section-title">Running</h2>
-          <div class="workspace-grid">
-            {#each runningInstances as inst}
-              <div class="ws-card">
-                <div class="ws-card-header">
-                  <div>
-                    <div class="ws-title-row">
-                      <span class="status-dot active"></span>
-                      <h3 class="ws-name">{inst.name}</h3>
-                    </div>
-                    <span class="ws-template">{inst.config_name || 'Unknown config'}</span>
-                  </div>
-                  <span class="ws-id">{inst.id.slice(0, 8)}</span>
-                </div>
-                <div class="ws-actions">
-                  <div class="action-buttons">
-                    {#if inst.vnc_token}
-                      <a href="/vnc/{inst.vnc_token}/" target="_blank" class="launch-btn vnc">VNC</a>
-                    {/if}
-                    <button class="launch-btn pause" onclick={() => onAction(inst, 'pause')}>Pause</button>
-                    <button class="launch-btn stop" onclick={() => onAction(inst, 'stop')}>Stop</button>
-                    <button class="launch-btn remove" onclick={() => onRemove(inst)}>Remove</button>
-                  </div>
-                </div>
-              </div>
-            {/each}
-          </div>
-        </section>
-      {/if}
 
-      {#if pausedInstances.length > 0}
-        <section class="ws-section">
-          <h2 class="section-title">Paused</h2>
+    {:else if activeTab === 'workspaces'}
+      <section class="ws-section">
+        <h2 class="section-title">Instances</h2>
+        {#if myInstances.length === 0}
+          <p class="empty-text">No instances yet. Launch a template to get started.</p>
+        {:else}
           <div class="workspace-grid">
-            {#each pausedInstances as inst}
-              <div class="ws-card paused">
+            {#each myInstances as inst}
+              <div class="ws-card" class:dimmed={inst.status !== 'running'}>
                 <div class="ws-card-header">
                   <div>
                     <div class="ws-title-row">
-                      <span class="status-dot paused"></span>
+                      <span class="status-dot {statusColors[inst.status] || 'dot-stopped'}"></span>
                       <h3 class="ws-name">{inst.name}</h3>
                     </div>
                     <span class="ws-template">{inst.config_name || 'Unknown config'}</span>
@@ -240,17 +387,29 @@
                   <span class="ws-id">{inst.id.slice(0, 8)}</span>
                 </div>
                 <div class="ws-actions">
-                  <div class="action-buttons">
-                    <button class="launch-btn resume" onclick={() => onAction(inst, 'unpause')}>Resume</button>
-                    <button class="launch-btn stop" onclick={() => onAction(inst, 'stop')}>Stop</button>
-                    <button class="launch-btn remove" onclick={() => onRemove(inst)}>Remove</button>
-                  </div>
+                  {#if canControlInstance(inst)}
+                    <div class="action-buttons">
+                      {#if inst.status === 'running'}
+                        {#if inst.vnc_token}
+                          <a href="/vnc/{inst.vnc_token}/" target="_blank" class="launch-btn vnc">VNC</a>
+                        {/if}
+                        <button class="launch-btn pause" onclick={() => onAction(inst, 'pause')}>Pause</button>
+                        <button class="launch-btn stop" onclick={() => onAction(inst, 'stop')}>Stop</button>
+                      {:else if inst.status === 'paused'}
+                        <button class="launch-btn resume" onclick={() => onAction(inst, 'unpause')}>Resume</button>
+                        <button class="launch-btn stop" onclick={() => onAction(inst, 'stop')}>Stop</button>
+                      {:else}
+                        <button class="launch-btn resume" onclick={() => onAction(inst, 'start')}>Start</button>
+                      {/if}
+                      <button class="launch-btn remove" onclick={() => onRemove(inst)}>Remove</button>
+                    </div>
+                  {/if}
                 </div>
               </div>
             {/each}
           </div>
-        </section>
-      {/if}
+        {/if}
+      </section>
 
       <section class="ws-section">
         <h2 class="section-title">Quick Launch</h2>
@@ -263,6 +422,144 @@
             </button>
           {/each}
         </div>
+      </section>
+
+    {:else if activeTab === 'instances' && canManage}
+      <section class="ws-section">
+        <h2 class="section-title">All Instances</h2>
+
+        <div class="filter-bar">
+          <div class="filter-group">
+            <label class="filter-label" for="filter-user">User</label>
+            <select id="filter-user" class="filter-select" bind:value={filterUser}>
+              <option value="">All Users</option>
+              {#each uniqueUsers as user}
+                <option value={user}>{user}</option>
+              {/each}
+            </select>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label" for="filter-status">Status</label>
+            <select id="filter-status" class="filter-select" bind:value={filterStatus}>
+              <option value="">All Statuses</option>
+              <option value="running">Running</option>
+              <option value="paused">Paused</option>
+              <option value="stopped">Stopped</option>
+              <option value="error">Error</option>
+            </select>
+          </div>
+          {#if filterUser || filterStatus}
+            <button class="filter-clear" onclick={() => { filterUser = ''; filterStatus = ''; }}>Clear filters</button>
+          {/if}
+          <span class="filter-count">{filteredInstances.length} instance{filteredInstances.length !== 1 ? 's' : ''}</span>
+        </div>
+
+        {#if filteredInstances.length === 0}
+          <p class="empty-text">No instances match the current filters.</p>
+        {:else}
+          <div class="instances-table-wrap">
+            <table class="instances-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Owner</th>
+                  <th>Template</th>
+                  <th>Status</th>
+                  <th>Created</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each filteredInstances as inst}
+                  <tr>
+                    <td class="td-name">
+                      <span class="td-name-text">{inst.name}</span>
+                      <span class="td-id">{inst.id.slice(0, 8)}</span>
+                    </td>
+                    <td class="td-owner">{inst.owner_username || '---'}</td>
+                    <td>{inst.config_name || '---'}</td>
+                    <td>
+                      <span class="status-badge {statusColors[inst.status] || ''}">
+                        <span class="status-dot-inline"></span>
+                        {inst.status}
+                      </span>
+                    </td>
+                    <td class="td-date">{new Date(inst.created_at).toLocaleDateString()}</td>
+                    <td class="td-actions">
+                      {#if canControlInstance(inst)}
+                        <div class="action-buttons">
+                          {#if inst.status === 'running'}
+                            <button class="launch-btn pause sm" onclick={() => onAction(inst, 'pause')}>Pause</button>
+                            <button class="launch-btn stop sm" onclick={() => onAction(inst, 'stop')}>Stop</button>
+                          {:else if inst.status === 'paused'}
+                            <button class="launch-btn resume sm" onclick={() => onAction(inst, 'unpause')}>Resume</button>
+                            <button class="launch-btn stop sm" onclick={() => onAction(inst, 'stop')}>Stop</button>
+                          {:else}
+                            <button class="launch-btn resume sm" onclick={() => onAction(inst, 'start')}>Start</button>
+                          {/if}
+                          <button class="launch-btn remove sm" onclick={() => onRemove(inst)}>Remove</button>
+                        </div>
+                      {:else}
+                        <span class="td-date">No access</span>
+                      {/if}
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+      </section>
+
+    {:else if activeTab === 'users' && canManage}
+      <section class="ws-section">
+        <div class="section-header">
+          <h2 class="section-title">User Management</h2>
+          <button class="btn-create" onclick={() => showUserModal = true}>+ New User</button>
+        </div>
+
+        {#if usersLoading}
+          <p class="empty-text">Loading users...</p>
+        {:else if users.length === 0}
+          <p class="empty-text">No users found.</p>
+        {:else}
+          <div class="instances-table-wrap">
+            <table class="instances-table">
+              <thead>
+                <tr>
+                  <th>Username</th>
+                  <th>Role</th>
+                  <th>Created</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each users as user}
+                  <tr>
+                    <td class="td-name">
+                      <span class="td-name-text">{user.username}</span>
+                      <span class="td-id">{user.id.slice(0, 8)}</span>
+                    </td>
+                    <td>
+                      <span class="status-badge {user.role === 'admin' ? 'dot-active' : ''}">{user.role}</span>
+                    </td>
+                    <td class="td-date">{new Date(user.created_at).toLocaleDateString()}</td>
+                    <td class="td-actions">
+                      <div class="action-buttons">
+                        {#if canEditUser(user)}
+                          <button class="launch-btn pause sm" onclick={() => openEditUser(user)}>Edit</button>
+                        {/if}
+                        {#if canDeleteUser(user)}
+                          <button class="launch-btn remove sm" onclick={() => onDeleteUser(user)}>Delete</button>
+                        {/if}
+                      </div>
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
       </section>
 
     {:else}
@@ -591,7 +888,7 @@
   .modal-title { font-size: 1.1rem; font-weight: 600; margin: 0; }
   .modal-desc { font-size: 0.8rem; color: #71717a; margin: 0; }
 
-  .modal-field { display: flex; flex-direction: column; gap: 6px; }
+  .modal-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 1rem; }
   .modal-label {
     font-size: 0.7rem;
     font-weight: 600;
@@ -600,7 +897,7 @@
     letter-spacing: 0.05em;
   }
 
-  .modal-select {
+  .modal-input, .modal-select {
     background: rgba(0, 0, 0, 0.4);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 8px;
@@ -609,10 +906,11 @@
     font-size: 0.85rem;
     font-family: inherit;
     outline: none;
-    cursor: pointer;
   }
 
-  .modal-select:focus { border-color: #818cf8; }
+  .modal-input:focus, .modal-select:focus { border-color: #818cf8; }
+
+  .modal-input:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .modal-actions {
     display: flex;
@@ -658,6 +956,15 @@
   }
 
   .ws-section { margin-bottom: 2.5rem; }
+
+  .section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+  }
+
+  .section-header .section-title { margin: 0; }
 
   .section-title {
     font-size: 0.7rem;
@@ -725,7 +1032,7 @@
     box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
   }
 
-  .ws-card.paused { opacity: 0.7; }
+  .ws-card.dimmed { opacity: 0.65; }
 
   .ws-card-header {
     display: flex;
@@ -744,16 +1051,26 @@
     height: 6px;
     border-radius: 50%;
     background: #52525b;
+    flex-shrink: 0;
   }
 
-  .status-dot.active {
+  .dot-active {
     background: #22c55e;
     box-shadow: 0 0 8px #22c55e;
   }
 
-  .status-dot.paused {
+  .dot-paused {
     background: #eab308;
     box-shadow: 0 0 8px #eab308;
+  }
+
+  .dot-stopped {
+    background: #52525b;
+  }
+
+  .dot-error {
+    background: #ef4444;
+    box-shadow: 0 0 8px #ef4444;
   }
 
   .ws-name { font-size: 0.95rem; font-weight: 600; margin: 0; }
@@ -809,6 +1126,7 @@
   .launch-btn.resume:hover { border-color: #22c55e; color: #4ade80; }
   .launch-btn.stop:hover { border-color: #f97316; color: #fb923c; }
   .launch-btn.remove:hover { border-color: #ef4444; color: #f87171; }
+  .launch-btn.sm { font-size: 0.65rem; padding: 0.3rem 0.55rem; }
 
   .template-icon-sm { font-size: 1rem; }
 
@@ -852,4 +1170,179 @@
     text-overflow: ellipsis;
     max-width: 100%;
   }
+
+  /* Filter Bar */
+  .filter-bar {
+    display: flex;
+    align-items: flex-end;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    padding: 0.75rem 1rem;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 10px;
+    flex-wrap: wrap;
+  }
+
+  .filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .filter-label {
+    font-size: 0.6rem;
+    font-weight: 600;
+    color: #71717a;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .filter-select {
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    padding: 0.45rem 0.65rem;
+    color: #f4f4f5;
+    font-size: 0.8rem;
+    font-family: inherit;
+    outline: none;
+    cursor: pointer;
+    min-width: 140px;
+  }
+
+  .filter-select:focus { border-color: #818cf8; }
+
+  .filter-clear {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #a1a1aa;
+    padding: 0.45rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.2s;
+  }
+
+  .filter-clear:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
+
+  .filter-count {
+    font-size: 0.75rem;
+    color: #52525b;
+    margin-left: auto;
+    white-space: nowrap;
+  }
+
+  .error-badge {
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.2);
+    color: #f87171;
+    font-size: 0.8rem;
+    padding: 0.5rem;
+    border-radius: 6px;
+    text-align: center;
+    margin-top: 0.5rem;
+  }
+
+  /* Instances Table */
+  .instances-table-wrap {
+    overflow-x: auto;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 10px;
+  }
+
+  .instances-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+  }
+
+  .instances-table thead {
+    background: rgba(0, 0, 0, 0.3);
+  }
+
+  .instances-table th {
+    text-align: left;
+    padding: 0.65rem 0.75rem;
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: #71717a;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    white-space: nowrap;
+  }
+
+  .instances-table td {
+    padding: 0.6rem 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    color: #d4d4d8;
+    vertical-align: middle;
+  }
+
+  .instances-table tbody tr:hover {
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .instances-table tbody tr:last-child td {
+    border-bottom: none;
+  }
+
+  .td-name {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .td-name-text { font-weight: 600; color: #f4f4f5; }
+
+  .td-id {
+    font-family: monospace;
+    font-size: 0.65rem;
+    color: #52525b;
+  }
+
+  .td-owner { color: #a1a1aa; }
+
+  .td-date {
+    font-size: 0.75rem;
+    color: #71717a;
+    white-space: nowrap;
+  }
+
+  .td-actions { white-space: nowrap; }
+
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.72rem;
+    font-weight: 500;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    text-transform: capitalize;
+  }
+
+  .status-dot-inline {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #52525b;
+    flex-shrink: 0;
+  }
+
+  .status-badge.dot-active { color: #4ade80; border-color: rgba(34, 197, 94, 0.2); }
+  .status-badge.dot-active .status-dot-inline { background: #22c55e; }
+
+  .status-badge.dot-paused { color: #facc15; border-color: rgba(234, 179, 8, 0.2); }
+  .status-badge.dot-paused .status-dot-inline { background: #eab308; }
+
+  .status-badge.dot-stopped { color: #71717a; }
+  .status-badge.dot-stopped .status-dot-inline { background: #52525b; }
+
+  .status-badge.dot-error { color: #f87171; border-color: rgba(239, 68, 68, 0.2); }
+  .status-badge.dot-error .status-dot-inline { background: #ef4444; }
 </style>

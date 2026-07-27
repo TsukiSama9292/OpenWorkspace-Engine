@@ -23,8 +23,12 @@ struct CreateDockerContainerRequest {
 
 async fn list_docker_containers(
     State(state): State<AppState>,
-    _auth: AuthUser,
+    auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    if !auth.role.can_manage_docker() {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
     let containers = state.docker
         .list_containers(true)
         .await
@@ -48,9 +52,13 @@ async fn list_docker_containers(
 
 async fn create_docker_container(
     State(state): State<AppState>,
-    _auth: AuthUser,
+    auth: AuthUser,
     Json(input): Json<CreateDockerContainerRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    if !auth.role.can_manage_docker() {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
     let container_id = state.docker
         .create_container(&input.name, &input.image)
         .await

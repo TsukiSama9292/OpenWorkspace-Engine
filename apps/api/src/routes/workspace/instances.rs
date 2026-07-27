@@ -8,7 +8,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use super::super::AppState;
-use crate::auth::AuthUser;
+use crate::auth::{AuthUser, Role};
 use crate::db::{UserRepository, WorkspaceConfigRepository, WorkspaceInstance, WorkspaceInstanceRepository};
 use crate::docker::ContainerConfig;
 
@@ -25,7 +25,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/instances/{id}/unpause", post(unpause_instance))
 }
 
-fn instance_to_json(inst: &WorkspaceInstance, config_name: Option<&str>, owner_username: Option<&str>) -> serde_json::Value {
+fn instance_to_json(inst: &WorkspaceInstance, config_name: Option<&str>, owner_username: Option<&str>, owner_role: Option<&str>) -> serde_json::Value {
     serde_json::json!({
         "id": inst.id,
         "config_id": inst.config_id,
@@ -33,6 +33,7 @@ fn instance_to_json(inst: &WorkspaceInstance, config_name: Option<&str>, owner_u
         "instance_number": inst.instance_number,
         "owner_id": inst.owner_id,
         "owner_username": owner_username.unwrap_or(""),
+        "owner_role": owner_role.unwrap_or("user"),
         "container_id": inst.container_id,
         "status": inst.status,
         "vnc_token": inst.vnc_token,
@@ -42,6 +43,24 @@ fn instance_to_json(inst: &WorkspaceInstance, config_name: Option<&str>, owner_u
         "created_at": inst.created_at,
         "updated_at": inst.updated_at,
     })
+}
+
+async fn can_manage_instance(
+    state: &AppState,
+    auth: &AuthUser,
+    instance: &WorkspaceInstance,
+) -> Result<bool, StatusCode> {
+    if instance.owner_id == auth.user_id {
+        return Ok(true);
+    }
+    let user_repo = UserRepository::new(&state.db);
+    let owner = user_repo
+        .find_by_id(instance.owner_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let owner_role = Role::from_str(&owner.3).ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(auth.role.can_manage_instance(&owner_role))
 }
 
 #[derive(Deserialize)]
@@ -58,7 +77,7 @@ async fn list_instances(
     let instance_repo = WorkspaceInstanceRepository::new(&state.db);
     let config_repo = WorkspaceConfigRepository::new(&state.db);
 
-    let instances = if auth.role == "admin" {
+    let instances = if auth.role.can_view_all_instances() {
         instance_repo
             .list_all()
             .await
@@ -81,10 +100,12 @@ async fn list_instances(
 
     let user_repo = UserRepository::new(&state.db);
     let mut owner_usernames = std::collections::HashMap::new();
+    let mut owner_roles = std::collections::HashMap::new();
     for inst in &instances {
         if !owner_usernames.contains_key(&inst.owner_id) {
             if let Ok(Some(user)) = user_repo.find_by_id(inst.owner_id).await {
                 owner_usernames.insert(inst.owner_id, user.1);
+                owner_roles.insert(inst.owner_id, user.3);
             }
         }
     }
@@ -94,7 +115,8 @@ async fn list_instances(
         .map(|inst| {
             let config_name = config_names.get(&inst.config_id).map(|s| s.as_str());
             let owner_username = owner_usernames.get(&inst.owner_id).map(|s| s.as_str());
-            instance_to_json(inst, config_name, owner_username)
+            let owner_role = owner_roles.get(&inst.owner_id).map(|s| s.as_str());
+            instance_to_json(inst, config_name, owner_username, owner_role)
         })
         .collect();
 
@@ -189,8 +211,10 @@ async fn launch_instance(
             let mut inst = instance;
             inst.container_id = Some(container_id);
             inst.status = "running".to_string();
-            let owner_username = user_repo.find_by_id(inst.owner_id).await.ok().flatten().map(|u| u.1);
-            Ok(Json(serde_json::json!({ "instance": instance_to_json(&inst, Some(&config.name), owner_username.as_deref()) })))
+            let owner = user_repo.find_by_id(inst.owner_id).await.ok().flatten();
+            let owner_username = owner.as_ref().map(|u| u.1.as_str());
+            let owner_role = owner.as_ref().map(|u| u.3.as_str());
+            Ok(Json(serde_json::json!({ "instance": instance_to_json(&inst, Some(&config.name), owner_username, owner_role) })))
         }
         Err(e) => {
             tracing::warn!(
@@ -201,8 +225,10 @@ async fn launch_instance(
             instance_repo.update_status(instance.id, "error").await.ok();
             let mut inst = instance;
             inst.status = "error".to_string();
-            let owner_username = user_repo.find_by_id(inst.owner_id).await.ok().flatten().map(|u| u.1);
-            Ok(Json(serde_json::json!({ "instance": instance_to_json(&inst, Some(&config.name), owner_username.as_deref()), "docker_error": e })))
+            let owner = user_repo.find_by_id(inst.owner_id).await.ok().flatten();
+            let owner_username = owner.as_ref().map(|u| u.1.as_str());
+            let owner_role = owner.as_ref().map(|u| u.3.as_str());
+            Ok(Json(serde_json::json!({ "instance": instance_to_json(&inst, Some(&config.name), owner_username, owner_role), "docker_error": e })))
         }
     }
 }
@@ -229,15 +255,17 @@ async fn get_instance(
         .flatten()
         .map(|c| c.name);
 
-    let owner_username = user_repo.find_by_id(instance.owner_id).await.ok().flatten().map(|u| u.1);
+    let owner = user_repo.find_by_id(instance.owner_id).await.ok().flatten();
+    let owner_username = owner.as_ref().map(|u| u.1.as_str());
+    let owner_role = owner.as_ref().map(|u| u.3.as_str());
 
-    Ok(Json(serde_json::json!({ "instance": instance_to_json(&instance, config_name.as_deref(), owner_username.as_deref()) })))
+    Ok(Json(serde_json::json!({ "instance": instance_to_json(&instance, config_name.as_deref(), owner_username, owner_role) })))
 }
 
 async fn delete_instance(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    _auth: AuthUser,
+    auth: AuthUser,
 ) -> Result<StatusCode, StatusCode> {
     let instance_repo = WorkspaceInstanceRepository::new(&state.db);
 
@@ -246,6 +274,10 @@ async fn delete_instance(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
+
+    if !can_manage_instance(&state, &auth, &instance).await? {
+        return Err(StatusCode::FORBIDDEN);
+    }
 
     if let Err(e) = crate::vnc_trafik::delete_vnc_route(&instance.vnc_token) {
         tracing::error!("Failed to delete Traefik VNC route: {}", e);
@@ -270,7 +302,7 @@ async fn delete_instance(
 async fn start_instance(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    _auth: AuthUser,
+    auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let instance_repo = WorkspaceInstanceRepository::new(&state.db);
     let config_repo = WorkspaceConfigRepository::new(&state.db);
@@ -289,6 +321,18 @@ async fn start_instance(
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "Instance not found"})),
         ))?;
+
+    if !can_manage_instance(&state, &auth, &instance).await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Internal error"})),
+        )
+    })? {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Forbidden"})),
+        ));
+    }
 
     if instance.status == "running" {
         return Err((
@@ -411,7 +455,7 @@ async fn start_instance(
 async fn stop_instance(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    _auth: AuthUser,
+    auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let instance_repo = WorkspaceInstanceRepository::new(&state.db);
 
@@ -429,6 +473,18 @@ async fn stop_instance(
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "Instance not found"})),
         ))?;
+
+    if !can_manage_instance(&state, &auth, &instance).await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Internal error"})),
+        )
+    })? {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Forbidden"})),
+        ));
+    }
 
     if instance.status == "stopped" {
         return Err((
@@ -475,7 +531,7 @@ async fn stop_instance(
 async fn pause_instance(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    _auth: AuthUser,
+    auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let instance_repo = WorkspaceInstanceRepository::new(&state.db);
 
@@ -493,6 +549,18 @@ async fn pause_instance(
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "Instance not found"})),
         ))?;
+
+    if !can_manage_instance(&state, &auth, &instance).await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Internal error"})),
+        )
+    })? {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Forbidden"})),
+        ));
+    }
 
     if instance.status != "running" {
         return Err((
@@ -530,7 +598,7 @@ async fn pause_instance(
 async fn unpause_instance(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    _auth: AuthUser,
+    auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let instance_repo = WorkspaceInstanceRepository::new(&state.db);
 
@@ -548,6 +616,18 @@ async fn unpause_instance(
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "Instance not found"})),
         ))?;
+
+    if !can_manage_instance(&state, &auth, &instance).await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Internal error"})),
+        )
+    })? {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Forbidden"})),
+        ));
+    }
 
     if instance.status != "paused" {
         return Err((

@@ -43,7 +43,7 @@ async fn sync_registry(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    if auth.role != "admin" {
+    if !auth.role.can_manage_registry() {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -81,7 +81,7 @@ async fn get_registry_url(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    if auth.role != "admin" {
+    if !auth.role.can_manage_registry() {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -100,7 +100,7 @@ async fn set_registry_url(
     auth: AuthUser,
     Json(input): Json<SetRegistryUrlRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    if auth.role != "admin" {
+    if !auth.role.can_manage_registry() {
         return Err(StatusCode::FORBIDDEN);
     }
 

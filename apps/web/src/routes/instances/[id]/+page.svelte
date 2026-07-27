@@ -43,8 +43,8 @@
       <h1 class="text-2xl font-bold text-surface-800 mt-1">{instance.name}</h1>
       <p class="text-surface-500 text-sm mt-1">
         {instance.config_name || 'Unknown config'}
-        {#if instance.owner}
-          <span class="mx-1">&middot;</span> Owner: {instance.owner}
+        {#if instance.owner_username}
+          <span class="mx-1">&middot;</span> Owner: {instance.owner_username}
         {/if}
       </p>
     </div>

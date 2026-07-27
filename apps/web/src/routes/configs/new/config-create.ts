@@ -73,7 +73,7 @@ export async function submitConfig(state: ConfigFormState): Promise<{ error?: st
   const res = await api.post<{ config: { id: string } }>('/configs', body);
   if (res.error) return { error: res.error };
   if (res.data?.config) {
-    goto(`/configs/${res.data.config.id}/`);
+    goto('/');
     return { id: res.data.config.id };
   }
   return { error: 'Failed to create config' };

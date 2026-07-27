@@ -1,7 +1,9 @@
+export type Role = 'admin' | 'manager' | 'user';
+
 export interface User {
   id: string;
   username: string;
-  role: 'admin' | 'user';
+  role: Role;
 }
 
 export interface Config {
@@ -27,7 +29,9 @@ export interface Instance {
   name: string;
   config_id: string;
   config_name: string;
-  owner: string;
+  owner_id: string;
+  owner_username: string;
+  owner_role: Role;
   status: 'running' | 'stopped' | 'paused' | 'error';
   instance_number: number;
   container_id: string;

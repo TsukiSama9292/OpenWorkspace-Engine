@@ -340,6 +340,34 @@ impl<'a> UserRepository<'a> {
         let result = user::Entity::delete_by_id(id).exec(self.db).await?;
         Ok(result.rows_affected > 0)
     }
+
+    pub async fn update(
+        &self,
+        id: Uuid,
+        username: Option<&str>,
+        password_hash: Option<&str>,
+        role: Option<&str>,
+    ) -> Result<bool, sea_orm::DbErr> {
+        let existing = user::Entity::find_by_id(id)
+            .one(self.db)
+            .await?
+            .ok_or(sea_orm::DbErr::RecordNotFound("User not found".into()))?;
+
+        let mut model: user::ActiveModel = existing.into();
+
+        if let Some(u) = username {
+            model.username = Set(u.to_string());
+        }
+        if let Some(p) = password_hash {
+            model.password_hash = Set(p.to_string());
+        }
+        if let Some(r) = role {
+            model.role = Set(r.to_string());
+        }
+
+        model.update(self.db).await?;
+        Ok(true)
+    }
 }
 
 // ── Workspace Config Repository ───────────────────────────────

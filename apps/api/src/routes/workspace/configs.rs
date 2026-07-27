@@ -97,7 +97,7 @@ async fn list_configs(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let config_repo = WorkspaceConfigRepository::new(&state.db);
 
-    let configs = if auth.role == "admin" {
+    let configs = if auth.role.can_view_all_instances() {
         config_repo
             .list_all()
             .await
@@ -199,10 +199,20 @@ async fn get_config(
 async fn update_config(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    _auth: AuthUser,
+    auth: AuthUser,
     Json(input): Json<UpdateConfigRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let repo = WorkspaceConfigRepository::new(&state.db);
+
+    let existing = repo
+        .find_by_id(id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    if !auth.role.can_manage_templates() && existing.owner_id != auth.user_id {
+        return Err(StatusCode::FORBIDDEN);
+    }
 
     let updated = repo
         .update(
@@ -240,9 +250,19 @@ async fn update_config(
 async fn delete_config(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    _auth: AuthUser,
+    auth: AuthUser,
 ) -> Result<StatusCode, StatusCode> {
     let repo = WorkspaceConfigRepository::new(&state.db);
+
+    let existing = repo
+        .find_by_id(id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    if !auth.role.can_manage_templates() && existing.owner_id != auth.user_id {
+        return Err(StatusCode::FORBIDDEN);
+    }
 
     let deleted = repo
         .delete(id)

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { handleLogin } from './login';
+  import { auth } from '$lib/stores/auth';
+  import { goto } from '$app/navigation';
 
   let username = $state('');
   let password = $state('');
@@ -9,7 +10,8 @@
   async function onSubmit() {
     loading = true;
     error = '';
-    const success = await handleLogin(username, password);
+    const success = await auth.login(username, password);
+    if (success) goto('/');
     loading = false;
     if (!success) error = 'Invalid credentials';
   }
@@ -22,37 +24,26 @@
     <div class="panel-visual">
       <div class="brand-tag">
         <span class="status-pulse"></span>
-        <span>OpenWorkspace Engine</span>
-        <span class="oss-badge">Apache 2.0</span>
+        <span>OpenWorkspace</span>
       </div>
 
       <div class="visual-content">
-        <h1 class="hero-title">High-Density<br />Cloud Dev Workspaces</h1>
-        <p class="hero-desc">Stream full-performance environments directly to any thin client or browser. Maximum hardware utilization with zero overhead.</p>
+        <h1 class="hero-title">Your Cloud Desktop,<br />Accessible Anywhere</h1>
+        <p class="hero-desc">Log in from any browser to access your personal workspace. No installation needed — your files and tools are ready whenever you are.</p>
 
-        <div class="bento-grid">
-          <div class="bento-card">
-            <span class="bento-label">Active Workspaces</span>
-            <span class="bento-value">12 <small>/ 20</small></span>
-          </div>
-          <div class="bento-card">
-            <span class="bento-label">Resource Density</span>
-            <span class="bento-value highlight">3x Boost</span>
-          </div>
-        </div>
       </div>
 
       <div class="panel-footer">
-        <span>RUST CONTROL PLANE</span>
+        <span>BROWSER-BASED</span>
         <span>•</span>
-        <span>ZERO HYPERVISOR OVERHEAD</span>
+        <span>ZERO INSTALL REQUIRED</span>
       </div>
     </div>
 
     <div class="panel-form">
       <div class="form-header">
-        <h2>Sign In</h2>
-        <p>Enter your cloud workspace</p>
+        <h2>Welcome Back</h2>
+        <p>Sign in to access your workspace</p>
       </div>
 
       <form class="form" onsubmit={onSubmit}>
@@ -205,38 +196,7 @@
     margin-bottom: 2.5rem;
   }
 
-  .bento-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-  }
 
-  .bento-card {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-top: 1px solid rgba(255, 255, 255, 0.15);
-    border-radius: 12px;
-    padding: 1rem;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .bento-label {
-    font-size: 0.7rem;
-    color: #a1a1aa;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  .bento-value {
-    font-size: 1.4rem;
-    font-weight: 600;
-    color: #f4f4f5;
-    margin-top: 4px;
-  }
-
-  .bento-value small { font-size: 0.8rem; color: #52525b; }
-  .bento-value.highlight { color: #818cf8; }
 
   .panel-footer {
     display: flex;

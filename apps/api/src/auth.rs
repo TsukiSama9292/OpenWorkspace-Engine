@@ -6,10 +6,91 @@ use uuid::Uuid;
 
 use crate::routes::AppState;
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    Admin,
+    Manager,
+    User,
+}
+
+impl Role {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "admin" => Some(Role::Admin),
+            "manager" => Some(Role::Manager),
+            "user" => Some(Role::User),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Role::Admin => "admin",
+            Role::Manager => "manager",
+            Role::User => "user",
+        }
+    }
+
+    pub fn can_manage_users(&self) -> bool {
+        matches!(self, Role::Admin | Role::Manager)
+    }
+
+    pub fn can_create_role(&self, target: &Role) -> bool {
+        match self {
+            Role::Admin => !matches!(target, Role::Admin),
+            Role::Manager => matches!(target, Role::User),
+            Role::User => false,
+        }
+    }
+
+    pub fn can_manage_templates(&self) -> bool {
+        matches!(self, Role::Admin | Role::Manager)
+    }
+
+    pub fn can_view_all_instances(&self) -> bool {
+        matches!(self, Role::Admin | Role::Manager)
+    }
+
+    pub fn can_manage_instance(&self, owner_role: &Role) -> bool {
+        match self {
+            Role::Admin => true,
+            Role::Manager => matches!(owner_role, Role::User),
+            Role::User => false,
+        }
+    }
+
+    pub fn can_manage_all_instances(&self) -> bool {
+        matches!(self, Role::Admin)
+    }
+
+    pub fn can_manage_docker(&self) -> bool {
+        matches!(self, Role::Admin | Role::Manager)
+    }
+
+    pub fn can_manage_registry(&self) -> bool {
+        matches!(self, Role::Admin | Role::Manager)
+    }
+}
+
 #[derive(Clone)]
 pub struct AuthUser {
     pub user_id: Uuid,
-    pub role: String,
+    pub role: Role,
+}
+
+impl AuthUser {
+    pub fn is_admin(&self) -> bool {
+        self.role == Role::Admin
+    }
+
+    pub fn can_manage_users(&self) -> bool {
+        self.role.can_manage_users()
+    }
+
+    pub fn can_create_role(&self, target: &Role) -> bool {
+        self.role.can_create_role(target)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -50,17 +131,20 @@ impl FromRequestParts<AppState> for AuthUser {
             .parse::<Uuid>()
             .map_err(|_| StatusCode::UNAUTHORIZED)?;
 
+        let role = Role::from_str(&token_data.claims.role)
+            .ok_or(StatusCode::UNAUTHORIZED)?;
+
         Ok(AuthUser {
             user_id,
-            role: token_data.claims.role,
+            role,
         })
     }
 }
 
-pub fn create_token(user_id: &Uuid, role: &str, jwt_secret: &str) -> Result<String, StatusCode> {
+pub fn create_token(user_id: &Uuid, role: &Role, jwt_secret: &str) -> Result<String, StatusCode> {
     let claims = Claims {
         sub: user_id.to_string(),
-        role: role.to_string(),
+        role: role.as_str().to_string(),
         exp: chrono::Utc::now()
             .checked_add_signed(chrono::Duration::hours(24))
             .unwrap()
@@ -95,11 +179,98 @@ mod tests {
     const TEST_SECRET: &str = "test-jwt-secret";
 
     #[test]
+    fn test_role_from_str() {
+        assert_eq!(Role::from_str("admin"), Some(Role::Admin));
+        assert_eq!(Role::from_str("manager"), Some(Role::Manager));
+        assert_eq!(Role::from_str("user"), Some(Role::User));
+        assert_eq!(Role::from_str("invalid"), None);
+    }
+
+    #[test]
+    fn test_role_as_str() {
+        assert_eq!(Role::Admin.as_str(), "admin");
+        assert_eq!(Role::Manager.as_str(), "manager");
+        assert_eq!(Role::User.as_str(), "user");
+    }
+
+    #[test]
+    fn test_role_can_manage_users() {
+        assert!(Role::Admin.can_manage_users());
+        assert!(Role::Manager.can_manage_users());
+        assert!(!Role::User.can_manage_users());
+    }
+
+    #[test]
+    fn test_role_can_create_role() {
+        assert!(Role::Admin.can_create_role(&Role::Manager));
+        assert!(Role::Admin.can_create_role(&Role::User));
+        assert!(!Role::Admin.can_create_role(&Role::Admin));
+
+        assert!(Role::Manager.can_create_role(&Role::User));
+        assert!(!Role::Manager.can_create_role(&Role::Manager));
+        assert!(!Role::Manager.can_create_role(&Role::Admin));
+
+        assert!(!Role::User.can_create_role(&Role::User));
+        assert!(!Role::User.can_create_role(&Role::Manager));
+        assert!(!Role::User.can_create_role(&Role::Admin));
+    }
+
+    #[test]
+    fn test_role_can_manage_templates() {
+        assert!(Role::Admin.can_manage_templates());
+        assert!(Role::Manager.can_manage_templates());
+        assert!(!Role::User.can_manage_templates());
+    }
+
+    #[test]
+    fn test_role_can_view_all_instances() {
+        assert!(Role::Admin.can_view_all_instances());
+        assert!(Role::Manager.can_view_all_instances());
+        assert!(!Role::User.can_view_all_instances());
+    }
+
+    #[test]
+    fn test_role_can_manage_all_instances() {
+        assert!(Role::Admin.can_manage_all_instances());
+        assert!(!Role::Manager.can_manage_all_instances());
+        assert!(!Role::User.can_manage_all_instances());
+    }
+
+    #[test]
+    fn test_role_can_manage_instance() {
+        assert!(Role::Admin.can_manage_instance(&Role::Admin));
+        assert!(Role::Admin.can_manage_instance(&Role::Manager));
+        assert!(Role::Admin.can_manage_instance(&Role::User));
+
+        assert!(!Role::Manager.can_manage_instance(&Role::Admin));
+        assert!(!Role::Manager.can_manage_instance(&Role::Manager));
+        assert!(Role::Manager.can_manage_instance(&Role::User));
+
+        assert!(!Role::User.can_manage_instance(&Role::Admin));
+        assert!(!Role::User.can_manage_instance(&Role::Manager));
+        assert!(!Role::User.can_manage_instance(&Role::User));
+    }
+
+    #[test]
+    fn test_role_can_manage_docker() {
+        assert!(Role::Admin.can_manage_docker());
+        assert!(Role::Manager.can_manage_docker());
+        assert!(!Role::User.can_manage_docker());
+    }
+
+    #[test]
+    fn test_role_can_manage_registry() {
+        assert!(Role::Admin.can_manage_registry());
+        assert!(Role::Manager.can_manage_registry());
+        assert!(!Role::User.can_manage_registry());
+    }
+
+    #[test]
     fn test_create_token_roundtrip() {
         let user_id = Uuid::new_v4();
-        let role = "admin";
+        let role = Role::Admin;
 
-        let token = create_token(&user_id, role, TEST_SECRET).unwrap();
+        let token = create_token(&user_id, &role, TEST_SECRET).unwrap();
 
         let token_data = decode::<Claims>(
             &token,
@@ -116,7 +287,7 @@ mod tests {
     #[test]
     fn test_create_token_wrong_secret() {
         let user_id = Uuid::new_v4();
-        let token = create_token(&user_id, "user", TEST_SECRET).unwrap();
+        let token = create_token(&user_id, &Role::User, TEST_SECRET).unwrap();
 
         let result = decode::<Claims>(
             &token,
@@ -130,7 +301,7 @@ mod tests {
     #[test]
     fn test_create_token_user_role() {
         let user_id = Uuid::new_v4();
-        let token = create_token(&user_id, "user", TEST_SECRET).unwrap();
+        let token = create_token(&user_id, &Role::User, TEST_SECRET).unwrap();
 
         let token_data = decode::<Claims>(
             &token,
