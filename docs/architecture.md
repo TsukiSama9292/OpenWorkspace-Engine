@@ -93,9 +93,7 @@ sequenceDiagram
     A->>K: bollard: create_kasm_container()
     K-->>A: container_id, IP: 172.16.0.4
     A->>FS: Write vnc-{token}-ws.yml
-    Note over FS: Rule: /vnc/{token}/websockify<br/>Service: https://172.16.0.4:6901<br/>Middleware: vnc-auth
-    A->>FS: Write vnc-{token}-page.yml
-    Note over FS: Rule: /vnc/{token}<br/>Service: web-service
+    Note over FS: Rule: /vnc/{token}/websockify<br/>Service: https://172.16.0.4:6901<br/>Middleware: vnc-{token}-auth (header injection)
     T->>FS: watch detects new .yml
     T->>T: Hot-reload: new routes active
 
@@ -123,9 +121,9 @@ Traefik supports multiple providers (Docker, file, etcd, etc.). We chose **file 
 
 ### Route File Format
 
-When the API creates an instance with token `abc123`, two files are written to `traefik/dynamic/`:
+When the API creates an instance with token `abc123`, one file is written to `traefik/dynamic/`:
 
-**`vnc-abc123-ws.yml`** — WebSocket route:
+**`vnc-abc123-ws.yml`** — WebSocket route + header injection middleware:
 ```yaml
 http:
   routers:
@@ -135,24 +133,18 @@ http:
       entryPoints:
         - web
       middlewares:
-        - "vnc-auth"
+        - "vnc-abc123-auth"
+  middlewares:
+    vnc-abc123-auth:
+      headers:
+        customRequestHeaders:
+          Authorization: "Basic a2FzbV91c2VyOnh4eHh4eHh4eHg="
   services:
     vnc-abc123:
       loadBalancer:
         serversTransport: "kasm-insecure"
         servers:
           - url: "https://172.16.0.4:6901"
-```
-
-**`vnc-abc123-page.yml`** — VNC viewer page:
-```yaml
-http:
-  routers:
-    vnc-abc123-page:
-      rule: "PathPrefix(`/vnc/abc123`)"
-      service: "web-service"
-      entryPoints:
-        - web
 ```
 
 ## Authentication Flow
@@ -162,6 +154,7 @@ sequenceDiagram
     participant U as Browser
     participant T as Traefik
     participant A as API
+    participant K as KasmVNC
 
     Note over U: Login: POST /api/auth/login
     U->>A: {username, password}
@@ -169,20 +162,24 @@ sequenceDiagram
     A-->>U: Set-Cookie: ow_token=JWT
 
     Note over U: Open VNC session
-    U->>T: GET /vnc/{token}/websockify
+    U->>T: wss /vnc/{token}/websockify
     T->>T: Match vnc-ws-router
     T->>A: ForwardAuth: GET /api/vnc/verify<br/>Cookie: ow_token=JWT<br/>X-Forwarded-Uri: /vnc/{token}/websockify
     A->>A: Decode JWT → user_id, role
     A->>A: Extract VNC token from URI
     A->>A: Cache lookup (DashMap, O(1))
     alt Cache hit
-        A-->>T: 200 OK + X-Forwarded-User
+        A-->>T: 200 OK
     else Cache miss
         A->>A: DB lookup: instance exists + status=running
         A->>A: Populate cache
-        A-->>T: 200 OK + X-Forwarded-User
+        A-->>T: 200 OK
     end
-    T->>K: Proxy to KasmVNC
+    T->>T: Inject Authorization: Basic header<br/>(from vnc-{token}-auth middleware)
+    T->>K: wss://172.16.0.4:6901/websockify<br/>Authorization: Basic base64(kasm_user:{password})
+    K->>K: Verify Basic auth against .kasmpasswd
+    K-->>T: 101 Switching Protocols
+    T-->>U: WebSocket upgrade complete
 ```
 
 ### JWT Claims
@@ -221,14 +218,14 @@ stateDiagram-v2
 
 1. **Pull image** — `kasmweb/desktop:1.19.0-rolling-daily`
 2. **Create container** with env vars:
-   - `VNCOPTIONS=-disableBasicAuth` (disable HTTP Basic Auth on websockify)
+   - `VNC_PW=<127-char random>` (enables HTTP Basic Auth on websockify)
    - `KASM_VNC_PORT=6901`
    - `DISPLAY=:1`
 3. **Connect to network** — `ow-network` (Docker bridge)
 4. **Inject config** — Upload `kasmvnc.yaml` to `/etc/kasmvnc/kasmvnc.yaml` via tar stream
 5. **Start container**
 6. **Get IP** — Query Docker API for container IP on the bridge network
-7. **Write Traefik routes** — Generate YAML files in `traefik/dynamic/`
+7. **Write Traefik route** — Generate YAML file in `traefik/dynamic/`
 
 ### kasmvnc.yaml Configuration
 
@@ -265,22 +262,24 @@ api:
 | `static-routers.yml` | api-router, web-router, vnc-auth middleware | Manual |
 | `static-services.yml` | api-service, web-service | Manual |
 | `static-transports.yml` | `kasm-insecure` (skip TLS verify) | Manual |
-| `vnc-{token}-ws.yml` | Per-instance WebSocket route | API |
-| `vnc-{token}-page.yml` | Per-instance page route | API |
+| `vnc-{token}-ws.yml` | Per-instance WebSocket route + Basic auth middleware | API |
 
-### ForwardAuth Middleware
+### Per-Token Basic Auth Middleware
+
+Instead of using ForwardAuth (which can't inject headers on WebSocket upgrades), Traefik injects `Authorization: Basic` headers per-token via a `headers` middleware:
 
 ```yaml
-vnc-auth:
-  forwardAuth:
-    address: "http://host.docker.internal:3000/api/vnc/verify"
-    trustForwardHeader: true
-    authResponseHeaders:
-      - "X-Forwarded-User"
-      - "X-Forwarded-Role"
+http:
+  middlewares:
+    vnc-{token}-auth:
+      headers:
+        customRequestHeaders:
+          Authorization: "Basic base64(kasm_user:{password})"
 ```
 
-Traefik calls `/api/vnc/verify` before proxying any WebSocket request to a KasmVNC instance. The API validates the JWT cookie and instance ownership via an in-memory cache (`DashMap`), falling back to PostgreSQL on cache miss.
+Each VNC route YAML includes its own middleware with the correct `kasm_user` credentials. The browser never sees these credentials — they are injected server-side by Traefik before proxying to KasmVNC.
+
+See [VNC Authentication](vnc-auth.md) for full details.
 
 ### TLS Handling
 
@@ -345,6 +344,7 @@ erDiagram
         varchar status
         uuid owner_id FK
         varchar vnc_token UK
+        varchar vnc_password
         timestamptz created_at
         timestamptz updated_at
     }
@@ -363,7 +363,7 @@ erDiagram
 ## Scalability Considerations
 
 **Traefik file provider scales horizontally by design:**
-- Each VNC instance = 2 small YAML files (~200 bytes each)
+- Each VNC instance = 1 small YAML file (~250 bytes)
 - Traefik watches for filesystem changes via inotify — O(1) detection
 - Route matching is O(rule_length) per request, independent of total instance count
 - No state stored in Traefik; all state lives in PostgreSQL
@@ -380,3 +380,7 @@ erDiagram
 - `vnc_verify` reads cache first (O(1) hash lookup, no async); falls back to DB on cache miss
 - Eliminates PostgreSQL round-trip on every WebSocket handshake
 - Cache is per-process; sufficient for single-API deployment
+
+## VNC Authentication
+
+See [VNC Authentication](vnc-auth.md) for full details on the password generation, Traefik header injection, and security model.

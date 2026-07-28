@@ -6,7 +6,7 @@ Experimental. A Docker Compose stack that runs KasmVNC containers behind nginx, 
 
 ## Monorepo layout
 
-Single active app: `apps/vnc-ui/`. All other `apps/` were removed. pnpm workspaces + Turborepo.
+Two active apps: `apps/vnc-ui/` (SvelteKit frontend) and `apps/api/` (Rust API). pnpm workspaces + Turborepo.
 
 ## Key commands
 
@@ -20,6 +20,9 @@ cd apps/vnc-ui
 pnpm test            # vitest run (21 tests)
 pnpm build           # vite build → apps/vnc-ui/build/
 pnpm check           # svelte-check (typecheck)
+
+# api only
+cd apps/api && apps/api/scripts/run_tests.sh   # Rust tests via cargo nextest
 ```
 
 No lint script exists in vnc-ui. Root `turbo lint` runs if configured per-package.
@@ -67,6 +70,14 @@ cd /home/user/workspace/OpenWorkspace-Engine/apps/api \
 ```
 
 Both invocations must produce **no output**. The first checks default features; the second checks the `docker` feature gate.
+
+The actual test runner is `apps/api/scripts/run_tests.sh`, which starts a Postgres test container via Docker and runs `cargo nextest run --features docker`. Run both warning checks before the test script:
+
+```bash
+cd apps/api && cargo test --no-run 2>&1 | grep -i warning
+cd apps/api && cargo test --no-run --features docker 2>&1 | grep -i warning
+cd apps/api && apps/api/scripts/run_tests.sh
+```
 
 ### How to fix warnings
 
