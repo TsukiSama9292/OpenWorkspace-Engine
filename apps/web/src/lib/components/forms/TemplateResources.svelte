@@ -15,7 +15,7 @@
     persistentStoragePath = $bindable()
   }: Props = $props();
 
-  const STORAGE_HINT = '/data/persistent/{workspace_name}/{user_id}';
+  const STORAGE_HINT = '/data/persistent/{template_name}/{user_id}';
   const inputClass = 'px-3 py-2 border border-surface-300 rounded bg-surface-50 text-surface-800 focus:outline-none focus:border-primary-500 w-full';
   const labelClass = 'flex flex-col gap-1';
   const spanClass = 'text-sm text-surface-600';
@@ -44,5 +44,5 @@
 <label class={labelClass}>
   <span class={spanClass}>Persistent Storage Path</span>
   <input type="text" bind:value={persistentStoragePath} placeholder={STORAGE_HINT} class={inputClass} />
-  <span class="text-xs text-surface-400">Template variables: {'{'}workspace_name{'}'}, {'{'}user_id{'}'}</span>
+  <span class="text-xs text-surface-400">Template variables: {'{'}template_name{'}'}, {'{'}user_id{'}'}</span>
 </label>

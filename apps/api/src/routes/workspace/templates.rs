@@ -9,43 +9,43 @@ use uuid::Uuid;
 
 use super::super::AppState;
 use crate::auth::AuthUser;
-use crate::db::{WorkspaceConfig, WorkspaceConfigRepository};
+use crate::db::{WorkspaceTemplate, WorkspaceTemplateRepository};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route(
-            "/api/configs",
-            get(list_configs).post(create_config),
+            "/api/templates",
+            get(list_templates).post(create_template),
         )
         .route(
-            "/api/configs/{id}",
-            get(get_config).put(update_config).delete(delete_config),
+            "/api/templates/{id}",
+            get(get_template).put(update_template).delete(delete_template),
         )
 }
 
-fn config_to_json(config: &WorkspaceConfig, instance_count: i64) -> serde_json::Value {
+fn template_to_json(template: &WorkspaceTemplate, instance_count: i64) -> serde_json::Value {
     serde_json::json!({
-        "id": config.id,
-        "name": config.name,
-        "description": config.description,
-        "owner_id": config.owner_id,
-        "image": config.image,
-        "cores": config.cores,
-        "memory": config.memory,
-        "gpu_count": config.gpu_count,
-        "docker_registry": config.docker_registry,
-        "run_config": config.run_config,
-        "exec_config": config.exec_config,
-        "volume_mappings": config.volume_mappings,
-        "persistent_storage_path": config.persistent_storage_path,
+        "id": template.id,
+        "name": template.name,
+        "description": template.description,
+        "owner_id": template.owner_id,
+        "image": template.image,
+        "cores": template.cores,
+        "memory": template.memory,
+        "gpu_count": template.gpu_count,
+        "docker_registry": template.docker_registry,
+        "run_config": template.run_config,
+        "exec_config": template.exec_config,
+        "volume_mappings": template.volume_mappings,
+        "persistent_storage_path": template.persistent_storage_path,
         "instance_count": instance_count,
-        "created_at": config.created_at,
-        "updated_at": config.updated_at,
+        "created_at": template.created_at,
+        "updated_at": template.updated_at,
     })
 }
 
 #[derive(Deserialize)]
-struct CreateConfigRequest {
+struct CreateTemplateRequest {
     name: String,
     description: Option<String>,
     #[serde(default = "default_image")]
@@ -67,7 +67,7 @@ struct CreateConfigRequest {
 }
 
 #[derive(Deserialize)]
-struct UpdateConfigRequest {
+struct UpdateTemplateRequest {
     name: String,
     description: Option<String>,
     image: String,
@@ -91,42 +91,42 @@ fn default_memory() -> i64 {
     4_294_967_296
 }
 
-async fn list_configs(
+async fn list_templates(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let config_repo = WorkspaceConfigRepository::new(&state.db);
+    let template_repo = WorkspaceTemplateRepository::new(&state.db);
 
-    let configs = if auth.role.can_view_all_instances() {
-        config_repo
+    let templates = if auth.role.can_view_all_instances() {
+        template_repo
             .list_all()
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     } else {
-        config_repo
+        template_repo
             .list_by_owner(auth.user_id)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     };
 
-    let mut configs_json = Vec::new();
-    for config in &configs {
-        let count = config_repo
-            .count_instances(config.id)
+    let mut templates_json = Vec::new();
+    for template in &templates {
+        let count = template_repo
+            .count_instances(template.id)
             .await
             .unwrap_or(0);
-        configs_json.push(config_to_json(config, count));
+        templates_json.push(template_to_json(template, count));
     }
 
-    Ok(Json(serde_json::json!({ "configs": configs_json })))
+    Ok(Json(serde_json::json!({ "templates": templates_json })))
 }
 
-async fn create_config(
+async fn create_template(
     State(state): State<AppState>,
     auth: AuthUser,
-    Json(input): Json<CreateConfigRequest>,
+    Json(input): Json<CreateTemplateRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let repo = WorkspaceConfigRepository::new(&state.db);
+    let repo = WorkspaceTemplateRepository::new(&state.db);
 
     let run_config = if input.run_config.is_null() {
         serde_json::json!({})
@@ -144,7 +144,7 @@ async fn create_config(
         input.volume_mappings
     };
 
-    let config = repo
+    let template = repo
         .create(
             &input.name,
             input.description.as_deref(),
@@ -161,48 +161,48 @@ async fn create_config(
         )
         .await
         .map_err(|e| {
-            tracing::error!("Failed to create config: {}", e);
+            tracing::error!("Failed to create template: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Failed to create config"})),
+                Json(serde_json::json!({"error": "Failed to create template"})),
             )
         })?;
 
-    tracing::info!("Config '{}' created (id={})", config.name, config.id);
+    tracing::info!("Template '{}' created (id={})", template.name, template.id);
 
     Ok(Json(serde_json::json!({
-        "config": config_to_json(&config, 0)
+        "template": template_to_json(&template, 0)
     })))
 }
 
-async fn get_config(
+async fn get_template(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     _auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let config_repo = WorkspaceConfigRepository::new(&state.db);
+    let template_repo = WorkspaceTemplateRepository::new(&state.db);
 
-    let config = config_repo
+    let template = template_repo
         .find_by_id(id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let count = config_repo
+    let count = template_repo
         .count_instances(id)
         .await
         .unwrap_or(0);
 
-    Ok(Json(serde_json::json!({ "config": config_to_json(&config, count) })))
+    Ok(Json(serde_json::json!({ "template": template_to_json(&template, count) })))
 }
 
-async fn update_config(
+async fn update_template(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     auth: AuthUser,
-    Json(input): Json<UpdateConfigRequest>,
+    Json(input): Json<UpdateTemplateRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let repo = WorkspaceConfigRepository::new(&state.db);
+    let repo = WorkspaceTemplateRepository::new(&state.db);
 
     let existing = repo
         .find_by_id(id)
@@ -236,7 +236,7 @@ async fn update_config(
         return Err(StatusCode::NOT_FOUND);
     }
 
-    let config = repo
+    let template = repo
         .find_by_id(id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -244,15 +244,15 @@ async fn update_config(
 
     let count = repo.count_instances(id).await.unwrap_or(0);
 
-    Ok(Json(serde_json::json!({ "config": config_to_json(&config, count) })))
+    Ok(Json(serde_json::json!({ "template": template_to_json(&template, count) })))
 }
 
-async fn delete_config(
+async fn delete_template(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     auth: AuthUser,
 ) -> Result<StatusCode, StatusCode> {
-    let repo = WorkspaceConfigRepository::new(&state.db);
+    let repo = WorkspaceTemplateRepository::new(&state.db);
 
     let existing = repo
         .find_by_id(id)

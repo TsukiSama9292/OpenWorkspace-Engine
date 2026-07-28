@@ -3,7 +3,7 @@ import { goto } from '$app/navigation';
 import { buildRunConfig, buildExecConfig, buildVolumeMappings, createEmptyEnvVar, createEmptyVolume } from '$lib/utils/format';
 import type { EnvVar, VolumeMapping } from '$lib/utils/format';
 
-export interface ConfigFormState {
+export interface TemplateFormState {
   name: string;
   description: string;
   image: string;
@@ -24,7 +24,7 @@ export interface ConfigFormState {
   error: string;
 }
 
-export function createInitialFormState(): ConfigFormState {
+export function createInitialFormState(): TemplateFormState {
   return {
     name: '',
     description: '',
@@ -47,7 +47,7 @@ export function createInitialFormState(): ConfigFormState {
   };
 }
 
-export async function submitConfig(state: ConfigFormState): Promise<{ error?: string; id?: string }> {
+export async function submitTemplate(state: TemplateFormState): Promise<{ error?: string; id?: string }> {
   if (!state.name.trim()) return { error: 'Name is required' };
 
   const body = {
@@ -70,11 +70,11 @@ export async function submitConfig(state: ConfigFormState): Promise<{ error?: st
     persistent_storage_path: state.persistentStoragePath || null,
   };
 
-  const res = await api.post<{ config: { id: string } }>('/configs', body);
+  const res = await api.post<{ template: { id: string } }>('/templates', body);
   if (res.error) return { error: res.error };
-  if (res.data?.config) {
+  if (res.data?.template) {
     goto('/');
-    return { id: res.data.config.id };
+    return { id: res.data.template.id };
   }
-  return { error: 'Failed to create config' };
+  return { error: 'Failed to create template' };
 }

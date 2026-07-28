@@ -52,12 +52,12 @@ pub mod user {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-pub mod workspace_config {
+pub mod workspace_template {
     use sea_orm::entity::prelude::*;
     use serde::{Deserialize, Serialize};
 
     #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
-    #[sea_orm(table_name = "workspace_configs")]
+    #[sea_orm(table_name = "workspace_templates")]
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub id: Uuid,
@@ -113,7 +113,7 @@ pub mod workspace_instance {
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub id: Uuid,
-        pub config_id: Uuid,
+        pub template_id: Uuid,
         pub name: String,
         pub instance_number: i32,
         pub owner_id: Uuid,
@@ -130,11 +130,11 @@ pub mod workspace_instance {
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
     pub enum Relation {
         #[sea_orm(
-            belongs_to = "super::workspace_config::Entity",
-            from = "Column::ConfigId",
-            to = "super::workspace_config::Column::Id"
+            belongs_to = "super::workspace_template::Entity",
+            from = "Column::TemplateId",
+            to = "super::workspace_template::Column::Id"
         )]
-        WorkspaceConfig,
+        WorkspaceTemplate,
         #[sea_orm(
             belongs_to = "super::user::Entity",
             from = "Column::OwnerId",
@@ -143,9 +143,9 @@ pub mod workspace_instance {
         User,
     }
 
-    impl Related<super::workspace_config::Entity> for Entity {
+    impl Related<super::workspace_template::Entity> for Entity {
         fn to() -> RelationDef {
-            Relation::WorkspaceConfig.def()
+            Relation::WorkspaceTemplate.def()
         }
     }
 
@@ -199,7 +199,7 @@ pub mod registry_cache {
 // ── Public Model Types (for callers) ──────────────────────────
 
 #[derive(Debug, Clone)]
-pub struct WorkspaceConfig {
+pub struct WorkspaceTemplate {
     pub id: Uuid,
     pub name: String,
     pub description: Option<String>,
@@ -217,8 +217,8 @@ pub struct WorkspaceConfig {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-impl From<workspace_config::Model> for WorkspaceConfig {
-    fn from(m: workspace_config::Model) -> Self {
+impl From<workspace_template::Model> for WorkspaceTemplate {
+    fn from(m: workspace_template::Model) -> Self {
         Self {
             id: m.id,
             name: m.name,
@@ -242,7 +242,7 @@ impl From<workspace_config::Model> for WorkspaceConfig {
 #[derive(Debug, Clone)]
 pub struct WorkspaceInstance {
     pub id: Uuid,
-    pub config_id: Uuid,
+    pub template_id: Uuid,
     pub name: String,
     pub instance_number: i32,
     pub owner_id: Uuid,
@@ -260,7 +260,7 @@ impl From<workspace_instance::Model> for WorkspaceInstance {
     fn from(m: workspace_instance::Model) -> Self {
         Self {
             id: m.id,
-            config_id: m.config_id,
+            template_id: m.template_id,
             name: m.name,
             instance_number: m.instance_number,
             owner_id: m.owner_id,
@@ -386,13 +386,13 @@ impl<'a> UserRepository<'a> {
     }
 }
 
-// ── Workspace Config Repository ───────────────────────────────
+// ── Workspace Template Repository ─────────────────────────────
 
-pub struct WorkspaceConfigRepository<'a> {
+pub struct WorkspaceTemplateRepository<'a> {
     pub db: &'a DatabaseConnection,
 }
 
-impl<'a> WorkspaceConfigRepository<'a> {
+impl<'a> WorkspaceTemplateRepository<'a> {
     pub fn new(db: &'a DatabaseConnection) -> Self {
         Self { db }
     }
@@ -411,9 +411,9 @@ impl<'a> WorkspaceConfigRepository<'a> {
         exec_config: &serde_json::Value,
         volume_mappings: &serde_json::Value,
         persistent_storage_path: Option<&str>,
-    ) -> Result<WorkspaceConfig, sea_orm::DbErr> {
+    ) -> Result<WorkspaceTemplate, sea_orm::DbErr> {
         let id = Uuid::new_v4();
-        let model = workspace_config::ActiveModel {
+        let model = workspace_template::ActiveModel {
             id: Set(id),
             name: Set(name.to_string()),
             description: Set(description.map(|s| s.to_string())),
@@ -433,31 +433,31 @@ impl<'a> WorkspaceConfigRepository<'a> {
         Ok(inserted.into())
     }
 
-    pub async fn find_by_id(&self, id: Uuid) -> Result<Option<WorkspaceConfig>, sea_orm::DbErr> {
-        let model = workspace_config::Entity::find_by_id(id).one(self.db).await?;
+    pub async fn find_by_id(&self, id: Uuid) -> Result<Option<WorkspaceTemplate>, sea_orm::DbErr> {
+        let model = workspace_template::Entity::find_by_id(id).one(self.db).await?;
         Ok(model.map(|m| m.into()))
     }
 
-    pub async fn list_by_owner(&self, owner_id: Uuid) -> Result<Vec<WorkspaceConfig>, sea_orm::DbErr> {
-        let models = workspace_config::Entity::find()
-            .filter(workspace_config::Column::OwnerId.eq(owner_id))
-            .order_by_asc(workspace_config::Column::CreatedAt)
+    pub async fn list_by_owner(&self, owner_id: Uuid) -> Result<Vec<WorkspaceTemplate>, sea_orm::DbErr> {
+        let models = workspace_template::Entity::find()
+            .filter(workspace_template::Column::OwnerId.eq(owner_id))
+            .order_by_asc(workspace_template::Column::CreatedAt)
             .all(self.db)
             .await?;
         Ok(models.into_iter().map(|m| m.into()).collect())
     }
 
-    pub async fn list_all(&self) -> Result<Vec<WorkspaceConfig>, sea_orm::DbErr> {
-        let models = workspace_config::Entity::find()
-            .order_by_asc(workspace_config::Column::CreatedAt)
+    pub async fn list_all(&self) -> Result<Vec<WorkspaceTemplate>, sea_orm::DbErr> {
+        let models = workspace_template::Entity::find()
+            .order_by_asc(workspace_template::Column::CreatedAt)
             .all(self.db)
             .await?;
         Ok(models.into_iter().map(|m| m.into()).collect())
     }
 
-    pub async fn count_instances(&self, config_id: Uuid) -> Result<i64, sea_orm::DbErr> {
+    pub async fn count_instances(&self, template_id: Uuid) -> Result<i64, sea_orm::DbErr> {
         let count = workspace_instance::Entity::find()
-            .filter(workspace_instance::Column::ConfigId.eq(config_id))
+            .filter(workspace_instance::Column::TemplateId.eq(template_id))
             .count(self.db)
             .await?;
         Ok(count as i64)
@@ -478,7 +478,7 @@ impl<'a> WorkspaceConfigRepository<'a> {
         volume_mappings: &serde_json::Value,
         persistent_storage_path: Option<&str>,
     ) -> Result<bool, sea_orm::DbErr> {
-        let result = workspace_config::Entity::update(workspace_config::ActiveModel {
+        let result = workspace_template::Entity::update(workspace_template::ActiveModel {
             id: Set(id),
             name: Set(name.to_string()),
             description: Set(description.map(|s| s.to_string())),
@@ -493,7 +493,7 @@ impl<'a> WorkspaceConfigRepository<'a> {
             persistent_storage_path: Set(persistent_storage_path.map(|s| s.to_string())),
             ..Default::default()
         })
-        .filter(workspace_config::Column::Id.eq(id))
+        .filter(workspace_template::Column::Id.eq(id))
         .exec(self.db)
         .await;
         match result {
@@ -504,7 +504,7 @@ impl<'a> WorkspaceConfigRepository<'a> {
     }
 
     pub async fn delete(&self, id: Uuid) -> Result<bool, sea_orm::DbErr> {
-        let result = workspace_config::Entity::delete_by_id(id).exec(self.db).await?;
+        let result = workspace_template::Entity::delete_by_id(id).exec(self.db).await?;
         Ok(result.rows_affected > 0)
     }
 }
@@ -522,9 +522,9 @@ impl<'a> WorkspaceInstanceRepository<'a> {
 
     pub async fn launch(
         &self,
-        config_id: Uuid,
+        template_id: Uuid,
         owner_id: Uuid,
-        config_name: &str,
+        template_name: &str,
         mount_persistent: bool,
         resolved_volume_host_path: Option<&str>,
     ) -> Result<WorkspaceInstance, sea_orm::DbErr> {
@@ -532,20 +532,20 @@ impl<'a> WorkspaceInstanceRepository<'a> {
         let vnc_token = generate_vnc_token();
         let vnc_password = generate_vnc_password();
 
-        // Auto-generate instance name: "{config_name}-{next_number}"
+        // Auto-generate instance name: "{template_name}-{next_number}"
         let max_number = workspace_instance::Entity::find()
-            .filter(workspace_instance::Column::ConfigId.eq(config_id))
+            .filter(workspace_instance::Column::TemplateId.eq(template_id))
             .order_by(workspace_instance::Column::InstanceNumber, Order::Desc)
             .one(self.db)
             .await?
             .map(|m| m.instance_number)
             .unwrap_or(0);
         let next_number = max_number + 1;
-        let name = format!("{}-{}", config_name, next_number);
+        let name = format!("{}-{}", template_name, next_number);
 
         let model = workspace_instance::ActiveModel {
             id: Set(id),
-            config_id: Set(config_id),
+            template_id: Set(template_id),
             name: Set(name),
             instance_number: Set(next_number),
             owner_id: Set(owner_id),
@@ -591,9 +591,9 @@ impl<'a> WorkspaceInstanceRepository<'a> {
         Ok(models.into_iter().map(|m| m.into()).collect())
     }
 
-    pub async fn list_by_config(&self, config_id: Uuid) -> Result<Vec<WorkspaceInstance>, sea_orm::DbErr> {
+    pub async fn list_by_template(&self, template_id: Uuid) -> Result<Vec<WorkspaceInstance>, sea_orm::DbErr> {
         let models = workspace_instance::Entity::find()
-            .filter(workspace_instance::Column::ConfigId.eq(config_id))
+            .filter(workspace_instance::Column::TemplateId.eq(template_id))
             .order_by_asc(workspace_instance::Column::CreatedAt)
             .all(self.db)
             .await?;

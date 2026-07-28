@@ -3,18 +3,18 @@
   import { formatMemory } from '$lib/utils/format';
   import { loadDashboard } from './dashboard-data';
   import { performAction, deleteInstance } from '$lib/api/instance-actions';
-  import { launchInstance } from '$lib/api/config-actions';
+  import { launchInstance } from '$lib/api/template-actions';
   import { auth, isManager } from '$lib/stores/auth';
-  import type { Config, Instance, Role } from '$lib/types';
+  import type { Template, Instance, Role } from '$lib/types';
 
   let sidebarOpen = $state(false);
-  let activeTab = $state<'workspaces' | 'instances' | 'users' | 'templates'>('workspaces');
+  let activeTab = $state<'instances' | 'templates' | 'sessions' | 'users'>('instances');
   let showSettings = $state(false);
-  let configs = $state<Config[]>([]);
+  let configs = $state<Template[]>([]);
   let instances = $state<Instance[]>([]);
   let loading = $state(true);
 
-  let launchModal = $state<{ open: boolean; config: Config | null }>({ open: false, config: null });
+  let launchModal = $state<{ open: boolean; config: Template | null }>({ open: false, config: null });
   let launchTarget = $state<'current' | 'tab'>('current');
 
   let filterUser = $state('');
@@ -47,11 +47,11 @@
   }
 
   function copySshCommand(id: string) {
-    const cmd = `ssh -J gateway.openworkspace.engine:2222 workspace@${id}`;
+    const cmd = `ssh -J gateway.openworkspace.engine:2222 instance@${id}`;
     navigator.clipboard.writeText(cmd);
   }
 
-  function openLaunch(config: Config) {
+  function openLaunch(config: Template) {
     launchModal = { open: true, config };
     launchTarget = 'current';
   }
@@ -224,38 +224,14 @@
     <nav class="nav-list">
       <button
         class="nav-item"
-        class:active={activeTab === 'workspaces'}
-        onclick={() => activeTab = 'workspaces'}
+        class:active={activeTab === 'instances'}
+        onclick={() => activeTab = 'instances'}
       >
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="2" y="3" width="20" height="14" rx="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" />
         </svg>
-        {#if sidebarOpen}<span class="nav-text">Workspaces</span>{/if}
+        {#if sidebarOpen}<span class="nav-text">Instances</span>{/if}
       </button>
-
-      {#if canManage}
-        <button
-          class="nav-item"
-          class:active={activeTab === 'instances'}
-          onclick={() => activeTab = 'instances'}
-        >
-          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" />
-          </svg>
-          {#if sidebarOpen}<span class="nav-text">Instances</span>{/if}
-        </button>
-
-        <button
-          class="nav-item"
-          class:active={activeTab === 'users'}
-          onclick={() => { activeTab = 'users'; loadUsers(); }}
-        >
-          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
-          </svg>
-          {#if sidebarOpen}<span class="nav-text">Users</span>{/if}
-        </button>
-      {/if}
 
       {#if canManage}
         <button
@@ -267,6 +243,28 @@
             <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
           </svg>
           {#if sidebarOpen}<span class="nav-text">Templates</span>{/if}
+        </button>
+
+        <button
+          class="nav-item"
+          class:active={activeTab === 'sessions'}
+          onclick={() => activeTab = 'sessions'}
+        >
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" />
+          </svg>
+          {#if sidebarOpen}<span class="nav-text">Sessions</span>{/if}
+        </button>
+
+        <button
+          class="nav-item"
+          class:active={activeTab === 'users'}
+          onclick={() => { activeTab = 'users'; loadUsers(); }}
+        >
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
+          </svg>
+          {#if sidebarOpen}<span class="nav-text">Users</span>{/if}
         </button>
       {/if}
     </nav>
@@ -294,7 +292,7 @@
       <div class="settings-section">
         <span class="settings-label">SSH ProxyCommand</span>
         <p class="settings-desc">Use this command to connect directly from your terminal.</p>
-        <code class="settings-code">ssh -J gateway.openworkspace.engine:2222 workspace@&lt;workspace-id&gt;</code>
+        <code class="settings-code">ssh -J gateway.openworkspace.engine:2222 instance@&lt;instance-id&gt;</code>
       </div>
       <div class="settings-section">
         <span class="settings-label">Account</span>
@@ -314,7 +312,7 @@
     <div class="modal-overlay" onclick={() => launchModal = { open: false, config: null }} role="presentation"></div>
     <div class="modal-card">
       <h3 class="modal-title">Launch {launchModal.config.name}</h3>
-      <p class="modal-desc">Choose how to open this workspace.</p>
+      <p class="modal-desc">Choose how to open this instance.</p>
       <div class="modal-field">
         <label for="launch-select" class="modal-label">Open in</label>
         <select id="launch-select" class="modal-select" bind:value={launchTarget}>
@@ -365,15 +363,15 @@
 
   <main class="main-content">
     {#if loading}
-      <p class="loading-text">Loading workspaces...</p>
+      <p class="loading-text">Loading instances...</p>
 
-    {:else if activeTab === 'workspaces'}
+    {:else if activeTab === 'instances'}
       <section class="ws-section">
         <h2 class="section-title">Instances</h2>
         {#if myInstances.length === 0}
           <p class="empty-text">No instances yet. Launch a template to get started.</p>
         {:else}
-          <div class="workspace-grid">
+          <div class="instance-grid">
             {#each myInstances as inst}
               <div class="ws-card" class:dimmed={inst.status !== 'running'}>
                 <div class="ws-card-header">
@@ -382,7 +380,7 @@
                       <span class="status-dot {statusColors[inst.status] || 'dot-stopped'}"></span>
                       <h3 class="ws-name">{inst.name}</h3>
                     </div>
-                    <span class="ws-template">{inst.config_name || 'Unknown config'}</span>
+                    <span class="ws-template">{inst.template_name || 'Unknown template'}</span>
                   </div>
                   <span class="ws-id">{inst.id.slice(0, 8)}</span>
                 </div>
@@ -413,7 +411,7 @@
 
       <section class="ws-section">
         <h2 class="section-title">Quick Launch</h2>
-        <p class="section-desc">Pick a template to spin up a new workspace.</p>
+        <p class="section-desc">Pick a template to spin up a new instance.</p>
         <div class="template-grid">
           {#each configs as config}
             <button class="template-card" onclick={() => openLaunch(config)}>
@@ -424,7 +422,7 @@
         </div>
       </section>
 
-    {:else if activeTab === 'instances' && canManage}
+    {:else if activeTab === 'sessions' && canManage}
       <section class="ws-section">
         <h2 class="section-title">All Instances</h2>
 
@@ -477,7 +475,7 @@
                       <span class="td-id">{inst.id.slice(0, 8)}</span>
                     </td>
                     <td class="td-owner">{inst.owner_username || '---'}</td>
-                    <td>{inst.config_name || '---'}</td>
+                    <td>{inst.template_name || '---'}</td>
                     <td>
                       <span class="status-badge {statusColors[inst.status] || ''}">
                         <span class="status-dot-inline"></span>
@@ -564,12 +562,12 @@
 
     {:else}
       <div class="templates-header">
-        <a href="/configs/new/" class="btn-create">+ New Template</a>
+        <a href="/templates/new/" class="btn-create">+ New Template</a>
       </div>
       {#if configs.length === 0}
         <p class="empty-text">No templates yet. Create one to get started.</p>
       {:else}
-        <div class="workspace-grid">
+        <div class="instance-grid">
           {#each configs as config}
             <div class="ws-card">
               <div class="ws-card-header">
@@ -585,11 +583,11 @@
               <div class="ws-metrics">
                 <div class="metric-item">
                   <span class="metric-label">CPU</span>
-                  <span class="metric-value">{config.cpu_cores} cores</span>
+                  <span class="metric-value">{config.cores} cores</span>
                 </div>
                 <div class="metric-item">
                   <span class="metric-label">RAM</span>
-                  <span class="metric-value">{formatMemory(config.ram_bytes)}</span>
+                  <span class="metric-value">{formatMemory(config.memory)}</span>
                 </div>
               </div>
               <div class="ws-actions">
@@ -1008,7 +1006,7 @@
   .empty-text { color: #71717a; font-size: 0.9rem; }
 
   /* Workspace Grid */
-  .workspace-grid {
+  .instance-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     gap: 1rem;

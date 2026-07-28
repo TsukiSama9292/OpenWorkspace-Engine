@@ -6,13 +6,13 @@ export interface User {
   role: Role;
 }
 
-export interface Config {
+export interface Template {
   id: string;
   name: string;
   description: string;
   image: string;
-  cpu_cores: number;
-  ram_bytes: number;
+  cores: number;
+  memory: number;
   gpu_count: number;
   docker_registry: string;
   persistent_storage_path: string;
@@ -27,8 +27,8 @@ export interface Config {
 export interface Instance {
   id: string;
   name: string;
-  config_id: string;
-  config_name: string;
+  template_id: string;
+  template_name: string;
   owner_id: string;
   owner_username: string;
   owner_role: Role;

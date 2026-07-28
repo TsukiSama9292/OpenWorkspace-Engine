@@ -143,17 +143,17 @@ impl MockContext {
 }
 
 async fn create_config_and_instance(ctx: &MockContext, token: &str, name: &str) -> (String, String) {
-    let config_resp = ctx.post_auth("/api/configs", &serde_json::json!({
+    let config_resp = ctx.post_auth("/api/templates", &serde_json::json!({
         "name": name, "image": "busybox:1"
     }), token).await;
-    let config_id = config_resp.json::<serde_json::Value>().await.unwrap()["config"]["id"].as_str().unwrap().to_string();
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
 
     let launch_resp = ctx.post_auth("/api/instances", &serde_json::json!({
-        "config_id": config_id
+        "template_id": template_id
     }), token).await;
     let body = launch_resp.json::<serde_json::Value>().await.unwrap();
     let instance_id = body["instance"]["id"].as_str().unwrap().to_string();
-    (config_id, instance_id)
+    (template_id, instance_id)
 }
 
 async fn set_instance_status(db: &DatabaseConnection, instance_id: &str, status: &str, container_id: Option<&str>) {
@@ -176,17 +176,17 @@ async fn set_instance_status(db: &DatabaseConnection, instance_id: &str, status:
 #[tokio::test]
 async fn test_launch_docker_create_fails() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Err("Docker create failed".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Err("no ip".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
-    let (config_id, _) = create_config_and_instance(&ctx, &token, "launch-create-fail").await;
+    let (template_id, _) = create_config_and_instance(&ctx, &token, "launch-create-fail").await;
 
     let resp = ctx.post_auth("/api/instances", &serde_json::json!({
-        "config_id": config_id
+        "template_id": template_id
     }), &token).await;
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["instance"]["status"], "error");
@@ -196,7 +196,7 @@ async fn test_launch_docker_create_fails() {
 #[tokio::test]
 async fn test_start_docker_start_fails() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
@@ -207,8 +207,8 @@ async fn test_start_docker_start_fails() {
     }).await;
 
     let token = ctx.login_admin().await;
-    let (config_id, instance_id) = create_config_and_instance(&ctx, &token, "start-fail").await;
-    let _ = config_id;
+    let (template_id, instance_id) = create_config_and_instance(&ctx, &token, "start-fail").await;
+    let _ = template_id;
     set_instance_status(&ctx.db, &instance_id, "stopped", Some("abc123def456")).await;
 
     let resp = ctx.post_auth(&format!("/api/instances/{}/start", instance_id), &serde_json::json!({}), &token).await;
@@ -220,10 +220,10 @@ async fn test_start_docker_start_fails() {
 #[tokio::test]
 async fn test_start_docker_create_after_inspect_fails() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .times(1)
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Err("create failed".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
@@ -232,8 +232,8 @@ async fn test_start_docker_create_after_inspect_fails() {
     }).await;
 
     let token = ctx.login_admin().await;
-    let (config_id, instance_id) = create_config_and_instance(&ctx, &token, "start-recreate-fail").await;
-    let _ = config_id;
+    let (template_id, instance_id) = create_config_and_instance(&ctx, &token, "start-recreate-fail").await;
+    let _ = template_id;
     set_instance_status(&ctx.db, &instance_id, "stopped", Some("abc123def456")).await;
 
     let resp = ctx.post_auth(&format!("/api/instances/{}/start", instance_id), &serde_json::json!({}), &token).await;
@@ -245,10 +245,10 @@ async fn test_start_docker_create_after_inspect_fails() {
 #[tokio::test]
 async fn test_start_docker_create_new_fails() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .times(1)
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Err("new create failed".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
@@ -267,7 +267,7 @@ async fn test_start_docker_create_new_fails() {
 #[tokio::test]
 async fn test_pause_docker_pause_fails() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
@@ -288,7 +288,7 @@ async fn test_pause_docker_pause_fails() {
 #[tokio::test]
 async fn test_unpause_docker_unpause_fails() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
@@ -311,7 +311,7 @@ async fn test_unpause_docker_unpause_fails() {
 #[tokio::test]
 async fn test_launch_success() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("real-container-id-12345678".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.5".to_string()) }));
@@ -333,7 +333,7 @@ async fn test_launch_success() {
 #[tokio::test]
 async fn test_stop_paused_instance_unpauses_first() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
@@ -357,7 +357,7 @@ async fn test_stop_paused_instance_unpauses_first() {
 #[tokio::test]
 async fn test_stop_container_error_still_updates_db() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
@@ -379,7 +379,7 @@ async fn test_stop_container_error_still_updates_db() {
 #[tokio::test]
 async fn test_delete_container_remove_fails() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
@@ -401,7 +401,7 @@ async fn test_delete_container_remove_fails() {
 #[tokio::test]
 async fn test_start_container_already_running() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
@@ -423,7 +423,7 @@ async fn test_start_container_already_running() {
 #[tokio::test]
 async fn test_start_inspect_fails_recreates_container() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
@@ -445,7 +445,7 @@ async fn test_start_inspect_fails_recreates_container() {
 #[tokio::test]
 async fn test_pause_success() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
@@ -467,7 +467,7 @@ async fn test_pause_success() {
 #[tokio::test]
 async fn test_unpause_success() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
@@ -489,7 +489,7 @@ async fn test_unpause_success() {
 #[tokio::test]
 async fn test_start_stopped_container_success() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
@@ -513,10 +513,10 @@ async fn test_start_stopped_container_success() {
 #[tokio::test]
 async fn test_start_recreate_success() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .times(1)
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("new-container-id".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
@@ -538,7 +538,7 @@ async fn test_start_recreate_success() {
 #[tokio::test]
 async fn test_launch_get_ip_fails_still_succeeds() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("real-container-id".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Err("no ip available".to_string()) }));
@@ -559,7 +559,7 @@ async fn test_launch_get_ip_fails_still_succeeds() {
 #[tokio::test]
 async fn test_delete_no_container() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
@@ -578,7 +578,7 @@ async fn test_delete_no_container() {
 #[tokio::test]
 async fn test_stop_no_container() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
@@ -598,7 +598,7 @@ async fn test_stop_no_container() {
 #[tokio::test]
 async fn test_list_instances() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
@@ -618,7 +618,7 @@ async fn test_list_instances() {
 #[tokio::test]
 async fn test_get_instance() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
@@ -638,7 +638,7 @@ async fn test_get_instance() {
 #[tokio::test]
 async fn test_start_already_running_conflict() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-id".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
@@ -659,7 +659,7 @@ async fn test_start_already_running_conflict() {
 #[tokio::test]
 async fn test_stop_already_stopped_conflict() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-id".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
@@ -680,7 +680,7 @@ async fn test_stop_already_stopped_conflict() {
 #[tokio::test]
 async fn test_pause_not_running_conflict() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-id".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
@@ -701,7 +701,7 @@ async fn test_pause_not_running_conflict() {
 #[tokio::test]
 async fn test_unpause_not_paused_conflict() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-id".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
@@ -722,7 +722,7 @@ async fn test_unpause_not_paused_conflict() {
 #[tokio::test]
 async fn test_start_no_container_id_success() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("brand-new-container".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.9".to_string()) }));
@@ -742,7 +742,7 @@ async fn test_start_no_container_id_success() {
 #[tokio::test]
 async fn test_delete_with_container_success() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
@@ -764,7 +764,7 @@ async fn test_delete_with_container_success() {
 #[tokio::test]
 async fn test_pause_no_container_conflict() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-id".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
@@ -785,7 +785,7 @@ async fn test_pause_no_container_conflict() {
 #[tokio::test]
 async fn test_unpause_no_container_conflict() {
     let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_config()
+        m.expect_create_container_from_template()
             .returning(|_, _, _, _| Box::pin(async { Ok("fake-id".to_string()) }));
         m.expect_get_container_ip()
             .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));

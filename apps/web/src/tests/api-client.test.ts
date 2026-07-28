@@ -28,9 +28,9 @@ describe('api client', () => {
     });
     vi.stubGlobal('fetch', mockFetch);
 
-    await api.post('/configs', { name: 'test' });
+    await api.post('/templates', { name: 'test' });
 
-    expect(mockFetch).toHaveBeenCalledWith('/api/configs', expect.objectContaining({
+    expect(mockFetch).toHaveBeenCalledWith('/api/templates', expect.objectContaining({
       method: 'POST',
       body: JSON.stringify({ name: 'test' })
     }));
@@ -84,9 +84,9 @@ describe('api client', () => {
     });
     vi.stubGlobal('fetch', mockFetch);
 
-    await api.delete('/configs/123');
+    await api.delete('/templates/123');
 
-    expect(mockFetch).toHaveBeenCalledWith('/api/configs/123', expect.objectContaining({
+    expect(mockFetch).toHaveBeenCalledWith('/api/templates/123', expect.objectContaining({
       method: 'DELETE'
     }));
   });
@@ -98,9 +98,9 @@ describe('api client', () => {
     });
     vi.stubGlobal('fetch', mockFetch);
 
-    await api.put('/configs/123', { name: 'updated' });
+    await api.put('/templates/123', { name: 'updated' });
 
-    expect(mockFetch).toHaveBeenCalledWith('/api/configs/123', expect.objectContaining({
+    expect(mockFetch).toHaveBeenCalledWith('/api/templates/123', expect.objectContaining({
       method: 'PUT',
       body: JSON.stringify({ name: 'updated' })
     }));

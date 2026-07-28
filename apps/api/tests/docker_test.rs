@@ -53,7 +53,7 @@ async fn test_pause_unpause() {
     };
 
     let id = client
-        .create_container_from_config(&name, 1, &config, "test_password")
+        .create_container_from_template(&name, 1, &config, "test_password")
         .await
         .unwrap();
 
@@ -84,11 +84,11 @@ async fn test_get_container_ip() {
 }
 
 #[tokio::test]
-async fn test_create_container_from_config() {
+async fn test_create_container_from_template() {
     use openworkspace_api::docker::ContainerConfig;
 
     let client = setup().await;
-    let name = format!("ow_test_docker_config_{}", std::process::id());
+    let name = format!("ow_test_docker_template_{}", std::process::id());
 
     let config = ContainerConfig {
         image: "busybox:1".to_string(),
@@ -103,7 +103,7 @@ async fn test_create_container_from_config() {
     };
 
     let id = client
-        .create_container_from_config(&name, 1, &config, "test_password")
+        .create_container_from_template(&name, 1, &config, "test_password")
         .await
         .unwrap();
     assert!(!id.is_empty());
@@ -113,11 +113,11 @@ async fn test_create_container_from_config() {
 }
 
 #[tokio::test]
-async fn test_create_container_from_config_with_env_and_dns() {
+async fn test_create_container_from_template_with_env_and_dns() {
     use openworkspace_api::docker::ContainerConfig;
 
     let client = setup().await;
-    let name = format!("ow_test_docker_config_env_{}", std::process::id());
+    let name = format!("ow_test_docker_template_env_{}", std::process::id());
 
     let config = ContainerConfig {
         image: "busybox:1".to_string(),
@@ -135,7 +135,7 @@ async fn test_create_container_from_config_with_env_and_dns() {
     };
 
     let id = client
-        .create_container_from_config(&name, 2, &config, "test_password")
+        .create_container_from_template(&name, 2, &config, "test_password")
         .await
         .unwrap();
     assert!(!id.is_empty());
@@ -145,12 +145,12 @@ async fn test_create_container_from_config_with_env_and_dns() {
 }
 
 #[tokio::test]
-async fn test_create_container_from_config_with_volume() {
+async fn test_create_container_from_template_with_volume() {
     use openworkspace_api::docker::ContainerConfig;
     use std::fs;
 
     let client = setup().await;
-    let name = format!("ow_test_docker_config_vol_{}", std::process::id());
+    let name = format!("ow_test_docker_template_vol_{}", std::process::id());
     let tmp_dir = std::env::temp_dir().join(format!("ow_test_vol_{}", std::process::id()));
     fs::create_dir_all(&tmp_dir).unwrap();
 
@@ -169,7 +169,7 @@ async fn test_create_container_from_config_with_volume() {
     };
 
     let id = client
-        .create_container_from_config(&name, 3, &config, "test_password")
+        .create_container_from_template(&name, 3, &config, "test_password")
         .await
         .unwrap();
     assert!(!id.is_empty());
@@ -192,7 +192,7 @@ async fn test_stop_nonexistent_container_returns_error() {
 }
 
 #[tokio::test]
-async fn test_create_container_from_config_with_exec() {
+async fn test_create_container_from_template_with_exec() {
     use openworkspace_api::docker::ContainerConfig;
 
     let client = setup().await;
@@ -213,7 +213,7 @@ async fn test_create_container_from_config_with_exec() {
     };
 
     let id = client
-        .create_container_from_config(&name, 1, &config, "test_password")
+        .create_container_from_template(&name, 1, &config, "test_password")
         .await
         .unwrap();
     assert!(!id.is_empty());
@@ -223,7 +223,7 @@ async fn test_create_container_from_config_with_exec() {
 }
 
 #[tokio::test]
-async fn test_create_container_from_config_with_hostname() {
+async fn test_create_container_from_template_with_hostname() {
     use openworkspace_api::docker::ContainerConfig;
 
     let client = setup().await;
@@ -244,14 +244,14 @@ async fn test_create_container_from_config_with_hostname() {
     };
 
     let id = client
-        .create_container_from_config(&name, 1, &config, "test_password")
+        .create_container_from_template(&name, 1, &config, "test_password")
         .await
         .unwrap();
     assert!(!id.is_empty());
 }
 
 #[tokio::test]
-async fn test_create_container_from_config_command_from_run_config() {
+async fn test_create_container_from_template_command_from_run_config() {
     use openworkspace_api::docker::ContainerConfig;
 
     let client = setup().await;
@@ -272,7 +272,7 @@ async fn test_create_container_from_config_command_from_run_config() {
     };
 
     let id = client
-        .create_container_from_config(&name, 1, &config, "test_password")
+        .create_container_from_template(&name, 1, &config, "test_password")
         .await
         .unwrap();
     assert!(!id.is_empty());
@@ -282,7 +282,7 @@ async fn test_create_container_from_config_command_from_run_config() {
 }
 
 #[tokio::test]
-async fn test_create_container_from_config_no_command() {
+async fn test_create_container_from_template_no_command() {
     use openworkspace_api::docker::ContainerConfig;
 
     let client = setup().await;
@@ -300,11 +300,11 @@ async fn test_create_container_from_config_no_command() {
         command: None,
     };
 
-    let _result = client.create_container_from_config(&name, 1, &config, "test_password").await;
+    let _result = client.create_container_from_template(&name, 1, &config, "test_password").await;
 }
 
 #[tokio::test]
-async fn test_create_container_from_config_with_shm_size_and_network_mode() {
+async fn test_create_container_from_template_with_shm_size_and_network_mode() {
     use openworkspace_api::docker::ContainerConfig;
 
     let client = setup().await;
@@ -325,7 +325,7 @@ async fn test_create_container_from_config_with_shm_size_and_network_mode() {
     };
 
     let id = client
-        .create_container_from_config(&name, 1, &config, "test_password")
+        .create_container_from_template(&name, 1, &config, "test_password")
         .await
         .unwrap();
     assert!(!id.is_empty());
@@ -362,7 +362,7 @@ async fn test_docker_client_new() {
 }
 
 #[tokio::test]
-async fn test_create_container_from_config_with_gpu() {
+async fn test_create_container_from_template_with_gpu() {
     use openworkspace_api::docker::ContainerConfig;
 
     let client = setup().await;
@@ -381,7 +381,7 @@ async fn test_create_container_from_config_with_gpu() {
     };
 
     let result = client
-        .create_container_from_config(&name, 1, &config, "test_password")
+        .create_container_from_template(&name, 1, &config, "test_password")
         .await;
     match result {
         Ok(id) => {
@@ -395,7 +395,7 @@ async fn test_create_container_from_config_with_gpu() {
 }
 
 #[tokio::test]
-async fn test_create_container_from_config_image_already_cached() {
+async fn test_create_container_from_template_image_already_cached() {
     use openworkspace_api::docker::ContainerConfig;
 
     let client = setup().await;
@@ -414,13 +414,13 @@ async fn test_create_container_from_config_image_already_cached() {
     };
 
     let _id1 = client
-        .create_container_from_config(&name1, 1, &config, "test_password")
+        .create_container_from_template(&name1, 1, &config, "test_password")
         .await
         .unwrap();
 
     let name2 = format!("ow_test_docker_cached2_{}", std::process::id());
     let id2 = client
-        .create_container_from_config(&name2, 2, &config, "test_password")
+        .create_container_from_template(&name2, 2, &config, "test_password")
         .await
         .unwrap();
 
@@ -428,7 +428,7 @@ async fn test_create_container_from_config_image_already_cached() {
 }
 
 #[tokio::test]
-async fn test_create_container_from_config_cores_and_memory() {
+async fn test_create_container_from_template_cores_and_memory() {
     use openworkspace_api::docker::ContainerConfig;
 
     let client = setup().await;
@@ -447,7 +447,7 @@ async fn test_create_container_from_config_cores_and_memory() {
     };
 
     let id = client
-        .create_container_from_config(&name, 1, &config, "test_password")
+        .create_container_from_template(&name, 1, &config, "test_password")
         .await
         .unwrap();
     assert!(!id.is_empty());
@@ -500,7 +500,7 @@ async fn test_inspect_container_state_running() {
     };
 
     let id = client
-        .create_container_from_config(&name, 1, &config, "test_password")
+        .create_container_from_template(&name, 1, &config, "test_password")
         .await
         .unwrap();
 

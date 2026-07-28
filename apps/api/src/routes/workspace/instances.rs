@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use super::super::AppState;
 use crate::auth::{AuthUser, Role};
-use crate::db::{UserRepository, WorkspaceConfigRepository, WorkspaceInstance, WorkspaceInstanceRepository};
+use crate::db::{UserRepository, WorkspaceTemplateRepository, WorkspaceInstance, WorkspaceInstanceRepository};
 use crate::docker::ContainerConfig;
 
 pub fn routes() -> Router<AppState> {
@@ -25,10 +25,10 @@ pub fn routes() -> Router<AppState> {
         .route("/api/instances/{id}/unpause", post(unpause_instance))
 }
 
-fn instance_to_json(inst: &WorkspaceInstance, config_name: Option<&str>, owner_username: Option<&str>, owner_role: Option<&str>) -> serde_json::Value {
+fn instance_to_json(inst: &WorkspaceInstance, template_name: Option<&str>, owner_username: Option<&str>, owner_role: Option<&str>) -> serde_json::Value {
     serde_json::json!({
         "id": inst.id,
-        "config_id": inst.config_id,
+        "template_id": inst.template_id,
         "name": inst.name,
         "instance_number": inst.instance_number,
         "owner_id": inst.owner_id,
@@ -40,7 +40,7 @@ fn instance_to_json(inst: &WorkspaceInstance, config_name: Option<&str>, owner_u
         "vnc_password": inst.vnc_password,
         "mount_persistent": inst.mount_persistent,
         "resolved_volume_host_path": inst.resolved_volume_host_path,
-        "config_name": config_name,
+        "template_name": template_name,
         "created_at": inst.created_at,
         "updated_at": inst.updated_at,
     })
@@ -66,7 +66,7 @@ async fn can_manage_instance(
 
 #[derive(Deserialize)]
 struct LaunchInstanceRequest {
-    config_id: Uuid,
+    template_id: Uuid,
     mount_persistent: Option<bool>,
     resolved_volume_host_path: Option<String>,
 }
@@ -76,7 +76,7 @@ async fn list_instances(
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let instance_repo = WorkspaceInstanceRepository::new(&state.db);
-    let config_repo = WorkspaceConfigRepository::new(&state.db);
+    let template_repo = WorkspaceTemplateRepository::new(&state.db);
 
     let instances = if auth.role.can_view_all_instances() {
         instance_repo
@@ -90,11 +90,11 @@ async fn list_instances(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     };
 
-    let mut config_names = std::collections::HashMap::new();
+    let mut template_names = std::collections::HashMap::new();
     for inst in &instances {
-        if !config_names.contains_key(&inst.config_id) {
-            if let Ok(Some(config)) = config_repo.find_by_id(inst.config_id).await {
-                config_names.insert(inst.config_id, config.name);
+        if !template_names.contains_key(&inst.template_id) {
+            if let Ok(Some(template)) = template_repo.find_by_id(inst.template_id).await {
+                template_names.insert(inst.template_id, template.name);
             }
         }
     }
@@ -114,10 +114,10 @@ async fn list_instances(
     let instances_json: Vec<_> = instances
         .iter()
         .map(|inst| {
-            let config_name = config_names.get(&inst.config_id).map(|s| s.as_str());
+            let template_name = template_names.get(&inst.template_id).map(|s| s.as_str());
             let owner_username = owner_usernames.get(&inst.owner_id).map(|s| s.as_str());
             let owner_role = owner_roles.get(&inst.owner_id).map(|s| s.as_str());
-            instance_to_json(inst, config_name, owner_username, owner_role)
+            instance_to_json(inst, template_name, owner_username, owner_role)
         })
         .collect();
 
@@ -130,22 +130,22 @@ async fn launch_instance(
     Json(input): Json<LaunchInstanceRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let instance_repo = WorkspaceInstanceRepository::new(&state.db);
-    let config_repo = WorkspaceConfigRepository::new(&state.db);
+    let template_repo = WorkspaceTemplateRepository::new(&state.db);
     let user_repo = UserRepository::new(&state.db);
 
-    let config = config_repo
-        .find_by_id(input.config_id)
+    let template = template_repo
+        .find_by_id(input.template_id)
         .await
         .map_err(|e| {
-            tracing::error!("Failed to find config: {}", e);
+            tracing::error!("Failed to find template: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Failed to find config"})),
+                Json(serde_json::json!({"error": "Failed to find template"})),
             )
         })?
         .ok_or((
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Config not found"})),
+            Json(serde_json::json!({"error": "Template not found"})),
         ))?;
 
     let mount = input.mount_persistent.unwrap_or(false);
@@ -156,10 +156,10 @@ async fn launch_instance(
     };
 
     let instance = instance_repo
-        .launch(input.config_id, auth.user_id, &config.name, mount, resolved_path)
+        .launch(input.template_id, auth.user_id, &template.name, mount, resolved_path)
         .await
         .map_err(|e| {
-            tracing::error!("Failed to launch instance (config={}, owner={}): {}", input.config_id, auth.user_id, e);
+            tracing::error!("Failed to launch instance (template={}, owner={}): {}", input.template_id, auth.user_id, e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "Failed to launch instance"})),
@@ -167,26 +167,26 @@ async fn launch_instance(
         })?;
 
     tracing::info!(
-        "Instance '{}' launched (id={}, config={})",
+        "Instance '{}' launched (id={}, template={})",
         instance.name,
         instance.id,
-        config.name
+        template.name
     );
 
     let container_config = ContainerConfig {
-        image: config.image.clone(),
-        cores: config.cores,
-        memory: config.memory,
-        gpu_count: config.gpu_count,
-        run_config: config.run_config.clone(),
-        exec_config: config.exec_config.clone(),
-        volume_mappings: config.volume_mappings.clone(),
+        image: template.image.clone(),
+        cores: template.cores,
+        memory: template.memory,
+        gpu_count: template.gpu_count,
+        run_config: template.run_config.clone(),
+        exec_config: template.exec_config.clone(),
+        volume_mappings: template.volume_mappings.clone(),
         persistent_volume: resolved_path.map(|s| s.to_string()),
         command: None,
     };
 
     match state.docker
-        .create_container_from_config(&instance.name, instance.instance_number, &container_config, &instance.vnc_password)
+        .create_container_from_template(&instance.name, instance.instance_number, &container_config, &instance.vnc_password)
         .await
     {
         Ok(container_id) => {
@@ -215,7 +215,7 @@ async fn launch_instance(
             let owner = user_repo.find_by_id(inst.owner_id).await.ok().flatten();
             let owner_username = owner.as_ref().map(|u| u.1.as_str());
             let owner_role = owner.as_ref().map(|u| u.3.as_str());
-            Ok(Json(serde_json::json!({ "instance": instance_to_json(&inst, Some(&config.name), owner_username, owner_role) })))
+            Ok(Json(serde_json::json!({ "instance": instance_to_json(&inst, Some(&template.name), owner_username, owner_role) })))
         }
         Err(e) => {
             tracing::warn!(
@@ -229,7 +229,7 @@ async fn launch_instance(
             let owner = user_repo.find_by_id(inst.owner_id).await.ok().flatten();
             let owner_username = owner.as_ref().map(|u| u.1.as_str());
             let owner_role = owner.as_ref().map(|u| u.3.as_str());
-            Ok(Json(serde_json::json!({ "instance": instance_to_json(&inst, Some(&config.name), owner_username, owner_role), "docker_error": e })))
+            Ok(Json(serde_json::json!({ "instance": instance_to_json(&inst, Some(&template.name), owner_username, owner_role), "docker_error": e })))
         }
     }
 }
@@ -240,7 +240,7 @@ async fn get_instance(
     _auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let instance_repo = WorkspaceInstanceRepository::new(&state.db);
-    let config_repo = WorkspaceConfigRepository::new(&state.db);
+    let template_repo = WorkspaceTemplateRepository::new(&state.db);
     let user_repo = UserRepository::new(&state.db);
 
     let instance = instance_repo
@@ -249,18 +249,18 @@ async fn get_instance(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let config_name = config_repo
-        .find_by_id(instance.config_id)
+    let template_name = template_repo
+        .find_by_id(instance.template_id)
         .await
         .ok()
         .flatten()
-        .map(|c| c.name);
+        .map(|t| t.name);
 
     let owner = user_repo.find_by_id(instance.owner_id).await.ok().flatten();
     let owner_username = owner.as_ref().map(|u| u.1.as_str());
     let owner_role = owner.as_ref().map(|u| u.3.as_str());
 
-    Ok(Json(serde_json::json!({ "instance": instance_to_json(&instance, config_name.as_deref(), owner_username, owner_role) })))
+    Ok(Json(serde_json::json!({ "instance": instance_to_json(&instance, template_name.as_deref(), owner_username, owner_role) })))
 }
 
 async fn delete_instance(
@@ -306,7 +306,7 @@ async fn start_instance(
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let instance_repo = WorkspaceInstanceRepository::new(&state.db);
-    let config_repo = WorkspaceConfigRepository::new(&state.db);
+    let template_repo = WorkspaceTemplateRepository::new(&state.db);
 
     let instance = instance_repo
         .find_by_id(id)
@@ -362,20 +362,20 @@ async fn start_instance(
                 }
                 _ => {
                     tracing::warn!("Container for '{}' not found, creating new one", instance.name);
-                    let config = config_repo.find_by_id(instance.config_id).await.ok().flatten();
-                    if let Some(config) = config {
+                    let template = template_repo.find_by_id(instance.template_id).await.ok().flatten();
+                    if let Some(template) = template {
                         let container_config = ContainerConfig {
-                            image: config.image,
-                            cores: config.cores,
-                            memory: config.memory,
-                            gpu_count: config.gpu_count,
-                            run_config: config.run_config,
-                            exec_config: config.exec_config,
-                            volume_mappings: config.volume_mappings,
+                            image: template.image,
+                            cores: template.cores,
+                            memory: template.memory,
+                            gpu_count: template.gpu_count,
+                            run_config: template.run_config,
+                            exec_config: template.exec_config,
+                            volume_mappings: template.volume_mappings,
                             persistent_volume: instance.resolved_volume_host_path.clone(),
                             command: None,
                         };
-                        let new_id = state.docker.create_container_from_config(&instance.name, instance.instance_number, &container_config, &instance.vnc_password).await.map_err(|e| {
+                        let new_id = state.docker.create_container_from_template(&instance.name, instance.instance_number, &container_config, &instance.vnc_password).await.map_err(|e| {
                             tracing::error!("Failed to create container for '{}': {}", instance.name, e);
                             (
                                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -386,7 +386,7 @@ async fn start_instance(
                     } else {
                         return Err((
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(serde_json::json!({"error": "Config not found for instance"})),
+                            Json(serde_json::json!({"error": "Template not found for instance"})),
                         ));
                     }
                 }
@@ -394,20 +394,20 @@ async fn start_instance(
         }
         None => {
             tracing::info!("No container for instance '{}', creating new one", instance.name);
-            let config = config_repo.find_by_id(instance.config_id).await.ok().flatten();
-            if let Some(config) = config {
+            let template = template_repo.find_by_id(instance.template_id).await.ok().flatten();
+            if let Some(template) = template {
                 let container_config = ContainerConfig {
-                    image: config.image,
-                    cores: config.cores,
-                    memory: config.memory,
-                    gpu_count: config.gpu_count,
-                    run_config: config.run_config,
-                    exec_config: config.exec_config,
-                    volume_mappings: config.volume_mappings,
+                    image: template.image,
+                    cores: template.cores,
+                    memory: template.memory,
+                    gpu_count: template.gpu_count,
+                    run_config: template.run_config,
+                    exec_config: template.exec_config,
+                    volume_mappings: template.volume_mappings,
                     persistent_volume: instance.resolved_volume_host_path.clone(),
                     command: None,
                 };
-                let new_id = state.docker.create_container_from_config(&instance.name, instance.instance_number, &container_config, &instance.vnc_password).await.map_err(|e| {
+                let new_id = state.docker.create_container_from_template(&instance.name, instance.instance_number, &container_config, &instance.vnc_password).await.map_err(|e| {
                     tracing::error!("Failed to create container for '{}': {}", instance.name, e);
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -418,7 +418,7 @@ async fn start_instance(
             } else {
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": "Config not found for instance"})),
+                    Json(serde_json::json!({"error": "Template not found for instance"})),
                 ));
             }
         }

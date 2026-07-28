@@ -29,7 +29,7 @@
 
       <div class="visual-content">
         <h1 class="hero-title">Your Cloud Desktop,<br />Accessible Anywhere</h1>
-        <p class="hero-desc">Log in from any browser to access your personal workspace. No installation needed — your files and tools are ready whenever you are.</p>
+        <p class="hero-desc">Log in from any browser to access your personal instance. No installation needed — your files and tools are ready whenever you are.</p>
 
       </div>
 
@@ -43,7 +43,7 @@
     <div class="panel-form">
       <div class="form-header">
         <h2>Welcome Back</h2>
-        <p>Sign in to access your workspace</p>
+        <p>Sign in to access your instance</p>
       </div>
 
       <form class="form" onsubmit={onSubmit}>

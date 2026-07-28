@@ -142,18 +142,18 @@ async fn user_delete_nonexistent() {
     assert!(!deleted);
 }
 
-// ── WorkspaceConfigRepository tests ───────────────────────────
+// ── WorkspaceTemplateRepository tests ───────────────────────────
 
 #[tokio::test]
 async fn config_create_and_find() {
     let db = setup_db().await;
-    let config_repo = WorkspaceConfigRepository::new(&db);
+    let template_repo = WorkspaceTemplateRepository::new(&db);
     let user_repo = UserRepository::new(&db);
 
     user_repo.seed_admin("pass").await.unwrap();
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
-    let config = config_repo
+    let config = template_repo
         .create(
             "my-config",
             Some("A test config"),
@@ -179,7 +179,7 @@ async fn config_create_and_find() {
     assert_eq!(config.description, Some("A test config".to_string()));
     assert_eq!(config.persistent_storage_path, Some("/host/data".to_string()));
 
-    let found = config_repo.find_by_id(config.id).await.unwrap();
+    let found = template_repo.find_by_id(config.id).await.unwrap();
     assert!(found.is_some());
     assert_eq!(found.unwrap().name, "my-config");
 }
@@ -187,58 +187,58 @@ async fn config_create_and_find() {
 #[tokio::test]
 async fn config_list_by_owner() {
     let db = setup_db().await;
-    let config_repo = WorkspaceConfigRepository::new(&db);
+    let template_repo = WorkspaceTemplateRepository::new(&db);
     let user_repo = UserRepository::new(&db);
 
     user_repo.seed_admin("pass").await.unwrap();
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
-    config_repo
+    template_repo
         .create("cfg1", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
-    config_repo
+    template_repo
         .create("cfg2", None, admin.0, "img:2", 2, 2048, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
 
-    let configs = config_repo.list_by_owner(admin.0).await.unwrap();
+    let configs = template_repo.list_by_owner(admin.0).await.unwrap();
     assert_eq!(configs.len(), 2);
 }
 
 #[tokio::test]
 async fn config_list_all() {
     let db = setup_db().await;
-    let config_repo = WorkspaceConfigRepository::new(&db);
+    let template_repo = WorkspaceTemplateRepository::new(&db);
     let user_repo = UserRepository::new(&db);
 
     user_repo.seed_admin("pass").await.unwrap();
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
-    config_repo
+    template_repo
         .create("cfg1", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
 
-    let configs = config_repo.list_all().await.unwrap();
+    let configs = template_repo.list_all().await.unwrap();
     assert_eq!(configs.len(), 1);
 }
 
 #[tokio::test]
 async fn config_update() {
     let db = setup_db().await;
-    let config_repo = WorkspaceConfigRepository::new(&db);
+    let template_repo = WorkspaceTemplateRepository::new(&db);
     let user_repo = UserRepository::new(&db);
 
     user_repo.seed_admin("pass").await.unwrap();
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
-    let config = config_repo
+    let config = template_repo
         .create("old-name", None, admin.0, "old:img", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
 
-    let updated = config_repo
+    let updated = template_repo
         .update(
             config.id,
             "new-name",
@@ -257,7 +257,7 @@ async fn config_update() {
         .unwrap();
     assert!(updated);
 
-    let found = config_repo.find_by_id(config.id).await.unwrap().unwrap();
+    let found = template_repo.find_by_id(config.id).await.unwrap().unwrap();
     assert_eq!(found.name, "new-name");
     assert_eq!(found.image, "new:img");
     assert_eq!(found.cores, 8);
@@ -270,52 +270,52 @@ async fn config_update() {
 #[tokio::test]
 async fn config_delete() {
     let db = setup_db().await;
-    let config_repo = WorkspaceConfigRepository::new(&db);
+    let template_repo = WorkspaceTemplateRepository::new(&db);
     let user_repo = UserRepository::new(&db);
 
     user_repo.seed_admin("pass").await.unwrap();
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
-    let config = config_repo
+    let config = template_repo
         .create("del", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
 
-    let deleted = config_repo.delete(config.id).await.unwrap();
+    let deleted = template_repo.delete(config.id).await.unwrap();
     assert!(deleted);
-    assert!(config_repo.find_by_id(config.id).await.unwrap().is_none());
+    assert!(template_repo.find_by_id(config.id).await.unwrap().is_none());
 }
 
 #[tokio::test]
 async fn config_delete_nonexistent() {
     let db = setup_db().await;
-    let config_repo = WorkspaceConfigRepository::new(&db);
+    let template_repo = WorkspaceTemplateRepository::new(&db);
 
-    let deleted = config_repo.delete(uuid::Uuid::new_v4()).await.unwrap();
+    let deleted = template_repo.delete(uuid::Uuid::new_v4()).await.unwrap();
     assert!(!deleted);
 }
 
 #[tokio::test]
 async fn config_count_instances() {
     let db = setup_db().await;
-    let config_repo = WorkspaceConfigRepository::new(&db);
+    let template_repo = WorkspaceTemplateRepository::new(&db);
     let instance_repo = WorkspaceInstanceRepository::new(&db);
     let user_repo = UserRepository::new(&db);
 
     user_repo.seed_admin("pass").await.unwrap();
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
-    let config = config_repo
+    let config = template_repo
         .create("counted", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
 
-    assert_eq!(config_repo.count_instances(config.id).await.unwrap(), 0);
+    assert_eq!(template_repo.count_instances(config.id).await.unwrap(), 0);
 
     instance_repo.launch(config.id, admin.0, "counted", false, None).await.unwrap();
     instance_repo.launch(config.id, admin.0, "counted", false, None).await.unwrap();
 
-    assert_eq!(config_repo.count_instances(config.id).await.unwrap(), 2);
+    assert_eq!(template_repo.count_instances(config.id).await.unwrap(), 2);
 }
 
 // ── WorkspaceInstanceRepository tests ─────────────────────────
@@ -323,14 +323,14 @@ async fn config_count_instances() {
 #[tokio::test]
 async fn instance_launch_and_find() {
     let db = setup_db().await;
-    let config_repo = WorkspaceConfigRepository::new(&db);
+    let template_repo = WorkspaceTemplateRepository::new(&db);
     let instance_repo = WorkspaceInstanceRepository::new(&db);
     let user_repo = UserRepository::new(&db);
 
     user_repo.seed_admin("pass").await.unwrap();
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
-    let config = config_repo
+    let config = template_repo
         .create("inst-cfg", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
@@ -340,7 +340,7 @@ async fn instance_launch_and_find() {
         .await
         .unwrap();
 
-    assert_eq!(inst.config_id, config.id);
+    assert_eq!(inst.template_id, config.id);
     assert_eq!(inst.owner_id, admin.0);
     assert_eq!(inst.status, "stopped");
     assert!(inst.container_id.is_none());
@@ -357,14 +357,14 @@ async fn instance_launch_and_find() {
 #[tokio::test]
 async fn instance_launch_auto_increments_number() {
     let db = setup_db().await;
-    let config_repo = WorkspaceConfigRepository::new(&db);
+    let template_repo = WorkspaceTemplateRepository::new(&db);
     let instance_repo = WorkspaceInstanceRepository::new(&db);
     let user_repo = UserRepository::new(&db);
 
     user_repo.seed_admin("pass").await.unwrap();
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
-    let config = config_repo
+    let config = template_repo
         .create("multi", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
@@ -384,14 +384,14 @@ async fn instance_launch_auto_increments_number() {
 #[tokio::test]
 async fn instance_find_by_vnc_token() {
     let db = setup_db().await;
-    let config_repo = WorkspaceConfigRepository::new(&db);
+    let template_repo = WorkspaceTemplateRepository::new(&db);
     let instance_repo = WorkspaceInstanceRepository::new(&db);
     let user_repo = UserRepository::new(&db);
 
     user_repo.seed_admin("pass").await.unwrap();
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
-    let config = config_repo
+    let config = template_repo
         .create("vnc-cfg", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
@@ -409,7 +409,7 @@ async fn instance_find_by_vnc_token() {
 #[tokio::test]
 async fn instance_list_by_owner() {
     let db = setup_db().await;
-    let config_repo = WorkspaceConfigRepository::new(&db);
+    let template_repo = WorkspaceTemplateRepository::new(&db);
     let instance_repo = WorkspaceInstanceRepository::new(&db);
     let user_repo = UserRepository::new(&db);
 
@@ -419,7 +419,7 @@ async fn instance_list_by_owner() {
     user_repo.create("bob", "hash", "user").await.unwrap();
     let bob = user_repo.find_by_username("bob").await.unwrap().unwrap();
 
-    let config = config_repo
+    let config = template_repo
         .create("list-cfg", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
@@ -437,14 +437,14 @@ async fn instance_list_by_owner() {
 #[tokio::test]
 async fn instance_list_all() {
     let db = setup_db().await;
-    let config_repo = WorkspaceConfigRepository::new(&db);
+    let template_repo = WorkspaceTemplateRepository::new(&db);
     let instance_repo = WorkspaceInstanceRepository::new(&db);
     let user_repo = UserRepository::new(&db);
 
     user_repo.seed_admin("pass").await.unwrap();
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
-    let config = config_repo
+    let config = template_repo
         .create("all-cfg", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
@@ -459,14 +459,14 @@ async fn instance_list_all() {
 #[tokio::test]
 async fn instance_update_status() {
     let db = setup_db().await;
-    let config_repo = WorkspaceConfigRepository::new(&db);
+    let template_repo = WorkspaceTemplateRepository::new(&db);
     let instance_repo = WorkspaceInstanceRepository::new(&db);
     let user_repo = UserRepository::new(&db);
 
     user_repo.seed_admin("pass").await.unwrap();
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
-    let config = config_repo
+    let config = template_repo
         .create("status-cfg", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
@@ -484,14 +484,14 @@ async fn instance_update_status() {
 #[tokio::test]
 async fn instance_update_container_id() {
     let db = setup_db().await;
-    let config_repo = WorkspaceConfigRepository::new(&db);
+    let template_repo = WorkspaceTemplateRepository::new(&db);
     let instance_repo = WorkspaceInstanceRepository::new(&db);
     let user_repo = UserRepository::new(&db);
 
     user_repo.seed_admin("pass").await.unwrap();
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
-    let config = config_repo
+    let config = template_repo
         .create("cid-cfg", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
@@ -508,14 +508,14 @@ async fn instance_update_container_id() {
 #[tokio::test]
 async fn instance_delete() {
     let db = setup_db().await;
-    let config_repo = WorkspaceConfigRepository::new(&db);
+    let template_repo = WorkspaceTemplateRepository::new(&db);
     let instance_repo = WorkspaceInstanceRepository::new(&db);
     let user_repo = UserRepository::new(&db);
 
     user_repo.seed_admin("pass").await.unwrap();
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
-    let config = config_repo
+    let config = template_repo
         .create("del-cfg", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
@@ -608,23 +608,23 @@ async fn registry_cached_upsert() {
     assert_eq!(cached["v"], 2);
 }
 
-// ── Instance list_by_config ─────────────────────────────────
+// ── Instance list_by_template ─────────────────────────────────
 
 #[tokio::test]
-async fn instance_list_by_config() {
+async fn instance_list_by_template() {
     let db = setup_db().await;
-    let config_repo = WorkspaceConfigRepository::new(&db);
+    let template_repo = WorkspaceTemplateRepository::new(&db);
     let instance_repo = WorkspaceInstanceRepository::new(&db);
     let user_repo = UserRepository::new(&db);
 
     user_repo.seed_admin("pass").await.unwrap();
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
-    let cfg1 = config_repo
+    let cfg1 = template_repo
         .create("lbc1", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
-    let cfg2 = config_repo
+    let cfg2 = template_repo
         .create("lbc2", None, admin.0, "img:2", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
@@ -633,33 +633,33 @@ async fn instance_list_by_config() {
     instance_repo.launch(cfg1.id, admin.0, "lbc1", false, None).await.unwrap();
     instance_repo.launch(cfg2.id, admin.0, "lbc2", false, None).await.unwrap();
 
-    let list1 = instance_repo.list_by_config(cfg1.id).await.unwrap();
+    let list1 = instance_repo.list_by_template(cfg1.id).await.unwrap();
     assert_eq!(list1.len(), 2);
     for inst in &list1 {
-        assert_eq!(inst.config_id, cfg1.id);
+        assert_eq!(inst.template_id, cfg1.id);
     }
 
-    let list2 = instance_repo.list_by_config(cfg2.id).await.unwrap();
+    let list2 = instance_repo.list_by_template(cfg2.id).await.unwrap();
     assert_eq!(list2.len(), 1);
-    assert_eq!(list2[0].config_id, cfg2.id);
+    assert_eq!(list2[0].template_id, cfg2.id);
 }
 
 #[tokio::test]
-async fn instance_list_by_config_empty() {
+async fn instance_list_by_template_empty() {
     let db = setup_db().await;
-    let config_repo = WorkspaceConfigRepository::new(&db);
+    let template_repo = WorkspaceTemplateRepository::new(&db);
     let instance_repo = WorkspaceInstanceRepository::new(&db);
     let user_repo = UserRepository::new(&db);
 
     user_repo.seed_admin("pass").await.unwrap();
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
-    let cfg = config_repo
+    let cfg = template_repo
         .create("lbc-empty", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
 
-    let list = instance_repo.list_by_config(cfg.id).await.unwrap();
+    let list = instance_repo.list_by_template(cfg.id).await.unwrap();
     assert!(list.is_empty());
 }
 
@@ -680,7 +680,7 @@ fn config_model_from_converts_all_fields() {
     let owner_id = uuid::Uuid::new_v4();
     let now = chrono::Utc::now();
 
-    let model = workspace_config::Model {
+    let model = workspace_template::Model {
         id,
         name: "test-cfg".to_string(),
         description: Some("desc".to_string()),
@@ -698,7 +698,7 @@ fn config_model_from_converts_all_fields() {
         updated_at: now,
     };
 
-    let config: WorkspaceConfig = model.into();
+    let config: WorkspaceTemplate = model.into();
     assert_eq!(config.id, id);
     assert_eq!(config.name, "test-cfg");
     assert_eq!(config.description, Some("desc".to_string()));
@@ -716,7 +716,7 @@ fn config_model_from_converts_all_fields() {
 
 #[test]
 fn config_model_from_null_optionals() {
-    let model = workspace_config::Model {
+    let model = workspace_template::Model {
         id: uuid::Uuid::new_v4(),
         name: "minimal".to_string(),
         description: None,
@@ -734,7 +734,7 @@ fn config_model_from_null_optionals() {
         updated_at: chrono::Utc::now(),
     };
 
-    let config: WorkspaceConfig = model.into();
+    let config: WorkspaceTemplate = model.into();
     assert!(config.description.is_none());
     assert!(config.docker_registry.is_none());
     assert!(config.persistent_storage_path.is_none());
@@ -743,13 +743,13 @@ fn config_model_from_null_optionals() {
 #[test]
 fn instance_model_from_converts_all_fields() {
     let id = uuid::Uuid::new_v4();
-    let config_id = uuid::Uuid::new_v4();
+    let template_id = uuid::Uuid::new_v4();
     let owner_id = uuid::Uuid::new_v4();
     let now = chrono::Utc::now();
 
     let model = workspace_instance::Model {
         id,
-        config_id,
+        template_id,
         name: "inst-1".to_string(),
         instance_number: 1,
         owner_id,
@@ -765,7 +765,7 @@ fn instance_model_from_converts_all_fields() {
 
     let inst: WorkspaceInstance = model.into();
     assert_eq!(inst.id, id);
-    assert_eq!(inst.config_id, config_id);
+    assert_eq!(inst.template_id, template_id);
     assert_eq!(inst.name, "inst-1");
     assert_eq!(inst.instance_number, 1);
     assert_eq!(inst.owner_id, owner_id);
@@ -780,7 +780,7 @@ fn instance_model_from_converts_all_fields() {
 fn instance_model_from_none_optionals() {
     let model = workspace_instance::Model {
         id: uuid::Uuid::new_v4(),
-        config_id: uuid::Uuid::new_v4(),
+        template_id: uuid::Uuid::new_v4(),
         name: "inst-none".to_string(),
         instance_number: 1,
         owner_id: uuid::Uuid::new_v4(),
@@ -803,14 +803,14 @@ fn instance_model_from_none_optionals() {
 #[tokio::test]
 async fn instance_update_container_id_success() {
     let db = setup_db().await;
-    let config_repo = WorkspaceConfigRepository::new(&db);
+    let template_repo = WorkspaceTemplateRepository::new(&db);
     let instance_repo = WorkspaceInstanceRepository::new(&db);
     let user_repo = UserRepository::new(&db);
 
     user_repo.seed_admin("pass").await.unwrap();
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
-    let config = config_repo
+    let config = template_repo
         .create("cid-success", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
@@ -827,14 +827,14 @@ async fn instance_update_container_id_success() {
 #[tokio::test]
 async fn instance_update_status_success() {
     let db = setup_db().await;
-    let config_repo = WorkspaceConfigRepository::new(&db);
+    let template_repo = WorkspaceTemplateRepository::new(&db);
     let instance_repo = WorkspaceInstanceRepository::new(&db);
     let user_repo = UserRepository::new(&db);
 
     user_repo.seed_admin("pass").await.unwrap();
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
-    let config = config_repo
+    let config = template_repo
         .create("status-success", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();

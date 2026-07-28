@@ -23,7 +23,7 @@ server:
   allow_environment_variables_to_override_config_settings: true
 "#;
 
-/// Full configuration for creating a container from a workspace config.
+/// Full configuration for creating a container from a workspace template.
 pub struct ContainerConfig {
     pub image: String,
     pub cores: i32,
@@ -53,7 +53,7 @@ pub trait DockerService: Send + Sync {
         image: &str,
     ) -> Result<String, String>;
 
-    async fn create_container_from_config(
+    async fn create_container_from_template(
         &self,
         container_name: &str,
         instance_number: i32,
@@ -169,9 +169,9 @@ impl DockerService for DockerClient {
         Ok(container.id)
     }
 
-    /// Create a container from a full workspace config, applying all Docker settings.
+    /// Create a container from a full workspace template, applying all Docker settings.
     /// Returns container_id.
-    async fn create_container_from_config(
+    async fn create_container_from_template(
         &self,
         container_name: &str,
         instance_number: i32,

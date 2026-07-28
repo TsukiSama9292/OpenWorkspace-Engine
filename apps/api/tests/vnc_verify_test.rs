@@ -94,14 +94,14 @@ async fn test_vnc_verify_db_hit_running() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let config_resp = ctx.post("/api/configs", &serde_json::json!({
+    let config_resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "vnc-verify-test",
         "image": "busybox:1"
     })).await;
-    let config_id = config_resp.json::<serde_json::Value>().await.unwrap()["config"]["id"].as_str().unwrap().to_string();
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
 
     let launch_resp = ctx.post("/api/instances", &serde_json::json!({
-        "config_id": config_id
+        "template_id": template_id
     })).await;
     let launch_body: serde_json::Value = launch_resp.json().await.unwrap();
     let instance_id = launch_body["instance"]["id"].as_str().unwrap();
@@ -137,14 +137,14 @@ async fn test_vnc_verify_db_hit_not_running() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let config_resp = ctx.post("/api/configs", &serde_json::json!({
+    let config_resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "vnc-verify-stopped",
         "image": "busybox:1"
     })).await;
-    let config_id = config_resp.json::<serde_json::Value>().await.unwrap()["config"]["id"].as_str().unwrap().to_string();
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
 
     let launch_resp = ctx.post("/api/instances", &serde_json::json!({
-        "config_id": config_id
+        "template_id": template_id
     })).await;
     let launch_body: serde_json::Value = launch_resp.json().await.unwrap();
     let instance_id = launch_body["instance"]["id"].as_str().unwrap();

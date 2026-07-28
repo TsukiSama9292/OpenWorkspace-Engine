@@ -44,13 +44,13 @@ async fn test_list_instances_returns_owner_username() {
 }
 
 #[tokio::test]
-async fn test_launch_instance_config_not_found() {
+async fn test_launch_instance_template_not_found() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let fake_config_id = uuid::Uuid::new_v4();
+    let fake_template_id = uuid::Uuid::new_v4();
     let resp = ctx.post("/api/instances", &serde_json::json!({
-        "config_id": fake_config_id
+        "template_id": fake_template_id
     })).await;
     assert_eq!(resp.status(), 404);
 }
@@ -110,9 +110,9 @@ async fn test_launch_with_empty_body() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let config_id = uuid::Uuid::new_v4();
+    let template_id = uuid::Uuid::new_v4();
     let resp = ctx.post("/api/instances", &serde_json::json!({
-        "config_id": config_id
+        "template_id": template_id
     })).await;
     assert_eq!(resp.status(), 404);
 }
@@ -129,14 +129,14 @@ async fn test_get_existing_instance() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let config_resp = ctx.post("/api/configs", &serde_json::json!({
+    let config_resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "get-inst-test",
         "image": "busybox:1"
     })).await;
-    let config_id = config_resp.json::<serde_json::Value>().await.unwrap()["config"]["id"].as_str().unwrap().to_string();
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
 
     let launch_resp = ctx.post("/api/instances", &serde_json::json!({
-        "config_id": config_id
+        "template_id": template_id
     })).await;
     let launch_body: serde_json::Value = launch_resp.json().await.unwrap();
     let instance_id = launch_body["instance"]["id"].as_str().unwrap();
@@ -144,7 +144,7 @@ async fn test_get_existing_instance() {
     let resp = ctx.get(&format!("/api/instances/{}", instance_id)).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["instance"]["config_name"].as_str().unwrap(), "get-inst-test");
+    assert_eq!(body["instance"]["template_name"].as_str().unwrap(), "get-inst-test");
     assert!(body["instance"]["owner_username"].is_string());
 }
 
@@ -153,14 +153,14 @@ async fn test_delete_existing_instance() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let config_resp = ctx.post("/api/configs", &serde_json::json!({
+    let config_resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "del-inst-test",
         "image": "busybox:1"
     })).await;
-    let config_id = config_resp.json::<serde_json::Value>().await.unwrap()["config"]["id"].as_str().unwrap().to_string();
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
 
     let launch_resp = ctx.post("/api/instances", &serde_json::json!({
-        "config_id": config_id
+        "template_id": template_id
     })).await;
     let launch_body: serde_json::Value = launch_resp.json().await.unwrap();
     let instance_id = launch_body["instance"]["id"].as_str().unwrap();
@@ -177,21 +177,21 @@ async fn test_list_instances_with_data() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let config_resp = ctx.post("/api/configs", &serde_json::json!({
+    let config_resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "list-inst-test",
         "image": "busybox:1"
     })).await;
-    let config_id = config_resp.json::<serde_json::Value>().await.unwrap()["config"]["id"].as_str().unwrap().to_string();
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
 
     ctx.post("/api/instances", &serde_json::json!({
-        "config_id": config_id
+        "template_id": template_id
     })).await;
 
     let resp = ctx.get("/api/instances").await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     let instances = body["instances"].as_array().unwrap();
-    assert!(instances.iter().any(|i| i["config_name"] == "list-inst-test"));
+    assert!(instances.iter().any(|i| i["template_name"] == "list-inst-test"));
 }
 
 #[tokio::test]
@@ -199,14 +199,14 @@ async fn test_start_instance_already_running_conflict() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let config_resp = ctx.post("/api/configs", &serde_json::json!({
+    let config_resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "start-running",
         "image": "busybox:1"
     })).await;
-    let config_id = config_resp.json::<serde_json::Value>().await.unwrap()["config"]["id"].as_str().unwrap().to_string();
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
 
     let launch_resp = ctx.post("/api/instances", &serde_json::json!({
-        "config_id": config_id
+        "template_id": template_id
     })).await;
     let launch_body: serde_json::Value = launch_resp.json().await.unwrap();
     let instance_id = launch_body["instance"]["id"].as_str().unwrap();
@@ -222,14 +222,14 @@ async fn test_stop_instance_already_stopped_conflict() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let config_resp = ctx.post("/api/configs", &serde_json::json!({
+    let config_resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "stop-stopped",
         "image": "busybox:1"
     })).await;
-    let config_id = config_resp.json::<serde_json::Value>().await.unwrap()["config"]["id"].as_str().unwrap().to_string();
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
 
     let launch_resp = ctx.post("/api/instances", &serde_json::json!({
-        "config_id": config_id
+        "template_id": template_id
     })).await;
     let launch_body: serde_json::Value = launch_resp.json().await.unwrap();
     let instance_id = launch_body["instance"]["id"].as_str().unwrap();
@@ -246,14 +246,14 @@ async fn test_pause_instance_not_running_conflict() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let config_resp = ctx.post("/api/configs", &serde_json::json!({
+    let config_resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "pause-stopped",
         "image": "busybox:1"
     })).await;
-    let config_id = config_resp.json::<serde_json::Value>().await.unwrap()["config"]["id"].as_str().unwrap().to_string();
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
 
     let launch_resp = ctx.post("/api/instances", &serde_json::json!({
-        "config_id": config_id
+        "template_id": template_id
     })).await;
     let launch_body: serde_json::Value = launch_resp.json().await.unwrap();
     let instance_id = launch_body["instance"]["id"].as_str().unwrap();
@@ -269,14 +269,14 @@ async fn test_unpause_instance_not_paused_conflict() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let config_resp = ctx.post("/api/configs", &serde_json::json!({
+    let config_resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "unpause-stopped",
         "image": "busybox:1"
     })).await;
-    let config_id = config_resp.json::<serde_json::Value>().await.unwrap()["config"]["id"].as_str().unwrap().to_string();
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
 
     let launch_resp = ctx.post("/api/instances", &serde_json::json!({
-        "config_id": config_id
+        "template_id": template_id
     })).await;
     let launch_body: serde_json::Value = launch_resp.json().await.unwrap();
     let instance_id = launch_body["instance"]["id"].as_str().unwrap();
@@ -290,14 +290,14 @@ async fn test_list_instances_as_non_admin() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let config_resp = ctx.post("/api/configs", &serde_json::json!({
+    let config_resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "nonadmin-list",
         "image": "busybox:1"
     })).await;
-    let config_id = config_resp.json::<serde_json::Value>().await.unwrap()["config"]["id"].as_str().unwrap().to_string();
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
 
     ctx.post("/api/instances", &serde_json::json!({
-        "config_id": config_id
+        "template_id": template_id
     })).await;
 
     let resp = ctx.post("/api/users", &serde_json::json!({
@@ -321,15 +321,15 @@ async fn test_stop_instance_when_paused_unpause_first() {
     common::ensure_network().await;
     ctx.login_admin().await;
 
-    let config_resp = ctx.post("/api/configs", &serde_json::json!({
+    let config_resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "stop-paused-test",
         "image": "busybox:1",
         "run_config": { "command": ["sleep", "3600"] }
     })).await;
-    let config_id = config_resp.json::<serde_json::Value>().await.unwrap()["config"]["id"].as_str().unwrap().to_string();
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
 
     let launch_resp = ctx.post("/api/instances", &serde_json::json!({
-        "config_id": config_id
+        "template_id": template_id
     })).await;
     let launch_body: serde_json::Value = launch_resp.json().await.unwrap();
     let instance_id = launch_body["instance"]["id"].as_str().unwrap();
@@ -355,15 +355,15 @@ async fn test_start_instance_container_not_found_creates_new() {
     common::ensure_network().await;
     ctx.login_admin().await;
 
-    let config_resp = ctx.post("/api/configs", &serde_json::json!({
+    let config_resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "start-recreate",
         "image": "busybox:1",
         "run_config": { "command": ["sleep", "3600"] }
     })).await;
-    let config_id = config_resp.json::<serde_json::Value>().await.unwrap()["config"]["id"].as_str().unwrap().to_string();
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
 
     let launch_resp = ctx.post("/api/instances", &serde_json::json!({
-        "config_id": config_id
+        "template_id": template_id
     })).await;
     let launch_body: serde_json::Value = launch_resp.json().await.unwrap();
     let instance_id = launch_body["instance"]["id"].as_str().unwrap();
@@ -385,15 +385,15 @@ async fn test_start_instance_with_no_container_id() {
     common::ensure_network().await;
     ctx.login_admin().await;
 
-    let config_resp = ctx.post("/api/configs", &serde_json::json!({
+    let config_resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "start-no-container",
         "image": "busybox:1",
         "run_config": { "command": ["sleep", "3600"] }
     })).await;
-    let config_id = config_resp.json::<serde_json::Value>().await.unwrap()["config"]["id"].as_str().unwrap().to_string();
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
 
     let launch_resp = ctx.post("/api/instances", &serde_json::json!({
-        "config_id": config_id
+        "template_id": template_id
     })).await;
     let launch_body: serde_json::Value = launch_resp.json().await.unwrap();
     let instance_id = launch_body["instance"]["id"].as_str().unwrap();
@@ -437,14 +437,14 @@ async fn test_pause_no_container_returns_conflict() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let config_resp = ctx.post("/api/configs", &serde_json::json!({
+    let config_resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "pause-no-container",
         "image": "busybox:1"
     })).await;
-    let config_id = config_resp.json::<serde_json::Value>().await.unwrap()["config"]["id"].as_str().unwrap().to_string();
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
 
     let launch_resp = ctx.post("/api/instances", &serde_json::json!({
-        "config_id": config_id
+        "template_id": template_id
     })).await;
     let launch_body: serde_json::Value = launch_resp.json().await.unwrap();
     let instance_id = launch_body["instance"]["id"].as_str().unwrap();
@@ -469,14 +469,14 @@ async fn test_unpause_no_container_returns_conflict() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let config_resp = ctx.post("/api/configs", &serde_json::json!({
+    let config_resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "unpause-no-container",
         "image": "busybox:1"
     })).await;
-    let config_id = config_resp.json::<serde_json::Value>().await.unwrap()["config"]["id"].as_str().unwrap().to_string();
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
 
     let launch_resp = ctx.post("/api/instances", &serde_json::json!({
-        "config_id": config_id
+        "template_id": template_id
     })).await;
     let launch_body: serde_json::Value = launch_resp.json().await.unwrap();
     let instance_id = launch_body["instance"]["id"].as_str().unwrap();
@@ -501,14 +501,14 @@ async fn test_start_stopped_no_container_returns_500() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let config_resp = ctx.post("/api/configs", &serde_json::json!({
+    let config_resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "start-no-container-err",
         "image": "busybox:1"
     })).await;
-    let config_id = config_resp.json::<serde_json::Value>().await.unwrap()["config"]["id"].as_str().unwrap().to_string();
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
 
     let launch_resp = ctx.post("/api/instances", &serde_json::json!({
-        "config_id": config_id
+        "template_id": template_id
     })).await;
     let launch_body: serde_json::Value = launch_resp.json().await.unwrap();
     let instance_id = launch_body["instance"]["id"].as_str().unwrap();
@@ -533,14 +533,14 @@ async fn test_stop_stopped_no_container_returns_conflict() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let config_resp = ctx.post("/api/configs", &serde_json::json!({
+    let config_resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "stop-stopped-no-container",
         "image": "busybox:1"
     })).await;
-    let config_id = config_resp.json::<serde_json::Value>().await.unwrap()["config"]["id"].as_str().unwrap().to_string();
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
 
     let launch_resp = ctx.post("/api/instances", &serde_json::json!({
-        "config_id": config_id
+        "template_id": template_id
     })).await;
     let launch_body: serde_json::Value = launch_resp.json().await.unwrap();
     let instance_id = launch_body["instance"]["id"].as_str().unwrap();

@@ -3,11 +3,11 @@ mod common;
 use common::TestContext;
 
 #[tokio::test]
-async fn test_create_config() {
+async fn test_create_template() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let resp = ctx.post("/api/configs", &serde_json::json!({
+    let resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "test-config",
         "image": "kasmweb/desktop:1.19.0-rolling-daily",
         "cores": 2,
@@ -16,64 +16,64 @@ async fn test_create_config() {
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["config"]["name"], "test-config");
-    assert_eq!(body["config"]["cores"], 2);
-    assert!(body["config"]["id"].is_string());
+    assert_eq!(body["template"]["name"], "test-config");
+    assert_eq!(body["template"]["cores"], 2);
+    assert!(body["template"]["id"].is_string());
 }
 
 #[tokio::test]
-async fn test_list_configs() {
+async fn test_list_templates() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    ctx.post("/api/configs", &serde_json::json!({
+    ctx.post("/api/templates", &serde_json::json!({
         "name": "list-test-config",
         "image": "kasmweb/desktop:1.19.0-rolling-daily"
     })).await;
 
-    let resp = ctx.get("/api/configs").await;
+    let resp = ctx.get("/api/templates").await;
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(body["configs"].is_array());
-    let configs = body["configs"].as_array().unwrap();
+    assert!(body["templates"].is_array());
+    let configs = body["templates"].as_array().unwrap();
     assert!(configs.iter().any(|c| c["name"] == "list-test-config"));
 }
 
 #[tokio::test]
-async fn test_get_config() {
+async fn test_get_template() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let resp = ctx.post("/api/configs", &serde_json::json!({
+    let resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "get-test-config",
         "image": "kasmweb/desktop:1.19.0-rolling-daily"
     })).await;
     let body: serde_json::Value = resp.json().await.unwrap();
-    let config_id = body["config"]["id"].as_str().unwrap();
+    let template_id = body["template"]["id"].as_str().unwrap();
 
-    let resp = ctx.get(&format!("/api/configs/{}", config_id)).await;
+    let resp = ctx.get(&format!("/api/templates/{}", template_id)).await;
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["config"]["name"], "get-test-config");
-    assert_eq!(body["config"]["instance_count"], 0);
+    assert_eq!(body["template"]["name"], "get-test-config");
+    assert_eq!(body["template"]["instance_count"], 0);
 }
 
 #[tokio::test]
-async fn test_update_config() {
+async fn test_update_template() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let resp = ctx.post("/api/configs", &serde_json::json!({
+    let resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "update-test",
         "image": "kasmweb/desktop:1.19.0-rolling-daily",
         "cores": 1
     })).await;
     let body: serde_json::Value = resp.json().await.unwrap();
-    let config_id = body["config"]["id"].as_str().unwrap();
+    let template_id = body["template"]["id"].as_str().unwrap();
 
-    let resp = ctx.put(&format!("/api/configs/{}", config_id), &serde_json::json!({
+    let resp = ctx.put(&format!("/api/templates/{}", template_id), &serde_json::json!({
         "name": "update-test-renamed",
         "image": "kasmweb/desktop:1.19.0-rolling-daily",
         "cores": 4,
@@ -86,46 +86,46 @@ async fn test_update_config() {
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["config"]["name"], "update-test-renamed");
-    assert_eq!(body["config"]["cores"], 4);
+    assert_eq!(body["template"]["name"], "update-test-renamed");
+    assert_eq!(body["template"]["cores"], 4);
 }
 
 #[tokio::test]
-async fn test_delete_config() {
+async fn test_delete_template() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let resp = ctx.post("/api/configs", &serde_json::json!({
+    let resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "delete-test",
         "image": "kasmweb/desktop:1.19.0-rolling-daily"
     })).await;
     let body: serde_json::Value = resp.json().await.unwrap();
-    let config_id = body["config"]["id"].as_str().unwrap();
+    let template_id = body["template"]["id"].as_str().unwrap();
 
-    let resp = ctx.delete(&format!("/api/configs/{}", config_id)).await;
+    let resp = ctx.delete(&format!("/api/templates/{}", template_id)).await;
     assert_eq!(resp.status(), 204);
 
-    let resp = ctx.get(&format!("/api/configs/{}", config_id)).await;
+    let resp = ctx.get(&format!("/api/templates/{}", template_id)).await;
     assert_eq!(resp.status(), 404);
 }
 
 #[tokio::test]
-async fn test_get_nonexistent_config() {
+async fn test_get_nonexistent_template() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
     let fake_id = uuid::Uuid::new_v4();
-    let resp = ctx.get(&format!("/api/configs/{}", fake_id)).await;
+    let resp = ctx.get(&format!("/api/templates/{}", fake_id)).await;
     assert_eq!(resp.status(), 404);
 }
 
 #[tokio::test]
-async fn test_update_nonexistent_config() {
+async fn test_update_nonexistent_template() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
     let fake_id = uuid::Uuid::new_v4();
-    let resp = ctx.put(&format!("/api/configs/{}", fake_id), &serde_json::json!({
+    let resp = ctx.put(&format!("/api/templates/{}", fake_id), &serde_json::json!({
         "name": "updated",
         "image": "test:latest",
         "cores": 2,
@@ -139,19 +139,19 @@ async fn test_update_nonexistent_config() {
 }
 
 #[tokio::test]
-async fn test_delete_nonexistent_config() {
+async fn test_delete_nonexistent_template() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
     let fake_id = uuid::Uuid::new_v4();
-    let resp = ctx.delete(&format!("/api/configs/{}", fake_id)).await;
+    let resp = ctx.delete(&format!("/api/templates/{}", fake_id)).await;
     assert_eq!(resp.status(), 404);
 }
 
 #[tokio::test]
-async fn test_create_config_requires_auth() {
+async fn test_create_template_requires_auth() {
     let ctx = TestContext::new().await;
-    let resp = ctx.post("/api/configs", &serde_json::json!({
+    let resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "no-auth-config",
         "image": "test:latest"
     })).await;
@@ -159,26 +159,26 @@ async fn test_create_config_requires_auth() {
 }
 
 #[tokio::test]
-async fn test_list_configs_requires_auth() {
+async fn test_list_templates_requires_auth() {
     let ctx = TestContext::new().await;
-    let resp = ctx.get("/api/configs").await;
+    let resp = ctx.get("/api/templates").await;
     assert_eq!(resp.status(), 401);
 }
 
 #[tokio::test]
-async fn test_get_config_requires_auth() {
+async fn test_get_template_requires_auth() {
     let ctx = TestContext::new().await;
     let fake_id = uuid::Uuid::new_v4();
-    let resp = ctx.get(&format!("/api/configs/{}", fake_id)).await;
+    let resp = ctx.get(&format!("/api/templates/{}", fake_id)).await;
     assert_eq!(resp.status(), 401);
 }
 
 #[tokio::test]
-async fn test_create_config_with_all_fields() {
+async fn test_create_template_with_all_fields() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let resp = ctx.post("/api/configs", &serde_json::json!({
+    let resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "full-config",
         "description": "A full config",
         "image": "kasmweb/desktop:1.19.0",
@@ -186,7 +186,7 @@ async fn test_create_config_with_all_fields() {
         "memory": 8589934592_i64,
         "gpu_count": 1,
         "docker_registry": "https://myregistry.com",
-        "persistent_storage_path": "/data/{workspace_name}/{user_id}",
+        "persistent_storage_path": "/data/{template_name}/{user_id}",
         "run_config": { "ports": [8080] },
         "exec_config": { "command": ["/bin/sh"] },
         "volume_mappings": { "/host": "/container" }
@@ -194,9 +194,9 @@ async fn test_create_config_with_all_fields() {
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["config"]["name"], "full-config");
-    assert_eq!(body["config"]["cores"], 4);
-    assert_eq!(body["config"]["gpu_count"], 1);
+    assert_eq!(body["template"]["name"], "full-config");
+    assert_eq!(body["template"]["cores"], 4);
+    assert_eq!(body["template"]["gpu_count"], 1);
 }
 
 #[tokio::test]
@@ -207,27 +207,27 @@ async fn test_context_helpers() {
 }
 
 #[tokio::test]
-async fn test_create_config_with_defaults() {
+async fn test_create_template_with_defaults() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let resp = ctx.post("/api/configs", &serde_json::json!({
+    let resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "defaults-config"
     })).await;
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["config"]["image"], "kasmweb/desktop:1.19.0-rolling-daily");
-    assert_eq!(body["config"]["cores"], 2);
-    assert_eq!(body["config"]["memory"], 4_294_967_296_i64);
+    assert_eq!(body["template"]["image"], "kasmweb/desktop:1.19.0-rolling-daily");
+    assert_eq!(body["template"]["cores"], 2);
+    assert_eq!(body["template"]["memory"], 4_294_967_296_i64);
 }
 
 #[tokio::test]
-async fn test_list_configs_as_non_admin() {
+async fn test_list_templates_as_non_admin() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    ctx.post("/api/configs", &serde_json::json!({
+    ctx.post("/api/templates", &serde_json::json!({
         "name": "admin-owned-config",
         "image": "busybox:1"
     })).await;
@@ -238,19 +238,19 @@ async fn test_list_configs_as_non_admin() {
     })).await;
     ctx.login_user("cfglist_nonadmin", "pass123").await;
 
-    let resp = ctx.get("/api/configs").await;
+    let resp = ctx.get("/api/templates").await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    let configs = body["configs"].as_array().unwrap();
+    let configs = body["templates"].as_array().unwrap();
     assert!(configs.is_empty(), "non-admin should not see admin's configs");
 }
 
 #[tokio::test]
-async fn test_create_config_with_null_optional_fields() {
+async fn test_create_template_with_null_optional_fields() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let resp = ctx.post("/api/configs", &serde_json::json!({
+    let resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "null-fields-config",
         "image": "busybox:1",
         "cores": 2,
@@ -262,17 +262,17 @@ async fn test_create_config_with_null_optional_fields() {
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["config"]["run_config"], serde_json::json!({}));
-    assert_eq!(body["config"]["exec_config"], serde_json::json!({}));
-    assert_eq!(body["config"]["volume_mappings"], serde_json::json!({}));
+    assert_eq!(body["template"]["run_config"], serde_json::json!({}));
+    assert_eq!(body["template"]["exec_config"], serde_json::json!({}));
+    assert_eq!(body["template"]["volume_mappings"], serde_json::json!({}));
 }
 
 #[tokio::test]
-async fn test_config_to_json_fields_in_response() {
+async fn test_template_to_json_fields_in_response() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let resp = ctx.post("/api/configs", &serde_json::json!({
+    let resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "json-fields",
         "description": "testing json output",
         "image": "test:latest",
@@ -288,7 +288,7 @@ async fn test_config_to_json_fields_in_response() {
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
-    let cfg = &body["config"];
+    let cfg = &body["template"];
 
     assert!(cfg["id"].is_string());
     assert_eq!(cfg["name"], "json-fields");
@@ -309,26 +309,26 @@ async fn test_config_to_json_fields_in_response() {
 }
 
 #[tokio::test]
-async fn test_get_config_includes_instance_count() {
+async fn test_get_template_includes_instance_count() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let resp = ctx.post("/api/configs", &serde_json::json!({
+    let resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "count-config",
         "image": "busybox:1"
     })).await;
     let body: serde_json::Value = resp.json().await.unwrap();
-    let config_id = body["config"]["id"].as_str().unwrap();
+    let template_id = body["template"]["id"].as_str().unwrap();
 
     ctx.post("/api/instances", &serde_json::json!({
-        "config_id": config_id
+        "template_id": template_id
     })).await;
     ctx.post("/api/instances", &serde_json::json!({
-        "config_id": config_id
+        "template_id": template_id
     })).await;
 
-    let resp = ctx.get(&format!("/api/configs/{}", config_id)).await;
+    let resp = ctx.get(&format!("/api/templates/{}", template_id)).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["config"]["instance_count"], 2);
+    assert_eq!(body["template"]["instance_count"], 2);
 }

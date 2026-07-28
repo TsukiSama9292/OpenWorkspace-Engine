@@ -1,13 +1,13 @@
 import { api } from '$lib/api/client';
-import type { Config, Instance } from '$lib/types';
+import type { Template, Instance } from '$lib/types';
 
 export async function loadDashboard() {
   const [configRes, instanceRes] = await Promise.all([
-    api.get<{ configs: Config[] }>('/configs'),
+    api.get<{ templates: Template[] }>('/templates'),
     api.get<{ instances: Instance[] }>('/instances'),
   ]);
   return {
-    configs: configRes.data?.configs ?? [],
+    configs: configRes.data?.templates ?? [],
     instances: instanceRes.data?.instances ?? [],
   };
 }

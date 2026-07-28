@@ -42,7 +42,7 @@
       <a href="/" class="text-sm text-surface-500 no-underline hover:text-surface-700">&larr; Dashboard</a>
       <h1 class="text-2xl font-bold text-surface-800 mt-1">{instance.name}</h1>
       <p class="text-surface-500 text-sm mt-1">
-        {instance.config_name || 'Unknown config'}
+        {instance.template_name || 'Unknown template'}
         {#if instance.owner_username}
           <span class="mx-1">&middot;</span> Owner: {instance.owner_username}
         {/if}
@@ -94,8 +94,8 @@
         <span class="text-sm text-surface-800 font-mono">{instance.id}</span>
       </div>
       <div class="flex flex-col gap-1">
-        <span class="text-xs text-surface-500">Config ID</span>
-        <span class="text-sm text-surface-800 font-mono">{instance.config_id}</span>
+        <span class="text-xs text-surface-500">Template ID</span>
+        <span class="text-sm text-surface-800 font-mono">{instance.template_id}</span>
       </div>
       <div class="flex flex-col gap-1">
         <span class="text-xs text-surface-500">Instance #</span>

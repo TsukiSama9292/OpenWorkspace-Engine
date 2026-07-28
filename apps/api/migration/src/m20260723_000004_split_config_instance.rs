@@ -10,7 +10,7 @@ impl MigrationTrait for Migration {
 
         conn.execute_unprepared(
             r#"
-            CREATE TABLE workspace_configs (
+            CREATE TABLE workspace_templates (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 name VARCHAR(255) NOT NULL,
                 description TEXT,
@@ -35,7 +35,7 @@ impl MigrationTrait for Migration {
             r#"
             CREATE TABLE workspace_instances (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                config_id UUID NOT NULL REFERENCES workspace_configs(id) ON DELETE CASCADE,
+                template_id UUID NOT NULL REFERENCES workspace_templates(id) ON DELETE CASCADE,
                 name VARCHAR(255) NOT NULL,
                 instance_number SERIAL UNIQUE,
                 owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -53,9 +53,9 @@ impl MigrationTrait for Migration {
 
         conn.execute_unprepared(
             r#"
-            CREATE TEMPORARY TABLE _migration_configs AS
+            CREATE TEMPORARY TABLE _migration_templates AS
             SELECT DISTINCT ON (w.name, w.image)
-                gen_random_uuid() AS config_id,
+                gen_random_uuid() AS template_id,
                 w.name,
                 NULL::text AS description,
                 w.owner_id,
@@ -76,19 +76,19 @@ impl MigrationTrait for Migration {
 
         conn.execute_unprepared(
             r#"
-            INSERT INTO workspace_configs (id, name, description, owner_id, image, cores, memory, gpu_count, docker_registry, run_config, exec_config, volume_mappings, persistent_storage_path)
-            SELECT config_id, name, description, owner_id, image, cores, memory, gpu_count, docker_registry, run_config, exec_config, volume_mappings, persistent_storage_path
-            FROM _migration_configs
+            INSERT INTO workspace_templates (id, name, description, owner_id, image, cores, memory, gpu_count, docker_registry, run_config, exec_config, volume_mappings, persistent_storage_path)
+            SELECT template_id, name, description, owner_id, image, cores, memory, gpu_count, docker_registry, run_config, exec_config, volume_mappings, persistent_storage_path
+            FROM _migration_templates
             "#,
         )
         .await?;
 
         conn.execute_unprepared(
             r#"
-            INSERT INTO workspace_instances (id, config_id, name, instance_number, owner_id, container_id, status, vnc_token, mount_persistent, resolved_volume_host_path, created_at)
+            INSERT INTO workspace_instances (id, template_id, name, instance_number, owner_id, container_id, status, vnc_token, mount_persistent, resolved_volume_host_path, created_at)
             SELECT
                 w.id,
-                (SELECT mc.config_id FROM _migration_configs mc WHERE mc.name = w.name AND mc.image = COALESCE(w.image, 'kasmweb/desktop:1.19.0-rolling-daily') LIMIT 1) AS config_id,
+                (SELECT mc.template_id FROM _migration_templates mc WHERE mc.name = w.name AND mc.image = COALESCE(w.image, 'kasmweb/desktop:1.19.0-rolling-daily') LIMIT 1) AS template_id,
                 w.name,
                 w.instance_number,
                 w.owner_id,
@@ -104,14 +104,14 @@ impl MigrationTrait for Migration {
         .await?;
 
         conn.execute_unprepared("DROP TABLE IF EXISTS workspaces").await?;
-        conn.execute_unprepared("DROP TABLE IF EXISTS _migration_configs").await?;
+        conn.execute_unprepared("DROP TABLE IF EXISTS _migration_templates").await?;
 
         for idx in &[
             ("idx_workspace_instances_owner", "workspace_instances", "owner_id"),
-            ("idx_workspace_instances_config", "workspace_instances", "config_id"),
+            ("idx_workspace_instances_template", "workspace_instances", "template_id"),
             ("idx_workspace_instances_status", "workspace_instances", "status"),
             ("idx_workspace_instances_vnc_token", "workspace_instances", "vnc_token"),
-            ("idx_workspace_configs_owner", "workspace_configs", "owner_id"),
+            ("idx_workspace_templates_owner", "workspace_templates", "owner_id"),
         ] {
             manager
                 .create_index(
@@ -131,10 +131,10 @@ impl MigrationTrait for Migration {
         let conn = manager.get_connection();
 
         for idx in &[
-            "idx_workspace_configs_owner",
+            "idx_workspace_templates_owner",
             "idx_workspace_instances_vnc_token",
             "idx_workspace_instances_status",
-            "idx_workspace_instances_config",
+            "idx_workspace_instances_template",
             "idx_workspace_instances_owner",
         ] {
             manager
@@ -185,13 +185,13 @@ impl MigrationTrait for Migration {
                 wi.resolved_volume_host_path,
                 wi.created_at
             FROM workspace_instances wi
-            JOIN workspace_configs wc ON wi.config_id = wc.id
+            JOIN workspace_templates wc ON wi.template_id = wc.id
             "#,
         )
         .await?;
 
         conn.execute_unprepared("DROP TABLE IF EXISTS workspace_instances").await?;
-        conn.execute_unprepared("DROP TABLE IF EXISTS workspace_configs").await?;
+        conn.execute_unprepared("DROP TABLE IF EXISTS workspace_templates").await?;
 
         Ok(())
     }
