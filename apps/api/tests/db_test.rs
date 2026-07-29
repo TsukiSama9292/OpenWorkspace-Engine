@@ -163,6 +163,7 @@ async fn config_create_and_find() {
             8_589_934_592,
             1,
             None,
+            "kasmvnc",
             &serde_json::json!({"cmd": ["sleep", "infinity"]}),
             &serde_json::json!({}),
             &serde_json::json!({"bind": "/data"}),
@@ -194,11 +195,11 @@ async fn config_list_by_owner() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     template_repo
-        .create("cfg1", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
+        .create("cfg1", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
     template_repo
-        .create("cfg2", None, admin.0, "img:2", 2, 2048, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
+        .create("cfg2", None, admin.0, "img:2", 2, 2048, 0, None, "kasmvnc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
 
@@ -216,7 +217,7 @@ async fn config_list_all() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     template_repo
-        .create("cfg1", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
+        .create("cfg1", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
 
@@ -234,7 +235,7 @@ async fn config_update() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("old-name", None, admin.0, "old:img", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
+        .create("old-name", None, admin.0, "old:img", 1, 1024, 0, None, "kasmvnc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
 
@@ -248,6 +249,7 @@ async fn config_update() {
             16_777_216,
             2,
             Some("my-registry"),
+            "kasmvnc",
             &serde_json::json!({"key": "val"}),
             &serde_json::json!({"exec": true}),
             &serde_json::json!({"vol": "/mnt"}),
@@ -277,7 +279,7 @@ async fn config_delete() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("del", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
+        .create("del", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
 
@@ -306,7 +308,7 @@ async fn config_count_instances() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("counted", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
+        .create("counted", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
 
@@ -331,7 +333,7 @@ async fn instance_launch_and_find() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("inst-cfg", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
+        .create("inst-cfg", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
 
@@ -346,7 +348,7 @@ async fn instance_launch_and_find() {
     assert!(inst.container_id.is_none());
     assert!(inst.mount_persistent);
     assert_eq!(inst.resolved_volume_host_path, Some("/host/data".to_string()));
-    assert!(!inst.vnc_token.is_empty());
+    assert!(!inst.access_token.is_empty());
     assert_eq!(inst.name, "inst-cfg-1");
     assert_eq!(inst.instance_number, 1);
 
@@ -365,7 +367,7 @@ async fn instance_launch_auto_increments_number() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("multi", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
+        .create("multi", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
 
@@ -382,7 +384,7 @@ async fn instance_launch_auto_increments_number() {
 }
 
 #[tokio::test]
-async fn instance_find_by_vnc_token() {
+async fn instance_find_by_access_token() {
     let db = setup_db().await;
     let template_repo = WorkspaceTemplateRepository::new(&db);
     let instance_repo = WorkspaceInstanceRepository::new(&db);
@@ -392,17 +394,17 @@ async fn instance_find_by_vnc_token() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("vnc-cfg", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
+        .create("vnc-cfg", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
 
     let inst = instance_repo.launch(config.id, admin.0, "vnc-cfg", false, None).await.unwrap();
 
-    let found = instance_repo.find_by_vnc_token(&inst.vnc_token).await.unwrap();
+    let found = instance_repo.find_by_access_token(&inst.access_token).await.unwrap();
     assert!(found.is_some());
     assert_eq!(found.unwrap().id, inst.id);
 
-    let missing = instance_repo.find_by_vnc_token("nonexistent-token").await.unwrap();
+    let missing = instance_repo.find_by_access_token("nonexistent-token").await.unwrap();
     assert!(missing.is_none());
 }
 
@@ -420,7 +422,7 @@ async fn instance_list_by_owner() {
     let bob = user_repo.find_by_username("bob").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("list-cfg", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
+        .create("list-cfg", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
 
@@ -445,7 +447,7 @@ async fn instance_list_all() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("all-cfg", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
+        .create("all-cfg", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
 
@@ -467,7 +469,7 @@ async fn instance_update_status() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("status-cfg", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
+        .create("status-cfg", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
 
@@ -492,7 +494,7 @@ async fn instance_update_container_id() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("cid-cfg", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
+        .create("cid-cfg", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
 
@@ -516,7 +518,7 @@ async fn instance_delete() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("del-cfg", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
+        .create("del-cfg", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
 
@@ -621,11 +623,11 @@ async fn instance_list_by_template() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let cfg1 = template_repo
-        .create("lbc1", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
+        .create("lbc1", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
     let cfg2 = template_repo
-        .create("lbc2", None, admin.0, "img:2", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
+        .create("lbc2", None, admin.0, "img:2", 1, 1024, 0, None, "kasmvnc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
 
@@ -655,7 +657,7 @@ async fn instance_list_by_template_empty() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let cfg = template_repo
-        .create("lbc-empty", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
+        .create("lbc-empty", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
 
@@ -690,6 +692,7 @@ fn config_model_from_converts_all_fields() {
         memory: 8192,
         gpu_count: 2,
         docker_registry: Some("reg".to_string()),
+        remote_type: "kasmvnc".to_string(),
         run_config: serde_json::json!({"key": "val"}),
         exec_config: serde_json::json!({"exec": true}),
         volume_mappings: serde_json::json!({"/host": "/container"}),
@@ -708,6 +711,7 @@ fn config_model_from_converts_all_fields() {
     assert_eq!(config.memory, 8192);
     assert_eq!(config.gpu_count, 2);
     assert_eq!(config.docker_registry, Some("reg".to_string()));
+    assert_eq!(config.remote_type, "kasmvnc");
     assert_eq!(config.run_config, serde_json::json!({"key": "val"}));
     assert_eq!(config.exec_config, serde_json::json!({"exec": true}));
     assert_eq!(config.volume_mappings, serde_json::json!({"/host": "/container"}));
@@ -726,6 +730,7 @@ fn config_model_from_null_optionals() {
         memory: 1024,
         gpu_count: 0,
         docker_registry: None,
+        remote_type: "kasmvnc".to_string(),
         run_config: serde_json::json!({}),
         exec_config: serde_json::json!({}),
         volume_mappings: serde_json::json!({}),
@@ -755,8 +760,8 @@ fn instance_model_from_converts_all_fields() {
         owner_id,
         container_id: Some("abc123".to_string()),
         status: "running".to_string(),
-        vnc_token: "vtok".to_string(),
-        vnc_password: "secretpw".to_string(),
+        access_token: "vtok".to_string(),
+        access_password: "secretpw".to_string(),
         mount_persistent: true,
         resolved_volume_host_path: Some("/host/path".to_string()),
         created_at: now,
@@ -771,7 +776,7 @@ fn instance_model_from_converts_all_fields() {
     assert_eq!(inst.owner_id, owner_id);
     assert_eq!(inst.container_id, Some("abc123".to_string()));
     assert_eq!(inst.status, "running");
-    assert_eq!(inst.vnc_token, "vtok");
+    assert_eq!(inst.access_token, "vtok");
     assert!(inst.mount_persistent);
     assert_eq!(inst.resolved_volume_host_path, Some("/host/path".to_string()));
 }
@@ -786,8 +791,8 @@ fn instance_model_from_none_optionals() {
         owner_id: uuid::Uuid::new_v4(),
         container_id: None,
         status: "stopped".to_string(),
-        vnc_token: "tok".to_string(),
-        vnc_password: "pw".to_string(),
+        access_token: "tok".to_string(),
+        access_password: "pw".to_string(),
         mount_persistent: false,
         resolved_volume_host_path: None,
         created_at: chrono::Utc::now(),
@@ -811,7 +816,7 @@ async fn instance_update_container_id_success() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("cid-success", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
+        .create("cid-success", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
 
@@ -835,7 +840,7 @@ async fn instance_update_status_success() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("status-success", None, admin.0, "img:1", 1, 1024, 0, None, &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
+        .create("status-success", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None)
         .await
         .unwrap();
 

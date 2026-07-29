@@ -11,8 +11,8 @@
   onMount(async () => {
     const res = await api.get<Instance[]>('/instances');
     if (res.data) {
-      const inst = res.data.find(i => i.vnc_token === token);
-      if (inst?.vnc_password) password = inst.vnc_password;
+      const inst = res.data.find(i => i.access_token === token);
+      if (inst?.access_password) password = inst.access_password;
     }
   });
 </script>

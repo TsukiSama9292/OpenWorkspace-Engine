@@ -65,7 +65,7 @@ async fn vnc_verify(
         None => {
             let instance_repo = WorkspaceInstanceRepository::new(&state.db);
             let instance = instance_repo
-                .find_by_vnc_token(vnc_token)
+                .find_by_access_token(vnc_token)
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
                 .ok_or(StatusCode::NOT_FOUND)?;

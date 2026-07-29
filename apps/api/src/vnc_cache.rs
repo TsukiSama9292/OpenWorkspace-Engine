@@ -18,21 +18,21 @@ impl VncCache {
         }
     }
 
-    pub fn insert(&self, vnc_token: &str, status: &str) {
+    pub fn insert(&self, access_token: &str, status: &str) {
         self.inner.insert(
-            vnc_token.to_string(),
+            access_token.to_string(),
             CacheEntry {
                 status: status.to_string(),
             },
         );
     }
 
-    pub fn remove(&self, vnc_token: &str) {
-        self.inner.remove(vnc_token);
+    pub fn remove(&self, access_token: &str) {
+        self.inner.remove(access_token);
     }
 
-    pub fn get(&self, vnc_token: &str) -> Option<CacheEntry> {
-        self.inner.get(vnc_token).map(|r| r.clone())
+    pub fn get(&self, access_token: &str) -> Option<CacheEntry> {
+        self.inner.get(access_token).map(|r| r.clone())
     }
 
     pub fn len(&self) -> usize {

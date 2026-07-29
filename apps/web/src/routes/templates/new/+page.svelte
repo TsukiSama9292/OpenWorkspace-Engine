@@ -20,7 +20,7 @@
   <h1 class="text-2xl font-bold text-surface-800 mb-6">New Template</h1>
 
   <form class="flex flex-col gap-4" onsubmit={onSubmit}>
-    <TemplateBasics bind:name={form.name} bind:description={form.description} bind:image={form.image} />
+    <TemplateBasics bind:name={form.name} bind:description={form.description} bind:image={form.image} bind:remoteType={form.remoteType} />
     <TemplateResources bind:cores={form.cores} bind:ramGb={form.ramGb} bind:gpuCount={form.gpuCount} bind:dockerRegistry={form.dockerRegistry} bind:persistentStoragePath={form.persistentStoragePath} />
 
     <button type="button" class="text-sm text-surface-500 hover:text-surface-700 bg-transparent border-none cursor-pointer text-left p-0" onclick={() => form.showAdvanced = !form.showAdvanced}>

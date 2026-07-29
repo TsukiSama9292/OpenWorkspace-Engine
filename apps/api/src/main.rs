@@ -56,7 +56,7 @@ async fn main() {
             let mut count = 0;
             for inst in &instances {
                 if inst.status == "running" {
-                    vnc_cache.insert(&inst.vnc_token, &inst.status);
+                    vnc_cache.insert(&inst.access_token, &inst.status);
                     count += 1;
                 }
             }

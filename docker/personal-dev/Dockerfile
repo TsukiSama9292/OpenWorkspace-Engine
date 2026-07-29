@@ -13,7 +13,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # 設定 nvm 與 uv 的路徑
 ENV NVM_DIR=/home/${USERNAME}/.nvm
-ENV UV_INSTALL_DIR=/home/${USERNAME}/.local/bin
 
 # =========================
 # 1. 基礎套件安裝

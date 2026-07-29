@@ -2,11 +2,11 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, In
 use sea_orm::sea_query::OnConflict;
 use uuid::Uuid;
 
-fn generate_vnc_token() -> String {
+fn generate_access_token() -> String {
     Uuid::new_v4().as_simple().to_string()
 }
 
-pub fn generate_vnc_password() -> String {
+pub fn generate_access_password() -> String {
     use rand::Rng;
     let mut rng = rand::thread_rng();
     let len = 127;
@@ -72,6 +72,7 @@ pub mod workspace_template {
         pub run_config: Json,
         pub exec_config: Json,
         pub volume_mappings: Json,
+        pub remote_type: String,
         pub persistent_storage_path: Option<String>,
         pub created_at: DateTimeUtc,
         pub updated_at: DateTimeUtc,
@@ -119,8 +120,8 @@ pub mod workspace_instance {
         pub owner_id: Uuid,
         pub container_id: Option<String>,
         pub status: String,
-        pub vnc_token: String,
-        pub vnc_password: String,
+        pub access_token: String,
+        pub access_password: String,
         pub mount_persistent: bool,
         pub resolved_volume_host_path: Option<String>,
         pub created_at: DateTimeUtc,
@@ -209,6 +210,7 @@ pub struct WorkspaceTemplate {
     pub memory: i64,
     pub gpu_count: i32,
     pub docker_registry: Option<String>,
+    pub remote_type: String,
     pub run_config: serde_json::Value,
     pub exec_config: serde_json::Value,
     pub volume_mappings: serde_json::Value,
@@ -229,6 +231,7 @@ impl From<workspace_template::Model> for WorkspaceTemplate {
             memory: m.memory,
             gpu_count: m.gpu_count,
             docker_registry: m.docker_registry,
+            remote_type: m.remote_type,
             run_config: m.run_config.into(),
             exec_config: m.exec_config.into(),
             volume_mappings: m.volume_mappings.into(),
@@ -248,8 +251,8 @@ pub struct WorkspaceInstance {
     pub owner_id: Uuid,
     pub container_id: Option<String>,
     pub status: String,
-    pub vnc_token: String,
-    pub vnc_password: String,
+    pub access_token: String,
+    pub access_password: String,
     pub mount_persistent: bool,
     pub resolved_volume_host_path: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -266,8 +269,8 @@ impl From<workspace_instance::Model> for WorkspaceInstance {
             owner_id: m.owner_id,
             container_id: m.container_id,
             status: m.status,
-            vnc_token: m.vnc_token,
-            vnc_password: m.vnc_password,
+            access_token: m.access_token,
+            access_password: m.access_password,
             mount_persistent: m.mount_persistent,
             resolved_volume_host_path: m.resolved_volume_host_path,
             created_at: m.created_at,
@@ -407,6 +410,7 @@ impl<'a> WorkspaceTemplateRepository<'a> {
         memory: i64,
         gpu_count: i32,
         docker_registry: Option<&str>,
+        remote_type: &str,
         run_config: &serde_json::Value,
         exec_config: &serde_json::Value,
         volume_mappings: &serde_json::Value,
@@ -423,6 +427,7 @@ impl<'a> WorkspaceTemplateRepository<'a> {
             memory: Set(memory),
             gpu_count: Set(gpu_count),
             docker_registry: Set(docker_registry.map(|s| s.to_string())),
+            remote_type: Set(remote_type.to_string()),
             run_config: Set(run_config.clone().into()),
             exec_config: Set(exec_config.clone().into()),
             volume_mappings: Set(volume_mappings.clone().into()),
@@ -473,6 +478,7 @@ impl<'a> WorkspaceTemplateRepository<'a> {
         memory: i64,
         gpu_count: i32,
         docker_registry: Option<&str>,
+        remote_type: &str,
         run_config: &serde_json::Value,
         exec_config: &serde_json::Value,
         volume_mappings: &serde_json::Value,
@@ -487,6 +493,7 @@ impl<'a> WorkspaceTemplateRepository<'a> {
             memory: Set(memory),
             gpu_count: Set(gpu_count),
             docker_registry: Set(docker_registry.map(|s| s.to_string())),
+            remote_type: Set(remote_type.to_string()),
             run_config: Set(run_config.clone().into()),
             exec_config: Set(exec_config.clone().into()),
             volume_mappings: Set(volume_mappings.clone().into()),
@@ -529,8 +536,8 @@ impl<'a> WorkspaceInstanceRepository<'a> {
         resolved_volume_host_path: Option<&str>,
     ) -> Result<WorkspaceInstance, sea_orm::DbErr> {
         let id = Uuid::new_v4();
-        let vnc_token = generate_vnc_token();
-        let vnc_password = generate_vnc_password();
+        let access_token = generate_access_token();
+        let access_password = generate_access_password();
 
         // Auto-generate instance name: "{template_name}-{next_number}"
         let max_number = workspace_instance::Entity::find()
@@ -551,8 +558,8 @@ impl<'a> WorkspaceInstanceRepository<'a> {
             owner_id: Set(owner_id),
             container_id: Set(None),
             status: Set("stopped".to_string()),
-            vnc_token: Set(vnc_token),
-            vnc_password: Set(vnc_password),
+            access_token: Set(access_token),
+            access_password: Set(access_password),
             mount_persistent: Set(mount_persistent),
             resolved_volume_host_path: Set(resolved_volume_host_path.map(|s| s.to_string())),
             ..Default::default()
@@ -566,9 +573,9 @@ impl<'a> WorkspaceInstanceRepository<'a> {
         Ok(model.map(|m| m.into()))
     }
 
-    pub async fn find_by_vnc_token(&self, token: &str) -> Result<Option<WorkspaceInstance>, sea_orm::DbErr> {
+    pub async fn find_by_access_token(&self, token: &str) -> Result<Option<WorkspaceInstance>, sea_orm::DbErr> {
         let model = workspace_instance::Entity::find()
-            .filter(workspace_instance::Column::VncToken.eq(token))
+            .filter(workspace_instance::Column::AccessToken.eq(token))
             .one(self.db)
             .await?;
         Ok(model.map(|m| m.into()))

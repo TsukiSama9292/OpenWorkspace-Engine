@@ -2,6 +2,7 @@ import { api } from '$lib/api/client';
 import { goto } from '$app/navigation';
 import { buildRunConfig, buildExecConfig, buildVolumeMappings, createEmptyEnvVar, createEmptyVolume } from '$lib/utils/format';
 import type { EnvVar, VolumeMapping } from '$lib/utils/format';
+import type { RemoteType } from '$lib/types';
 
 export interface TemplateFormState {
   name: string;
@@ -12,6 +13,7 @@ export interface TemplateFormState {
   gpuCount: number;
   dockerRegistry: string;
   persistentStoragePath: string;
+  remoteType: RemoteType;
   hostname: string;
   dns: string;
   shmSize: string;
@@ -34,6 +36,7 @@ export function createInitialFormState(): TemplateFormState {
     gpuCount: 0,
     dockerRegistry: '',
     persistentStoragePath: '',
+    remoteType: 'kasmvnc',
     hostname: '',
     dns: '',
     shmSize: '',
@@ -58,6 +61,7 @@ export async function submitTemplate(state: TemplateFormState): Promise<{ error?
     memory: state.ramGb * 1024 * 1024 * 1024,
     gpu_count: state.gpuCount,
     docker_registry: state.dockerRegistry || null,
+    remote_type: state.remoteType,
     run_config: buildRunConfig({
       hostname: state.hostname,
       dns: state.dns,

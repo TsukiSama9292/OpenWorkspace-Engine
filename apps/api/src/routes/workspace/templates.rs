@@ -34,6 +34,7 @@ fn template_to_json(template: &WorkspaceTemplate, instance_count: i64) -> serde_
         "memory": template.memory,
         "gpu_count": template.gpu_count,
         "docker_registry": template.docker_registry,
+        "remote_type": template.remote_type,
         "run_config": template.run_config,
         "exec_config": template.exec_config,
         "volume_mappings": template.volume_mappings,
@@ -57,6 +58,8 @@ struct CreateTemplateRequest {
     #[serde(default)]
     gpu_count: i32,
     docker_registry: Option<String>,
+    #[serde(default = "default_remote_type")]
+    remote_type: String,
     #[serde(default)]
     run_config: serde_json::Value,
     #[serde(default)]
@@ -75,6 +78,8 @@ struct UpdateTemplateRequest {
     memory: i64,
     gpu_count: i32,
     docker_registry: Option<String>,
+    #[serde(default = "default_remote_type")]
+    remote_type: String,
     run_config: serde_json::Value,
     exec_config: serde_json::Value,
     volume_mappings: serde_json::Value,
@@ -89,6 +94,9 @@ fn default_cores() -> i32 {
 }
 fn default_memory() -> i64 {
     4_294_967_296
+}
+fn default_remote_type() -> String {
+    "kasmvnc".to_string()
 }
 
 async fn list_templates(
@@ -154,6 +162,7 @@ async fn create_template(
             input.memory,
             input.gpu_count,
             input.docker_registry.as_deref(),
+            &input.remote_type,
             &run_config,
             &exec_config,
             &volume_mappings,
@@ -224,6 +233,7 @@ async fn update_template(
             input.memory,
             input.gpu_count,
             input.docker_registry.as_deref(),
+            &input.remote_type,
             &input.run_config,
             &input.exec_config,
             &input.volume_mappings,

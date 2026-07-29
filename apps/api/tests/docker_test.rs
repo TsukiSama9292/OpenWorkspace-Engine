@@ -3,7 +3,7 @@
 mod common;
 
 use common::ensure_network;
-use openworkspace_api::docker::{DockerClient, DockerService};
+use openworkspace_api::docker::{DockerClient, DockerService, RemoteType};
 
 async fn setup() -> DockerClient {
     ensure_network().await;
@@ -45,6 +45,7 @@ async fn test_pause_unpause() {
         cores: 0,
         memory: 0,
         gpu_count: 0,
+        remote_type: RemoteType::KasmVnc,
         run_config: serde_json::json!({}),
         exec_config: serde_json::json!({}),
         volume_mappings: serde_json::json!({}),
@@ -95,6 +96,7 @@ async fn test_create_container_from_template() {
         cores: 0,
         memory: 0,
         gpu_count: 0,
+        remote_type: RemoteType::KasmVnc,
         run_config: serde_json::json!({}),
         exec_config: serde_json::json!({}),
         volume_mappings: serde_json::json!({}),
@@ -124,6 +126,7 @@ async fn test_create_container_from_template_with_env_and_dns() {
         cores: 0,
         memory: 0,
         gpu_count: 0,
+        remote_type: RemoteType::KasmVnc,
         run_config: serde_json::json!({
             "environment": ["MY_VAR=hello", "OTHER=world"],
             "dns": ["8.8.8.8"],
@@ -159,6 +162,7 @@ async fn test_create_container_from_template_with_volume() {
         cores: 0,
         memory: 0,
         gpu_count: 0,
+        remote_type: RemoteType::KasmVnc,
         run_config: serde_json::json!({
             "volume_mappings": { "/tmp/ow_test": "/container/data" },
         }),
@@ -203,6 +207,7 @@ async fn test_create_container_from_template_with_exec() {
         cores: 0,
         memory: 0,
         gpu_count: 0,
+        remote_type: RemoteType::KasmVnc,
         run_config: serde_json::json!({}),
         exec_config: serde_json::json!({
             "post_start": { "cmd": "echo hello" }
@@ -234,6 +239,7 @@ async fn test_create_container_from_template_with_hostname() {
         cores: 0,
         memory: 0,
         gpu_count: 0,
+        remote_type: RemoteType::KasmVnc,
         run_config: serde_json::json!({
             "hostname": "my-test-host"
         }),
@@ -262,6 +268,7 @@ async fn test_create_container_from_template_command_from_run_config() {
         cores: 0,
         memory: 0,
         gpu_count: 0,
+        remote_type: RemoteType::KasmVnc,
         run_config: serde_json::json!({
             "command": ["sleep", "3600"]
         }),
@@ -293,6 +300,7 @@ async fn test_create_container_from_template_no_command() {
         cores: 0,
         memory: 0,
         gpu_count: 0,
+        remote_type: RemoteType::KasmVnc,
         run_config: serde_json::json!({}),
         exec_config: serde_json::json!({}),
         volume_mappings: serde_json::json!({}),
@@ -315,6 +323,7 @@ async fn test_create_container_from_template_with_shm_size_and_network_mode() {
         cores: 0,
         memory: 0,
         gpu_count: 0,
+        remote_type: RemoteType::KasmVnc,
         run_config: serde_json::json!({
             "shm_size": 67108864,
         }),
@@ -373,6 +382,7 @@ async fn test_create_container_from_template_with_gpu() {
         cores: 0,
         memory: 0,
         gpu_count: 1,
+        remote_type: RemoteType::KasmVnc,
         run_config: serde_json::json!({}),
         exec_config: serde_json::json!({}),
         volume_mappings: serde_json::json!({}),
@@ -406,6 +416,7 @@ async fn test_create_container_from_template_image_already_cached() {
         cores: 0,
         memory: 0,
         gpu_count: 0,
+        remote_type: RemoteType::KasmVnc,
         run_config: serde_json::json!({}),
         exec_config: serde_json::json!({}),
         volume_mappings: serde_json::json!({}),
@@ -439,6 +450,7 @@ async fn test_create_container_from_template_cores_and_memory() {
         cores: 2,
         memory: 536870912,
         gpu_count: 0,
+        remote_type: RemoteType::KasmVnc,
         run_config: serde_json::json!({}),
         exec_config: serde_json::json!({}),
         volume_mappings: serde_json::json!({}),
@@ -492,6 +504,7 @@ async fn test_inspect_container_state_running() {
         cores: 0,
         memory: 0,
         gpu_count: 0,
+        remote_type: RemoteType::KasmVnc,
         run_config: serde_json::json!({}),
         exec_config: serde_json::json!({}),
         volume_mappings: serde_json::json!({}),

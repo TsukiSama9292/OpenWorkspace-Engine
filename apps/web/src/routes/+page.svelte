@@ -66,7 +66,7 @@
     const inst = result.instance;
     if (inst) {
       instances = [...instances, inst];
-      const url = `/vnc/${inst.vnc_token}/`;
+      const url = `/vnc/${inst.access_token}/`;
       if (launchTarget === 'tab') {
         window.open(url, '_blank');
       } else {
@@ -388,8 +388,8 @@
                   {#if canControlInstance(inst)}
                     <div class="action-buttons">
                       {#if inst.status === 'running'}
-                        {#if inst.vnc_token}
-                           <a href="/vnc/{inst.vnc_token}/" target="_blank" class="launch-btn vnc">VNC</a>
+                        {#if inst.access_token}
+                           <a href="/vnc/{inst.access_token}/" target="_blank" class="launch-btn vnc">VNC</a>
                         {/if}
                         <button class="launch-btn pause" onclick={() => onAction(inst, 'pause')}>Pause</button>
                         <button class="launch-btn stop" onclick={() => onAction(inst, 'stop')}>Stop</button>

@@ -10,7 +10,7 @@ use uuid::Uuid;
 use super::super::AppState;
 use crate::auth::{AuthUser, Role};
 use crate::db::{UserRepository, WorkspaceTemplateRepository, WorkspaceInstance, WorkspaceInstanceRepository};
-use crate::docker::ContainerConfig;
+use crate::docker::{ContainerConfig, RemoteType};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -36,8 +36,8 @@ fn instance_to_json(inst: &WorkspaceInstance, template_name: Option<&str>, owner
         "owner_role": owner_role.unwrap_or("user"),
         "container_id": inst.container_id,
         "status": inst.status,
-        "vnc_token": inst.vnc_token,
-        "vnc_password": inst.vnc_password,
+        "access_token": inst.access_token,
+        "access_password": inst.access_password,
         "mount_persistent": inst.mount_persistent,
         "resolved_volume_host_path": inst.resolved_volume_host_path,
         "template_name": template_name,
@@ -173,11 +173,14 @@ async fn launch_instance(
         template.name
     );
 
+    let remote_type: RemoteType = template.remote_type.parse().unwrap_or(RemoteType::KasmVnc);
+
     let container_config = ContainerConfig {
         image: template.image.clone(),
         cores: template.cores,
         memory: template.memory,
         gpu_count: template.gpu_count,
+        remote_type: remote_type.clone(),
         run_config: template.run_config.clone(),
         exec_config: template.exec_config.clone(),
         volume_mappings: template.volume_mappings.clone(),
@@ -186,7 +189,7 @@ async fn launch_instance(
     };
 
     match state.docker
-        .create_container_from_template(&instance.name, instance.instance_number, &container_config, &instance.vnc_password)
+        .create_container_from_template(&instance.name, instance.instance_number, &container_config, &instance.access_password)
         .await
     {
         Ok(container_id) => {
@@ -195,10 +198,10 @@ async fn launch_instance(
 
             match state.docker.get_container_ip(&container_id, &state.docker.network_name()).await {
                 Ok(ip) => {
-                    if let Err(e) = crate::vnc_trafik::write_vnc_route(&instance.vnc_token, &ip, &instance.vnc_password) {
+                    if let Err(e) = crate::route_writer::write_route(&remote_type, &instance.access_token, &ip, &instance.access_password) {
                         tracing::error!("Failed to write Traefik VNC route: {}", e);
                     }
-                    state.vnc_cache.insert(&instance.vnc_token, "running");
+                    state.vnc_cache.insert(&instance.access_token, "running");
                 }
                 Err(e) => tracing::error!("Failed to get container IP for Traefik route: {}", e),
             }
@@ -280,10 +283,10 @@ async fn delete_instance(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    if let Err(e) = crate::vnc_trafik::delete_vnc_route(&instance.vnc_token) {
+    if let Err(e) = crate::route_writer::delete_route(&instance.access_token) {
         tracing::error!("Failed to delete Traefik VNC route: {}", e);
     }
-    state.vnc_cache.remove(&instance.vnc_token);
+    state.vnc_cache.remove(&instance.access_token);
 
     if let Some(ref container_id) = instance.container_id {
         let _ = state.docker.stop_container_by_id(container_id).await;
@@ -342,6 +345,9 @@ async fn start_instance(
         ));
     }
 
+    let template = template_repo.find_by_id(instance.template_id).await.ok().flatten();
+    let remote_type: RemoteType = template.as_ref().map(|t| t.remote_type.parse().ok()).flatten().unwrap_or(RemoteType::KasmVnc);
+
     let new_container_id = match instance.container_id {
         Some(ref cid) => {
             match state.docker.inspect_container_state(cid).await {
@@ -369,13 +375,14 @@ async fn start_instance(
                             cores: template.cores,
                             memory: template.memory,
                             gpu_count: template.gpu_count,
+                            remote_type: remote_type.clone(),
                             run_config: template.run_config,
                             exec_config: template.exec_config,
                             volume_mappings: template.volume_mappings,
                             persistent_volume: instance.resolved_volume_host_path.clone(),
                             command: None,
                         };
-                        let new_id = state.docker.create_container_from_template(&instance.name, instance.instance_number, &container_config, &instance.vnc_password).await.map_err(|e| {
+                        let new_id = state.docker.create_container_from_template(&instance.name, instance.instance_number, &container_config, &instance.access_password).await.map_err(|e| {
                             tracing::error!("Failed to create container for '{}': {}", instance.name, e);
                             (
                                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -401,13 +408,14 @@ async fn start_instance(
                     cores: template.cores,
                     memory: template.memory,
                     gpu_count: template.gpu_count,
+                    remote_type: remote_type.clone(),
                     run_config: template.run_config,
                     exec_config: template.exec_config,
                     volume_mappings: template.volume_mappings,
                     persistent_volume: instance.resolved_volume_host_path.clone(),
                     command: None,
                 };
-                let new_id = state.docker.create_container_from_template(&instance.name, instance.instance_number, &container_config, &instance.vnc_password).await.map_err(|e| {
+                let new_id = state.docker.create_container_from_template(&instance.name, instance.instance_number, &container_config, &instance.access_password).await.map_err(|e| {
                     tracing::error!("Failed to create container for '{}': {}", instance.name, e);
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -429,10 +437,10 @@ async fn start_instance(
 
         match state.docker.get_container_ip(cid, &state.docker.network_name()).await {
             Ok(ip) => {
-                if let Err(e) = crate::vnc_trafik::write_vnc_route(&instance.vnc_token, &ip, &instance.vnc_password) {
-                    tracing::error!("Failed to write Traefik VNC route: {}", e);
+                if let Err(e) = crate::route_writer::write_route(&remote_type, &instance.access_token, &ip, &instance.access_password) {
+                    tracing::error!("Failed to write Traefik route: {}", e);
                 }
-                state.vnc_cache.insert(&instance.vnc_token, "running");
+                state.vnc_cache.insert(&instance.access_token, "running");
             }
             Err(e) => tracing::error!("Failed to get container IP for Traefik route: {}", e),
         }
@@ -512,10 +520,10 @@ async fn stop_instance(
         }
     }
 
-    if let Err(e) = crate::vnc_trafik::delete_vnc_route(&instance.vnc_token) {
+    if let Err(e) = crate::route_writer::delete_route(&instance.access_token) {
         tracing::error!("Failed to delete Traefik VNC route: {}", e);
     }
-    state.vnc_cache.remove(&instance.vnc_token);
+    state.vnc_cache.remove(&instance.access_token);
 
     instance_repo.update_status(instance.id, "stopped").await.map_err(|e| {
         tracing::error!("Failed to update instance status: {}", e);

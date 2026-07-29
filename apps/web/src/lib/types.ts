@@ -6,6 +6,8 @@ export interface User {
   role: Role;
 }
 
+export type RemoteType = 'kasmvnc' | 'ttyd' | 'jupyter';
+
 export interface Template {
   id: string;
   name: string;
@@ -15,6 +17,7 @@ export interface Template {
   memory: number;
   gpu_count: number;
   docker_registry: string;
+  remote_type: RemoteType;
   persistent_storage_path: string;
   run_config: Record<string, unknown>;
   exec_config: Record<string, unknown>;
@@ -37,8 +40,8 @@ export interface Instance {
   container_id: string;
   mount_persistent: boolean;
   resolved_volume_host_path?: string;
-  vnc_token?: string;
-  vnc_password?: string;
+  access_token?: string;
+  access_password?: string;
   created_at: string;
   updated_at: string;
 }

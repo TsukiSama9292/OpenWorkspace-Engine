@@ -78,13 +78,13 @@
       <button class="px-4 py-2 bg-error-500 text-white border-none rounded cursor-pointer text-sm hover:bg-error-600 transition-colors" onclick={onDelete}>Delete</button>
     </div>
 
-    {#if instance.status === 'running' && instance.vnc_token}
+    {#if instance.status === 'running' && instance.access_token}
       <div class="p-4 bg-surface-50 border border-surface-300 rounded-lg mb-6">
         <h2 class="text-base font-semibold text-surface-700 mb-2">VNC Access</h2>
-        <a href="/vnc/{instance.vnc_token}/" target="_blank" class="text-primary-500 no-underline hover:text-primary-600 font-medium">
+        <a href="/vnc/{instance.access_token}/" target="_blank" class="text-primary-500 no-underline hover:text-primary-600 font-medium">
           Open VNC Session &rarr;
         </a>
-        <p class="text-surface-500 text-xs mt-2">Token: <code class="font-mono bg-surface-200 px-1 rounded">{instance.vnc_token.slice(0, 16)}...</code></p>
+        <p class="text-surface-500 text-xs mt-2">Token: <code class="font-mono bg-surface-200 px-1 rounded">{instance.access_token.slice(0, 16)}...</code></p>
       </div>
     {/if}
 

@@ -8,6 +8,7 @@ mod m20260723_000004_split_config_instance;
 mod m20260723_000005_drop_instance_number_unique;
 mod m20260723_000006_add_vnc_password;
 mod m20260723_000007_expand_vnc_password;
+mod m20260723_000008_add_remote_type;
 
 pub struct Migrator;
 
@@ -22,6 +23,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260723_000005_drop_instance_number_unique::Migration),
             Box::new(m20260723_000006_add_vnc_password::Migration),
             Box::new(m20260723_000007_expand_vnc_password::Migration),
+            Box::new(m20260723_000008_add_remote_type::Migration),
         ]
     }
 }

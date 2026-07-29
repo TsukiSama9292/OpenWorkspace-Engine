@@ -7,6 +7,37 @@ use bollard::models::ContainerSummary;
 use bollard::Docker;
 use futures_util::stream::TryStreamExt;
 use std::default::Default;
+use std::str::FromStr;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RemoteType {
+    KasmVnc,
+    Ttyd,
+    Jupyter,
+}
+
+impl RemoteType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RemoteType::KasmVnc => "kasmvnc",
+            RemoteType::Ttyd => "ttyd",
+            RemoteType::Jupyter => "jupyter",
+        }
+    }
+}
+
+impl FromStr for RemoteType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "kasmvnc" => Ok(RemoteType::KasmVnc),
+            "ttyd" => Ok(RemoteType::Ttyd),
+            "jupyter" => Ok(RemoteType::Jupyter),
+            _ => Err(format!("unknown remote_type: {}", s)),
+        }
+    }
+}
 
 const KASMVNC_YAML: &str = r#"network:
   ssl:
@@ -29,6 +60,7 @@ pub struct ContainerConfig {
     pub cores: i32,
     pub memory: i64,
     pub gpu_count: i32,
+    pub remote_type: RemoteType,
     pub run_config: serde_json::Value,
     pub exec_config: serde_json::Value,
     pub volume_mappings: serde_json::Value,
@@ -58,7 +90,7 @@ pub trait DockerService: Send + Sync {
         container_name: &str,
         instance_number: i32,
         config: &ContainerConfig,
-        vnc_password: &str,
+        password: &str,
     ) -> Result<String, String>;
 
     async fn start_container_by_id(
@@ -176,7 +208,7 @@ impl DockerService for DockerClient {
         container_name: &str,
         instance_number: i32,
         config: &ContainerConfig,
-        vnc_password: &str,
+        password: &str,
     ) -> Result<String, String> {
         let image = &config.image;
 
@@ -209,14 +241,31 @@ impl DockerService for DockerClient {
             );
         }
 
-        // ── Build environment variables ──
-        let mut env = vec![
-            "KASM_VNC_PORT=6901",
-            "DISPLAY=:1",
-        ];
-        // Pass VNC password via environment variable
-        let vnc_pw_env = format!("VNC_PW={}", vnc_password);
-        env.push(&vnc_pw_env);
+        // ── Build environment variables per remote_type ──
+        let mut env: Vec<&str> = Vec::new();
+        let mut owned_env: Vec<String> = Vec::new();
+
+        match config.remote_type {
+            RemoteType::KasmVnc => {
+                env.push("KASM_VNC_PORT=6901");
+                env.push("DISPLAY=:1");
+                let pw_env = format!("VNC_PW={}", password);
+                owned_env.push(pw_env);
+            }
+            RemoteType::Ttyd => {
+                owned_env.push(format!("TTYD_USERNAME=ow_user"));
+                owned_env.push(format!("TTYD_PASSWORD={}", password));
+            }
+            RemoteType::Jupyter => {
+                owned_env.push(format!("JUPYTER_PASSWORD={}", password));
+            }
+        }
+
+        // Push owned env strings as borrowed str
+        for s in &owned_env {
+            env.push(s);
+        }
+
         if let Some(user_env) = config.run_config.get("environment").and_then(|v| v.as_array()) {
             for item in user_env {
                 if let Some(s) = item.as_str() {
@@ -225,9 +274,19 @@ impl DockerService for DockerClient {
             }
         }
 
-        // ── Exposed ports ──
+        // ── Exposed ports per remote_type ──
         let mut exposed_ports = std::collections::HashMap::new();
-        exposed_ports.insert("6901/tcp", std::collections::HashMap::<(), ()>::new());
+        match config.remote_type {
+            RemoteType::KasmVnc => {
+                exposed_ports.insert("6901/tcp", std::collections::HashMap::<(), ()>::new());
+            }
+            RemoteType::Ttyd => {
+                exposed_ports.insert("7681/tcp", std::collections::HashMap::<(), ()>::new());
+            }
+            RemoteType::Jupyter => {
+                exposed_ports.insert("8888/tcp", std::collections::HashMap::<(), ()>::new());
+            }
+        }
 
         // ── Build volume binds ──
         let mut binds = Vec::new();
@@ -332,36 +391,39 @@ impl DockerService for DockerClient {
             .await
             .map_err(|e| e.to_string())?;
 
-        tracing::info!("Injecting kasmvnc.yaml into container '{}'...", container_name);
+        // ── Inject kasmvnc.yaml only for KasmVNC ──
+        if config.remote_type == RemoteType::KasmVnc {
+            tracing::info!("Injecting kasmvnc.yaml into container '{}'...", container_name);
 
-        let mut header = tar::Header::new_gnu();
-        header.set_size(KASMVNC_YAML.len() as u64);
-        header.set_mode(0o644);
-        header.set_cksum();
+            let mut header = tar::Header::new_gnu();
+            header.set_size(KASMVNC_YAML.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
 
-        let mut tar_buf: Vec<u8> = Vec::new();
-        {
-            let mut ar = tar::Builder::new(&mut tar_buf);
-            ar.append_data(
-                &mut header,
-                "etc/kasmvnc/kasmvnc.yaml",
-                KASMVNC_YAML.as_bytes(),
-            )
-            .map_err(|e| e.to_string())?;
-            ar.finish().map_err(|e| e.to_string())?;
+            let mut tar_buf: Vec<u8> = Vec::new();
+            {
+                let mut ar = tar::Builder::new(&mut tar_buf);
+                ar.append_data(
+                    &mut header,
+                    "etc/kasmvnc/kasmvnc.yaml",
+                    KASMVNC_YAML.as_bytes(),
+                )
+                .map_err(|e| e.to_string())?;
+                ar.finish().map_err(|e| e.to_string())?;
+            }
+
+            self.docker
+                .upload_to_container(
+                    &container.id,
+                    Some(UploadToContainerOptions {
+                        path: "/",
+                        ..Default::default()
+                    }),
+                    tar_buf.into(),
+                )
+                .await
+                .map_err(|e| format!("upload_to_container failed: {}", e))?;
         }
-
-        self.docker
-            .upload_to_container(
-                &container.id,
-                Some(UploadToContainerOptions {
-                    path: "/",
-                    ..Default::default()
-                }),
-                tar_buf.into(),
-            )
-            .await
-            .map_err(|e| format!("upload_to_container failed: {}", e))?;
 
         tracing::info!("Starting container '{}'...", container_name);
 
