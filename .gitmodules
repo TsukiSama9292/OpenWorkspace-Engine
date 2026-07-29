@@ -4,3 +4,6 @@
 [submodule "references_repo/kasmtech-noVNC"]
 	path = references_repo/kasmtech-noVNC
 	url = https://github.com/kasmtech/noVNC.git
+[submodule "references_repo/workspaces-core-images"]
+	path = references_repo/workspaces-core-images
+	url = https://github.com/kasmtech/workspaces-core-images.git
