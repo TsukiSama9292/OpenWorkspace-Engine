@@ -1,6 +1,6 @@
-# OpenWorkspace Engine
+# [OpenWorkspace Engine](https://github.com/TsukiSama9292/OpenWorkspace-Engine)
 
-**Multi-tenant container orchestration platform** — provisions isolated VNC containers on demand, exposed through Traefik reverse proxy with JWT authentication.
+**Multi-tenant container orchestration platform** — provisions isolated containers (desktop, Jupyter Lab, terminal) on demand, exposed through Traefik reverse proxy with JWT authentication.
 
 > Lightweight container orchestration with browser-based access — turn any server into a shared dev environment.
 
@@ -107,10 +107,32 @@ See [docs/development.md](docs/development.md) for environment variables, debugg
 
 ## Key Features
 
-- **Dynamic VNC Routing** — Traefik file provider with directory watching; new instances hot-reload in seconds
+### Supported Interfaces
+- **Desktop (KasmVNC)** — Full GUI Linux desktop in browser via HTML5 Canvas + WebSocket
+- **Jupyter Lab** — Python data science environment with pre-installed kernels
+- **Terminal (ttyd)** — Lightweight browser-based terminal for quick CLI access
+
+### Security & Isolation
+- **Cross-tenant isolation** — All instance traffic over SSL/TLS; each instance protected by a per-instance access token (94<sup>127</sup> combinations). Prevents tenants from directly accessing another tenant's instance via the container network — every request must go through the proxy with a valid token
+- **gVisor sandboxing** — Template-level `Container Runtime` option to select `runsc(gVisor)`, intercepting high-risk syscalls for host protection
 - **JWT Cookie Auth** — `ow_token` cookie + Traefik ForwardAuth for WebSocket upgrade validation
-- **Headless VNC Auth** — Traefik injects `Authorization: Basic` server-side; browser never sees credentials
+- **Headless Instance Auth** — Proxy injects credentials server-side for KasmVNC, Jupyter Lab, and ttyd; browser never sees secrets, users never manually auth to instances
 - **Per-Instance RBAC** — Admin / Manager / User tiers with ownership verification on mutation endpoints
+
+### User Package Management
+- **Nix + User Namespaces** — Fully isolated package management without affecting the host
+- **gVisor + sudo** — Alternative mode: run under `runsc(gVisor)` with sudo capability for traditional workflows
+
+### Instance & Account Management
+- **Lifecycle control** — Admins start, pause, and remove instances from the dashboard
+- **Account administration** — Admins create accounts with role assignment (admin / manager / user)
+
+### UI/UX
+- **Single-page Dashboard** — All management in one view; no page-switching latency
+- **Startup wait page** — Auto-detects instance readiness, then navigates directly into the instance interface
+
+### Under the Hood
+- **Dynamic VNC Routing** — Traefik file provider with directory watching; new instances hot-reload in seconds
 - **DashMap Cache** — O(1) VNC token lookup skips DB round-trip on every WebSocket handshake
 - **cgroups Resource Limits** — CPU cores + memory hard limits injected at container creation
 
@@ -132,7 +154,7 @@ See [docs/development.md](docs/development.md) for environment variables, debugg
 | Phase | Focus | Status |
 |---|---|---|
 | **1** | Core infrastructure — dynamic routing, auth, container lifecycle, DB | ✅ Complete |
-| **2** | AI/Data Science modules, ttyd terminal, SSH proxy, auto-sleep | 🔜 In progress |
+| **2** | Jupyter Lab, ttyd terminal, auto-sleep | 🔜 Partially complete |
 | **3** | Cluster monitor, audit logging, Tailscale mesh, multi-host orchestration | 📋 Planned |
 
 ---
