@@ -401,7 +401,8 @@ async fn test_list_instances_returns_all_fields() {
 
     assert!(inst["template_name"].as_str().is_some());
     assert!(inst["owner_username"].as_str().is_some());
-    assert!(inst["vnc_token"].as_str().is_some());
+    assert!(inst["access_token"].as_str().is_some());
+    assert!(inst["remote_type"].as_str().is_some());
     assert!(inst["status"].as_str().is_some());
     assert!(inst["container_id"].as_str().is_some());
 

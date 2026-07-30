@@ -26,7 +26,7 @@ for f in "$DYNAMIC_DIR"/*; do
   else
     rm -f "$f"
     echo "  rm    $name"
-    ((removed++))
+    ((++removed))
   fi
 done
 

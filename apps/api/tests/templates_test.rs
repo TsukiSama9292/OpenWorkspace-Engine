@@ -9,7 +9,7 @@ async fn test_create_template() {
 
     let resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "test-config",
-        "image": "kasmweb/desktop:1.19.0-rolling-daily",
+        "image": "tsukisama9292/ow-kasmvnc-ubuntu:jammy",
         "cores": 2,
         "memory": 4294967296_i64
     })).await;
@@ -28,7 +28,7 @@ async fn test_list_templates() {
 
     ctx.post("/api/templates", &serde_json::json!({
         "name": "list-test-config",
-        "image": "kasmweb/desktop:1.19.0-rolling-daily"
+        "image": "tsukisama9292/ow-kasmvnc-ubuntu:jammy"
     })).await;
 
     let resp = ctx.get("/api/templates").await;
@@ -47,7 +47,7 @@ async fn test_get_template() {
 
     let resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "get-test-config",
-        "image": "kasmweb/desktop:1.19.0-rolling-daily"
+        "image": "tsukisama9292/ow-kasmvnc-ubuntu:jammy"
     })).await;
     let body: serde_json::Value = resp.json().await.unwrap();
     let template_id = body["template"]["id"].as_str().unwrap();
@@ -67,7 +67,7 @@ async fn test_update_template() {
 
     let resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "update-test",
-        "image": "kasmweb/desktop:1.19.0-rolling-daily",
+        "image": "tsukisama9292/ow-kasmvnc-ubuntu:jammy",
         "cores": 1
     })).await;
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -75,7 +75,7 @@ async fn test_update_template() {
 
     let resp = ctx.put(&format!("/api/templates/{}", template_id), &serde_json::json!({
         "name": "update-test-renamed",
-        "image": "kasmweb/desktop:1.19.0-rolling-daily",
+        "image": "tsukisama9292/ow-kasmvnc-ubuntu:jammy",
         "cores": 4,
         "memory": 8589934592_i64,
         "gpu_count": 0,
@@ -97,7 +97,7 @@ async fn test_delete_template() {
 
     let resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "delete-test",
-        "image": "kasmweb/desktop:1.19.0-rolling-daily"
+        "image": "tsukisama9292/ow-kasmvnc-ubuntu:jammy"
     })).await;
     let body: serde_json::Value = resp.json().await.unwrap();
     let template_id = body["template"]["id"].as_str().unwrap();
@@ -217,7 +217,7 @@ async fn test_create_template_with_defaults() {
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["template"]["image"], "kasmweb/desktop:1.19.0-rolling-daily");
+    assert_eq!(body["template"]["image"], "tsukisama9292/ow-kasmvnc-ubuntu:jammy");
     assert_eq!(body["template"]["cores"], 2);
     assert_eq!(body["template"]["memory"], 4_294_967_296_i64);
 }
@@ -298,6 +298,7 @@ async fn test_template_to_json_fields_in_response() {
     assert_eq!(cfg["memory"], 8192);
     assert_eq!(cfg["gpu_count"], 1);
     assert_eq!(cfg["docker_registry"], "myreg.io");
+    assert_eq!(cfg["container_runtime"], "docker");
     assert_eq!(cfg["run_config"]["key"], "val");
     assert_eq!(cfg["exec_config"]["cmd"], true);
     assert_eq!(cfg["volume_mappings"]["/h"], "/c");
@@ -331,4 +332,89 @@ async fn test_get_template_includes_instance_count() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["template"]["instance_count"], 2);
+}
+
+#[tokio::test]
+async fn test_create_template_with_container_runtime() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "runtime-test",
+        "image": "busybox:1",
+        "container_runtime": "runsc"
+    })).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["template"]["container_runtime"], "runsc");
+
+    let template_id = body["template"]["id"].as_str().unwrap();
+    let resp = ctx.get(&format!("/api/templates/{}", template_id)).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["template"]["container_runtime"], "runsc");
+}
+
+#[tokio::test]
+async fn test_create_template_default_container_runtime() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "default-runtime",
+        "image": "busybox:1"
+    })).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["template"]["container_runtime"], "docker");
+}
+
+#[tokio::test]
+async fn test_update_template_container_runtime() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "runtime-update",
+        "image": "busybox:1"
+    })).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let template_id = body["template"]["id"].as_str().unwrap();
+
+    let resp = ctx.put(&format!("/api/templates/{}", template_id), &serde_json::json!({
+        "name": "runtime-update",
+        "image": "busybox:1",
+        "cores": 2,
+        "memory": 4294967296_i64,
+        "gpu_count": 0,
+        "run_config": {},
+        "exec_config": {},
+        "volume_mappings": {},
+        "container_runtime": "runsc"
+    })).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["template"]["container_runtime"], "runsc");
+
+    let resp = ctx.get(&format!("/api/templates/{}", template_id)).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["template"]["container_runtime"], "runsc");
+}
+
+#[tokio::test]
+async fn test_template_response_includes_container_runtime() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "json-runtime",
+        "image": "busybox:1",
+        "container_runtime": "runsc"
+    })).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["template"].get("container_runtime").is_some());
 }

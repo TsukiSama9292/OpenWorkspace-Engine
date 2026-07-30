@@ -52,7 +52,7 @@ async fn vnc_verify(
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
     let vnc_token = forwarded_uri
-        .strip_prefix("/vnc/")
+        .strip_prefix("/kasmvnc/")
         .and_then(|rest| rest.strip_suffix("/websockify"))
         .ok_or(StatusCode::UNAUTHORIZED)?;
 

@@ -7,3 +7,9 @@
 [submodule "references_repo/workspaces-core-images"]
 	path = references_repo/workspaces-core-images
 	url = https://github.com/kasmtech/workspaces-core-images.git
+[submodule "references_repo/ttyd"]
+	path = references_repo/ttyd
+	url = https://github.com/tsl0922/ttyd.git
+[submodule "references_repo/JupyterLab"]
+	path = references_repo/JupyterLab
+	url = https://github.com/jupyterlab/jupyterlab.git

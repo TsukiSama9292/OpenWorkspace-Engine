@@ -1,11 +1,15 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { submitTemplate, createInitialFormState } from './template-create';
+  import { submitTemplate, createInitialFormState, DEFAULT_IMAGES } from './template-create';
   import TemplateBasics from '$lib/components/forms/TemplateBasics.svelte';
   import TemplateResources from '$lib/components/forms/TemplateResources.svelte';
   import TemplateAdvanced from '$lib/components/forms/TemplateAdvanced.svelte';
 
   let form = $state(createInitialFormState());
+
+  $effect(() => {
+    form.image = DEFAULT_IMAGES[form.remoteType];
+  });
 
   async function onSubmit() {
     form.loading = true;
@@ -28,7 +32,7 @@
     </button>
 
     {#if form.showAdvanced}
-      <TemplateAdvanced bind:hostname={form.hostname} bind:dns={form.dns} bind:shmSize={form.shmSize} bind:networkMode={form.networkMode} bind:envVars={form.envVars} bind:execCommand={form.execCommand} bind:volumeMappings={form.volumeMappings} />
+      <TemplateAdvanced bind:hostname={form.hostname} bind:dns={form.dns} bind:shmSize={form.shmSize} bind:networkMode={form.networkMode} bind:containerRuntime={form.containerRuntime} bind:envVars={form.envVars} bind:execCommand={form.execCommand} bind:volumeMappings={form.volumeMappings} />
     {/if}
 
     {#if form.error}

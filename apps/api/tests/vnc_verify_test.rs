@@ -105,7 +105,7 @@ async fn test_vnc_verify_db_hit_running() {
     })).await;
     let launch_body: serde_json::Value = launch_resp.json().await.unwrap();
     let instance_id = launch_body["instance"]["id"].as_str().unwrap();
-    let vnc_token = launch_body["instance"]["vnc_token"].as_str().unwrap().to_string();
+    let access_token = launch_body["instance"]["access_token"].as_str().unwrap().to_string();
 
     // Update instance status to "running" via DB
     let inst_id = uuid::Uuid::parse_str(instance_id).unwrap();
@@ -123,7 +123,7 @@ async fn test_vnc_verify_db_hit_running() {
         .client
         .get(format!("{}/api/vnc/verify", ctx.base_url))
         .header("Cookie", format!("ow_token={}", token))
-        .header("X-Forwarded-Uri", format!("/vnc/{}/websockify", vnc_token))
+        .header("X-Forwarded-Uri", format!("/vnc/{}/websockify", access_token))
         .send()
         .await
         .unwrap();
@@ -148,7 +148,7 @@ async fn test_vnc_verify_db_hit_not_running() {
     })).await;
     let launch_body: serde_json::Value = launch_resp.json().await.unwrap();
     let instance_id = launch_body["instance"]["id"].as_str().unwrap();
-    let vnc_token = launch_body["instance"]["vnc_token"].as_str().unwrap().to_string();
+    let access_token = launch_body["instance"]["access_token"].as_str().unwrap().to_string();
 
     // Force status to "stopped" — launch_instance may have set it to "running" if Docker succeeded
     let inst_id = uuid::Uuid::parse_str(instance_id).unwrap();
@@ -166,7 +166,7 @@ async fn test_vnc_verify_db_hit_not_running() {
         .client
         .get(format!("{}/api/vnc/verify", ctx.base_url))
         .header("Cookie", format!("ow_token={}", token))
-        .header("X-Forwarded-Uri", format!("/vnc/{}/websockify", vnc_token))
+        .header("X-Forwarded-Uri", format!("/vnc/{}/websockify", access_token))
         .send()
         .await
         .unwrap();

@@ -16,7 +16,7 @@
     $isAuthenticated
     && $page.url.pathname !== '/'
     && $page.url.pathname !== '/login/'
-    && !$page.url.pathname.startsWith('/vnc/')
+    && !$page.url.pathname.startsWith('/kasmvnc/')
   );
 
   $effect(() => {

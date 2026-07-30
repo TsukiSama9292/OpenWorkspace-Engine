@@ -35,6 +35,7 @@ fn template_to_json(template: &WorkspaceTemplate, instance_count: i64) -> serde_
         "gpu_count": template.gpu_count,
         "docker_registry": template.docker_registry,
         "remote_type": template.remote_type,
+        "container_runtime": if template.container_runtime.is_empty() { "docker" } else { &template.container_runtime },
         "run_config": template.run_config,
         "exec_config": template.exec_config,
         "volume_mappings": template.volume_mappings,
@@ -67,6 +68,8 @@ struct CreateTemplateRequest {
     #[serde(default)]
     volume_mappings: serde_json::Value,
     persistent_storage_path: Option<String>,
+    #[serde(default = "default_container_runtime")]
+    container_runtime: String,
 }
 
 #[derive(Deserialize)]
@@ -84,10 +87,12 @@ struct UpdateTemplateRequest {
     exec_config: serde_json::Value,
     volume_mappings: serde_json::Value,
     persistent_storage_path: Option<String>,
+    #[serde(default = "default_container_runtime")]
+    container_runtime: String,
 }
 
 fn default_image() -> String {
-    "kasmweb/desktop:1.19.0-rolling-daily".to_string()
+    "tsukisama9292/ow-kasmvnc-ubuntu:jammy".to_string()
 }
 fn default_cores() -> i32 {
     2
@@ -97,6 +102,9 @@ fn default_memory() -> i64 {
 }
 fn default_remote_type() -> String {
     "kasmvnc".to_string()
+}
+fn default_container_runtime() -> String {
+    "docker".to_string()
 }
 
 async fn list_templates(
@@ -163,6 +171,7 @@ async fn create_template(
             input.gpu_count,
             input.docker_registry.as_deref(),
             &input.remote_type,
+            &input.container_runtime,
             &run_config,
             &exec_config,
             &volume_mappings,
@@ -234,6 +243,7 @@ async fn update_template(
             input.gpu_count,
             input.docker_registry.as_deref(),
             &input.remote_type,
+            &input.container_runtime,
             &input.run_config,
             &input.exec_config,
             &input.volume_mappings,

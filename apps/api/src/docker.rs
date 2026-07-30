@@ -24,6 +24,14 @@ impl RemoteType {
             RemoteType::Jupyter => "jupyter",
         }
     }
+
+    pub fn port(&self) -> u16 {
+        match self {
+            RemoteType::KasmVnc => 6901,
+            RemoteType::Ttyd => 7681,
+            RemoteType::Jupyter => 8888,
+        }
+    }
 }
 
 impl FromStr for RemoteType {
@@ -66,6 +74,14 @@ pub struct ContainerConfig {
     pub volume_mappings: serde_json::Value,
     pub persistent_volume: Option<String>,
     pub command: Option<Vec<String>>,
+    pub runtime: Option<String>,
+}
+
+pub fn runtime_to_host_config(value: &str) -> Option<String> {
+    match value {
+        "" | "docker" => None,
+        other => Some(other.to_string()),
+    }
 }
 
 /// Trait for Docker operations, allowing mock implementations in tests.
@@ -91,6 +107,7 @@ pub trait DockerService: Send + Sync {
         instance_number: i32,
         config: &ContainerConfig,
         password: &str,
+        access_token: &str,
     ) -> Result<String, String>;
 
     async fn start_container_by_id(
@@ -209,6 +226,7 @@ impl DockerService for DockerClient {
         instance_number: i32,
         config: &ContainerConfig,
         password: &str,
+        access_token: &str,
     ) -> Result<String, String> {
         let image = &config.image;
 
@@ -257,7 +275,8 @@ impl DockerService for DockerClient {
                 owned_env.push(format!("TTYD_PASSWORD={}", password));
             }
             RemoteType::Jupyter => {
-                owned_env.push(format!("JUPYTER_PASSWORD={}", password));
+                owned_env.push(format!("JUPYTER_TOKEN={}", password));
+                owned_env.push(format!("JUPYTER_BASE_URL=/jupyter/{}", access_token));
             }
         }
 
@@ -354,6 +373,7 @@ impl DockerService for DockerClient {
             } else {
                 None
             },
+            runtime: config.runtime.as_deref().and_then(runtime_to_host_config),
             ..Default::default()
         };
 
@@ -556,5 +576,35 @@ impl DockerService for DockerClient {
             .and_then(|net| net.ip_address)
             .filter(|ip| !ip.is_empty())
             .ok_or_else(|| format!("no IP on network '{}' for container {}", network_name, &container_id[..12]))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_runtime_to_host_config_docker_returns_none() {
+        assert_eq!(runtime_to_host_config("docker"), None);
+    }
+
+    #[test]
+    fn test_runtime_to_host_config_empty_returns_none() {
+        assert_eq!(runtime_to_host_config(""), None);
+    }
+
+    #[test]
+    fn test_runtime_to_host_config_runsc_returns_some() {
+        assert_eq!(runtime_to_host_config("runsc"), Some("runsc".to_string()));
+    }
+
+    #[test]
+    fn test_runtime_to_host_config_other_returns_some() {
+        assert_eq!(runtime_to_host_config("kata"), Some("kata".to_string()));
+    }
+
+    #[test]
+    fn test_runtime_to_host_config_nvidia_returns_some() {
+        assert_eq!(runtime_to_host_config("nvidia"), Some("nvidia".to_string()));
     }
 }

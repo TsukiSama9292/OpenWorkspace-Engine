@@ -25,7 +25,15 @@ pub fn routes() -> Router<AppState> {
         .route("/api/instances/{id}/unpause", post(unpause_instance))
 }
 
-fn instance_to_json(inst: &WorkspaceInstance, template_name: Option<&str>, owner_username: Option<&str>, owner_role: Option<&str>) -> serde_json::Value {
+fn resolve_runtime(container_runtime: &str, settings_runtime: &str) -> String {
+    if container_runtime.is_empty() {
+        settings_runtime.to_string()
+    } else {
+        container_runtime.to_string()
+    }
+}
+
+fn instance_to_json(inst: &WorkspaceInstance, template_name: Option<&str>, remote_type: Option<&str>, owner_username: Option<&str>, owner_role: Option<&str>) -> serde_json::Value {
     serde_json::json!({
         "id": inst.id,
         "template_id": inst.template_id,
@@ -41,6 +49,7 @@ fn instance_to_json(inst: &WorkspaceInstance, template_name: Option<&str>, owner
         "mount_persistent": inst.mount_persistent,
         "resolved_volume_host_path": inst.resolved_volume_host_path,
         "template_name": template_name,
+        "remote_type": remote_type,
         "created_at": inst.created_at,
         "updated_at": inst.updated_at,
     })
@@ -91,10 +100,12 @@ async fn list_instances(
     };
 
     let mut template_names = std::collections::HashMap::new();
+    let mut template_remote_types = std::collections::HashMap::new();
     for inst in &instances {
         if !template_names.contains_key(&inst.template_id) {
             if let Ok(Some(template)) = template_repo.find_by_id(inst.template_id).await {
                 template_names.insert(inst.template_id, template.name);
+                template_remote_types.insert(inst.template_id, template.remote_type);
             }
         }
     }
@@ -115,9 +126,10 @@ async fn list_instances(
         .iter()
         .map(|inst| {
             let template_name = template_names.get(&inst.template_id).map(|s| s.as_str());
+            let remote_type = template_remote_types.get(&inst.template_id).map(|s| s.as_str());
             let owner_username = owner_usernames.get(&inst.owner_id).map(|s| s.as_str());
             let owner_role = owner_roles.get(&inst.owner_id).map(|s| s.as_str());
-            instance_to_json(inst, template_name, owner_username, owner_role)
+            instance_to_json(inst, template_name, remote_type, owner_username, owner_role)
         })
         .collect();
 
@@ -186,22 +198,23 @@ async fn launch_instance(
         volume_mappings: template.volume_mappings.clone(),
         persistent_volume: resolved_path.map(|s| s.to_string()),
         command: None,
+        runtime: Some(resolve_runtime(&template.container_runtime, &state.settings.container_runtime)),
     };
 
     match state.docker
-        .create_container_from_template(&instance.name, instance.instance_number, &container_config, &instance.access_password)
+        .create_container_from_template(&instance.name, instance.instance_number, &container_config, &instance.access_password, &instance.access_token)
         .await
     {
         Ok(container_id) => {
             instance_repo.update_container_id(instance.id, &container_id).await.ok();
-            instance_repo.update_status(instance.id, "running").await.ok();
+            instance_repo.update_status(instance.id, "starting").await.ok();
 
             match state.docker.get_container_ip(&container_id, &state.docker.network_name()).await {
                 Ok(ip) => {
                     if let Err(e) = crate::route_writer::write_route(&remote_type, &instance.access_token, &ip, &instance.access_password) {
                         tracing::error!("Failed to write Traefik VNC route: {}", e);
                     }
-                    state.vnc_cache.insert(&instance.access_token, "running");
+                    state.vnc_cache.insert(&instance.access_token, "starting");
                 }
                 Err(e) => tracing::error!("Failed to get container IP for Traefik route: {}", e),
             }
@@ -214,11 +227,11 @@ async fn launch_instance(
 
             let mut inst = instance;
             inst.container_id = Some(container_id);
-            inst.status = "running".to_string();
+            inst.status = "starting".to_string();
             let owner = user_repo.find_by_id(inst.owner_id).await.ok().flatten();
             let owner_username = owner.as_ref().map(|u| u.1.as_str());
             let owner_role = owner.as_ref().map(|u| u.3.as_str());
-            Ok(Json(serde_json::json!({ "instance": instance_to_json(&inst, Some(&template.name), owner_username, owner_role) })))
+            Ok(Json(serde_json::json!({ "instance": instance_to_json(&inst, Some(&template.name), Some(&template.remote_type), owner_username, owner_role) })))
         }
         Err(e) => {
             tracing::warn!(
@@ -232,7 +245,7 @@ async fn launch_instance(
             let owner = user_repo.find_by_id(inst.owner_id).await.ok().flatten();
             let owner_username = owner.as_ref().map(|u| u.1.as_str());
             let owner_role = owner.as_ref().map(|u| u.3.as_str());
-            Ok(Json(serde_json::json!({ "instance": instance_to_json(&inst, Some(&template.name), owner_username, owner_role), "docker_error": e })))
+            Ok(Json(serde_json::json!({ "instance": instance_to_json(&inst, Some(&template.name), Some(&template.remote_type), owner_username, owner_role), "docker_error": e })))
         }
     }
 }
@@ -252,18 +265,20 @@ async fn get_instance(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let template_name = template_repo
+    let template = template_repo
         .find_by_id(instance.template_id)
         .await
         .ok()
-        .flatten()
-        .map(|t| t.name);
+        .flatten();
+
+    let template_name = template.as_ref().map(|t| t.name.clone());
+    let remote_type = template.as_ref().map(|t| t.remote_type.clone());
 
     let owner = user_repo.find_by_id(instance.owner_id).await.ok().flatten();
     let owner_username = owner.as_ref().map(|u| u.1.as_str());
     let owner_role = owner.as_ref().map(|u| u.3.as_str());
 
-    Ok(Json(serde_json::json!({ "instance": instance_to_json(&instance, template_name.as_deref(), owner_username, owner_role) })))
+    Ok(Json(serde_json::json!({ "instance": instance_to_json(&instance, template_name.as_deref(), remote_type.as_deref(), owner_username, owner_role) })))
 }
 
 async fn delete_instance(
@@ -381,8 +396,9 @@ async fn start_instance(
                             volume_mappings: template.volume_mappings,
                             persistent_volume: instance.resolved_volume_host_path.clone(),
                             command: None,
+                            runtime: Some(resolve_runtime(&template.container_runtime, &state.settings.container_runtime)),
                         };
-                        let new_id = state.docker.create_container_from_template(&instance.name, instance.instance_number, &container_config, &instance.access_password).await.map_err(|e| {
+                        let new_id = state.docker.create_container_from_template(&instance.name, instance.instance_number, &container_config, &instance.access_password, &instance.access_token).await.map_err(|e| {
                             tracing::error!("Failed to create container for '{}': {}", instance.name, e);
                             (
                                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -414,8 +430,9 @@ async fn start_instance(
                     volume_mappings: template.volume_mappings,
                     persistent_volume: instance.resolved_volume_host_path.clone(),
                     command: None,
+                    runtime: Some(resolve_runtime(&template.container_runtime, &state.settings.container_runtime)),
                 };
-                let new_id = state.docker.create_container_from_template(&instance.name, instance.instance_number, &container_config, &instance.access_password).await.map_err(|e| {
+                let new_id = state.docker.create_container_from_template(&instance.name, instance.instance_number, &container_config, &instance.access_password, &instance.access_token).await.map_err(|e| {
                     tracing::error!("Failed to create container for '{}': {}", instance.name, e);
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -440,12 +457,12 @@ async fn start_instance(
                 if let Err(e) = crate::route_writer::write_route(&remote_type, &instance.access_token, &ip, &instance.access_password) {
                     tracing::error!("Failed to write Traefik route: {}", e);
                 }
-                state.vnc_cache.insert(&instance.access_token, "running");
+                state.vnc_cache.insert(&instance.access_token, "starting");
             }
             Err(e) => tracing::error!("Failed to get container IP for Traefik route: {}", e),
         }
     }
-    instance_repo.update_status(instance.id, "running").await.map_err(|e| {
+    instance_repo.update_status(instance.id, "starting").await.map_err(|e| {
         tracing::error!("Failed to update instance status: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -457,7 +474,7 @@ async fn start_instance(
 
     let container_id_str = new_container_id.as_deref();
     Ok(Json(serde_json::json!({
-        "status": "running",
+        "status": "starting",
         "container_id": container_id_str
     })))
 }

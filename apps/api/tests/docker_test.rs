@@ -54,7 +54,7 @@ async fn test_pause_unpause() {
     };
 
     let id = client
-        .create_container_from_template(&name, 1, &config, "test_password")
+        .create_container_from_template(&name, 1, &config, "test_password", "")
         .await
         .unwrap();
 
@@ -105,7 +105,7 @@ async fn test_create_container_from_template() {
     };
 
     let id = client
-        .create_container_from_template(&name, 1, &config, "test_password")
+        .create_container_from_template(&name, 1, &config, "test_password", "")
         .await
         .unwrap();
     assert!(!id.is_empty());
@@ -138,7 +138,7 @@ async fn test_create_container_from_template_with_env_and_dns() {
     };
 
     let id = client
-        .create_container_from_template(&name, 2, &config, "test_password")
+        .create_container_from_template(&name, 2, &config, "test_password", "")
         .await
         .unwrap();
     assert!(!id.is_empty());
@@ -173,7 +173,7 @@ async fn test_create_container_from_template_with_volume() {
     };
 
     let id = client
-        .create_container_from_template(&name, 3, &config, "test_password")
+        .create_container_from_template(&name, 3, &config, "test_password", "")
         .await
         .unwrap();
     assert!(!id.is_empty());
@@ -218,7 +218,7 @@ async fn test_create_container_from_template_with_exec() {
     };
 
     let id = client
-        .create_container_from_template(&name, 1, &config, "test_password")
+        .create_container_from_template(&name, 1, &config, "test_password", "")
         .await
         .unwrap();
     assert!(!id.is_empty());
@@ -250,7 +250,7 @@ async fn test_create_container_from_template_with_hostname() {
     };
 
     let id = client
-        .create_container_from_template(&name, 1, &config, "test_password")
+        .create_container_from_template(&name, 1, &config, "test_password", "")
         .await
         .unwrap();
     assert!(!id.is_empty());
@@ -279,7 +279,7 @@ async fn test_create_container_from_template_command_from_run_config() {
     };
 
     let id = client
-        .create_container_from_template(&name, 1, &config, "test_password")
+        .create_container_from_template(&name, 1, &config, "test_password", "")
         .await
         .unwrap();
     assert!(!id.is_empty());
@@ -308,7 +308,7 @@ async fn test_create_container_from_template_no_command() {
         command: None,
     };
 
-    let _result = client.create_container_from_template(&name, 1, &config, "test_password").await;
+    let _result = client.create_container_from_template(&name, 1, &config, "test_password", "").await;
 }
 
 #[tokio::test]
@@ -334,7 +334,7 @@ async fn test_create_container_from_template_with_shm_size_and_network_mode() {
     };
 
     let id = client
-        .create_container_from_template(&name, 1, &config, "test_password")
+        .create_container_from_template(&name, 1, &config, "test_password", "")
         .await
         .unwrap();
     assert!(!id.is_empty());
@@ -391,7 +391,7 @@ async fn test_create_container_from_template_with_gpu() {
     };
 
     let result = client
-        .create_container_from_template(&name, 1, &config, "test_password")
+        .create_container_from_template(&name, 1, &config, "test_password", "")
         .await;
     match result {
         Ok(id) => {
@@ -425,13 +425,13 @@ async fn test_create_container_from_template_image_already_cached() {
     };
 
     let _id1 = client
-        .create_container_from_template(&name1, 1, &config, "test_password")
+        .create_container_from_template(&name1, 1, &config, "test_password", "")
         .await
         .unwrap();
 
     let name2 = format!("ow_test_docker_cached2_{}", std::process::id());
     let id2 = client
-        .create_container_from_template(&name2, 2, &config, "test_password")
+        .create_container_from_template(&name2, 2, &config, "test_password", "")
         .await
         .unwrap();
 
@@ -459,7 +459,7 @@ async fn test_create_container_from_template_cores_and_memory() {
     };
 
     let id = client
-        .create_container_from_template(&name, 1, &config, "test_password")
+        .create_container_from_template(&name, 1, &config, "test_password", "")
         .await
         .unwrap();
     assert!(!id.is_empty());
@@ -513,7 +513,7 @@ async fn test_inspect_container_state_running() {
     };
 
     let id = client
-        .create_container_from_template(&name, 1, &config, "test_password")
+        .create_container_from_template(&name, 1, &config, "test_password", "")
         .await
         .unwrap();
 

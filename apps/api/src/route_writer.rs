@@ -10,7 +10,7 @@ fn default_dynamic_dir() -> PathBuf {
 fn write_route_to(dir: &PathBuf, remote_type: &RemoteType, token: &str, container_ip: &str, password: &str) -> Result<(), String> {
     match remote_type {
         RemoteType::KasmVnc => write_vnc_route_to(dir, token, container_ip, password),
-        RemoteType::Ttyd => write_ttyd_route_to(dir, token, container_ip),
+        RemoteType::Ttyd => write_ttyd_route_to(dir, token, container_ip, password),
         RemoteType::Jupyter => write_jupyter_route_to(dir, token, container_ip),
     }
 }
@@ -19,25 +19,25 @@ fn write_vnc_route_to(dir: &PathBuf, token: &str, container_ip: &str, vnc_passwo
     use base64::Engine;
     let auth_header = format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(format!("kasm_user:{}", vnc_password)));
 
-    let ws_path = dir.join(format!("vnc-{}-ws.yml", token));
+    let ws_path = dir.join(format!("kasmvnc-{}-ws.yml", token));
     let ws_yaml = format!(
         r#"http:
   routers:
-    vnc-{token}-ws:
-      rule: "PathPrefix(`/vnc/{token}/websockify`)"
-      service: "vnc-{token}"
+    kasmvnc-{token}-ws:
+      rule: "PathPrefix(`/kasmvnc/{token}/websockify`)"
+      service: "kasmvnc-{token}"
       entryPoints:
         - web
       middlewares:
-        - "vnc-{token}-auth"
+        - "kasmvnc-{token}-auth"
   services:
-    vnc-{token}:
+    kasmvnc-{token}:
       loadBalancer:
         serversTransport: "kasm-insecure"
         servers:
           - url: "https://{ip}:6901"
   middlewares:
-    vnc-{token}-auth:
+    kasmvnc-{token}-auth:
       headers:
         customRequestHeaders:
           Authorization: "{auth_header}"
@@ -52,7 +52,10 @@ fn write_vnc_route_to(dir: &PathBuf, token: &str, container_ip: &str, vnc_passwo
     Ok(())
 }
 
-fn write_ttyd_route_to(dir: &PathBuf, token: &str, container_ip: &str) -> Result<(), String> {
+fn write_ttyd_route_to(dir: &PathBuf, token: &str, container_ip: &str, password: &str) -> Result<(), String> {
+    use base64::Engine;
+    let auth_header = format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(format!("ow_user:{}", password)));
+
     let ws_path = dir.join(format!("ttyd-{}-ws.yml", token));
     let ws_yaml = format!(
         r#"http:
@@ -62,14 +65,28 @@ fn write_ttyd_route_to(dir: &PathBuf, token: &str, container_ip: &str) -> Result
       service: "ttyd-{token}"
       entryPoints:
         - web
+      middlewares:
+        - "ttyd-{token}-auth"
+        - "ttyd-{token}-strip"
   services:
     ttyd-{token}:
       loadBalancer:
+        serversTransport: "kasm-insecure"
         servers:
-          - url: "http://{ip}:7681"
+          - url: "https://{ip}:7681"
+  middlewares:
+    ttyd-{token}-auth:
+      headers:
+        customRequestHeaders:
+          Authorization: "{auth_header}"
+    ttyd-{token}-strip:
+      stripPrefix:
+        prefixes:
+          - "/ttyd/{token}"
 "#,
         token = token,
         ip = container_ip,
+        auth_header = auth_header,
     );
     std::fs::write(&ws_path, ws_yaml).map_err(|e| format!("write {}: {}", ws_path.display(), e))?;
 
@@ -90,8 +107,9 @@ fn write_jupyter_route_to(dir: &PathBuf, token: &str, container_ip: &str) -> Res
   services:
     jupyter-{token}:
       loadBalancer:
+        serversTransport: "kasm-insecure"
         servers:
-          - url: "http://{ip}:8888"
+          - url: "https://{ip}:8888"
 "#,
         token = token,
         ip = container_ip,
@@ -107,7 +125,7 @@ pub fn write_route(remote_type: &RemoteType, token: &str, container_ip: &str, pa
 }
 
 fn delete_route_from(dir: &PathBuf, token: &str) -> Result<(), String> {
-    for prefix in &["vnc-", "ttyd-", "jupyter-"] {
+    for prefix in &["kasmvnc-", "ttyd-", "jupyter-"] {
         let path = dir.join(format!("{}{}-ws.yml", prefix, token));
         if path.exists() {
             std::fs::remove_file(&path).map_err(|e| format!("remove {}: {}", path.display(), e))?;
@@ -141,7 +159,7 @@ mod tests {
         let dir = temp_dir();
         let result = write_vnc_route_to(&dir, "abc123", "172.17.0.2", "testpass");
         assert!(result.is_ok());
-        assert!(dir.join("vnc-abc123-ws.yml").exists());
+        assert!(dir.join("kasmvnc-abc123-ws.yml").exists());
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -149,8 +167,8 @@ mod tests {
     fn vnc_file_contains_websockify_rule() {
         let dir = temp_dir();
         write_vnc_route_to(&dir, "tok1", "10.0.0.1", "testpass").unwrap();
-        let content = fs::read_to_string(dir.join("vnc-tok1-ws.yml")).unwrap();
-        assert!(content.contains("PathPrefix(`/vnc/tok1/websockify`)"));
+        let content = fs::read_to_string(dir.join("kasmvnc-tok1-ws.yml")).unwrap();
+        assert!(content.contains("PathPrefix(`/kasmvnc/tok1/websockify`)"));
         assert!(content.contains("https://10.0.0.1:6901"));
         assert!(content.contains("kasm-insecure"));
         fs::remove_dir_all(&dir).unwrap();
@@ -159,10 +177,14 @@ mod tests {
     #[test]
     fn ttyd_file_contains_path_prefix() {
         let dir = temp_dir();
-        write_ttyd_route_to(&dir, "tok1", "10.0.0.1").unwrap();
+        write_ttyd_route_to(&dir, "tok1", "10.0.0.1", "testpass").unwrap();
         let content = fs::read_to_string(dir.join("ttyd-tok1-ws.yml")).unwrap();
         assert!(content.contains("PathPrefix(`/ttyd/tok1/`)"));
-        assert!(content.contains("http://10.0.0.1:7681"));
+        assert!(content.contains("https://10.0.0.1:7681"));
+        assert!(content.contains("kasm-insecure"));
+        assert!(content.contains("stripPrefix"));
+        assert!(content.contains("/ttyd/tok1"));
+        assert!(content.contains("Authorization"));
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -172,7 +194,9 @@ mod tests {
         write_jupyter_route_to(&dir, "tok1", "10.0.0.1").unwrap();
         let content = fs::read_to_string(dir.join("jupyter-tok1-ws.yml")).unwrap();
         assert!(content.contains("PathPrefix(`/jupyter/tok1/`)"));
-        assert!(content.contains("http://10.0.0.1:8888"));
+        assert!(content.contains("https://10.0.0.1:8888"));
+        assert!(content.contains("kasm-insecure"));
+        assert!(!content.contains("stripPrefix"), "jupyter route should not strip prefix");
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -181,7 +205,7 @@ mod tests {
         let dir = temp_dir();
         write_vnc_route_to(&dir, "tok1", "10.0.0.1", "testpass").unwrap();
         write_vnc_route_to(&dir, "tok1", "10.0.0.2", "testpass2").unwrap();
-        let content = fs::read_to_string(dir.join("vnc-tok1-ws.yml")).unwrap();
+        let content = fs::read_to_string(dir.join("kasmvnc-tok1-ws.yml")).unwrap();
         assert!(content.contains("https://10.0.0.2:6901"));
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -190,13 +214,13 @@ mod tests {
     fn delete_removes_all_type_files() {
         let dir = temp_dir();
         write_vnc_route_to(&dir, "tok1", "10.0.0.1", "testpass").unwrap();
-        write_ttyd_route_to(&dir, "tok1", "10.0.0.1").unwrap();
+        write_ttyd_route_to(&dir, "tok1", "10.0.0.1", "testpass").unwrap();
         write_jupyter_route_to(&dir, "tok1", "10.0.0.1").unwrap();
-        assert!(dir.join("vnc-tok1-ws.yml").exists());
+        assert!(dir.join("kasmvnc-tok1-ws.yml").exists());
         assert!(dir.join("ttyd-tok1-ws.yml").exists());
         assert!(dir.join("jupyter-tok1-ws.yml").exists());
         delete_route_from(&dir, "tok1").unwrap();
-        assert!(!dir.join("vnc-tok1-ws.yml").exists());
+        assert!(!dir.join("kasmvnc-tok1-ws.yml").exists());
         assert!(!dir.join("ttyd-tok1-ws.yml").exists());
         assert!(!dir.join("jupyter-tok1-ws.yml").exists());
         fs::remove_dir_all(&dir).unwrap();
@@ -214,11 +238,11 @@ mod tests {
     fn multiple_tokens_independent() {
         let dir = temp_dir();
         write_vnc_route_to(&dir, "aaa", "10.0.0.1", "pw_a").unwrap();
-        write_ttyd_route_to(&dir, "bbb", "10.0.0.2").unwrap();
-        assert!(dir.join("vnc-aaa-ws.yml").exists());
+        write_ttyd_route_to(&dir, "bbb", "10.0.0.2", "testpass").unwrap();
+        assert!(dir.join("kasmvnc-aaa-ws.yml").exists());
         assert!(dir.join("ttyd-bbb-ws.yml").exists());
         delete_route_from(&dir, "aaa").unwrap();
-        assert!(!dir.join("vnc-aaa-ws.yml").exists());
+        assert!(!dir.join("kasmvnc-aaa-ws.yml").exists());
         assert!(dir.join("ttyd-bbb-ws.yml").exists());
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -227,8 +251,8 @@ mod tests {
     fn vnc_file_has_auth_middleware() {
         let dir = temp_dir();
         write_vnc_route_to(&dir, "tok1", "10.0.0.1", "testpass").unwrap();
-        let content = fs::read_to_string(dir.join("vnc-tok1-ws.yml")).unwrap();
-        assert!(content.contains("vnc-tok1-auth"));
+        let content = fs::read_to_string(dir.join("kasmvnc-tok1-ws.yml")).unwrap();
+        assert!(content.contains("kasmvnc-tok1-auth"));
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -246,15 +270,15 @@ mod tests {
         fs::create_dir_all(&dir).ok();
         let result = write_route(&RemoteType::KasmVnc, "test_default_dir_token", "10.0.0.3", "testpass");
         assert!(result.is_ok());
-        assert!(dir.join("vnc-test_default_dir_token-ws.yml").exists());
-        let _ = fs::remove_file(dir.join("vnc-test_default_dir_token-ws.yml"));
+        assert!(dir.join("kasmvnc-test_default_dir_token-ws.yml").exists());
+        let _ = fs::remove_file(dir.join("kasmvnc-test_default_dir_token-ws.yml"));
     }
 
     #[test]
     fn delete_route_uses_default_dir() {
         let dir = default_dynamic_dir();
         fs::create_dir_all(&dir).ok();
-        let _ = fs::remove_file(dir.join("vnc-test_del_default_token-ws.yml"));
+        let _ = fs::remove_file(dir.join("kasmvnc-test_del_default_token-ws.yml"));
         let result = delete_route("test_del_default_token");
         assert!(result.is_ok());
     }
@@ -273,10 +297,10 @@ mod tests {
         let token = "fulltok123abc";
         write_vnc_route_to(&dir, token, "172.17.0.5", "secret123").unwrap();
 
-        let ws = fs::read_to_string(dir.join(format!("vnc-{}-ws.yml", token))).unwrap();
-        assert!(ws.contains(&format!("vnc/{}", token)));
+        let ws = fs::read_to_string(dir.join(format!("kasmvnc-{}-ws.yml", token))).unwrap();
+        assert!(ws.contains(&format!("kasmvnc/{}", token)));
         assert!(ws.contains("kasm-insecure"));
-        assert!(ws.contains(&format!("vnc-{}-auth", token)));
+        assert!(ws.contains(&format!("kasmvnc-{}-auth", token)));
         assert!(ws.contains("https://172.17.0.5:6901"));
         assert!(ws.contains("entryPoints"));
         assert!(ws.contains("loadBalancer"));
@@ -291,14 +315,14 @@ mod tests {
         let dir = temp_dir();
         let result = write_route_to(&dir, &RemoteType::KasmVnc, "disptok", "10.0.0.1", "testpass");
         assert!(result.is_ok());
-        assert!(dir.join("vnc-disptok-ws.yml").exists());
+        assert!(dir.join("kasmvnc-disptok-ws.yml").exists());
         fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn write_route_dispatches_ttyd() {
         let dir = temp_dir();
-        let result = write_route_to(&dir, &RemoteType::Ttyd, "disptok", "10.0.0.1", "");
+        let result = write_route_to(&dir, &RemoteType::Ttyd, "disptok", "10.0.0.1", "testpass");
         assert!(result.is_ok());
         assert!(dir.join("ttyd-disptok-ws.yml").exists());
         fs::remove_dir_all(&dir).unwrap();
@@ -325,13 +349,13 @@ mod tests {
     #[test]
     fn delete_route_partial_existing() {
         let dir = temp_dir();
-        let _ = fs::remove_file(dir.join("vnc-partial-ws.yml"));
+        let _ = fs::remove_file(dir.join("kasmvnc-partial-ws.yml"));
 
-        fs::write(dir.join("vnc-partial-ws.yml"), "ws-only").unwrap();
+        fs::write(dir.join("kasmvnc-partial-ws.yml"), "ws-only").unwrap();
 
         let result = delete_route_from(&dir, "partial");
         assert!(result.is_ok());
-        assert!(!dir.join("vnc-partial-ws.yml").exists());
+        assert!(!dir.join("kasmvnc-partial-ws.yml").exists());
 
         fs::remove_dir_all(&dir).unwrap();
     }

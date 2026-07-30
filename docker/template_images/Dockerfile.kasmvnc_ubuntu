@@ -15,7 +15,7 @@ ENV HOME /home/kasm-default-profile
 ENV STARTUPDIR /dockerstartup
 WORKDIR $HOME
 
-### Envrionment config
+# Envrionment config
 ENV DEBIAN_FRONTEND=noninteractive \
     SKIP_CLEAN=true \
     KASM_RX_HOME=$STARTUPDIR/kasmrx \
@@ -28,6 +28,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
                   /scripts/install_chromium.sh \
                   /scripts/install_vs_code.sh \
                   /scripts/install_opencode.sh \
+                  /scripts/install_nvm.sh \
+                  /scripts/install_nix.sh \
                   /scripts/cleanup.sh"
 
 # Copy install scripts
@@ -54,5 +56,5 @@ RUN echo "kasm-user ALL=(ALL) NOPASSWD: /usr/bin/apt, /usr/bin/apt-get" > /etc/s
 ENV HOME /home/kasm-user
 WORKDIR $HOME
 USER 1000
-
+ENV PATH="/home/ow_user/.nix-profile/bin:${PATH}"
 CMD ["--tail-log"]

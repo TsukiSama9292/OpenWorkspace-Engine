@@ -26,9 +26,9 @@ create_test_pg() {
     export PG_HOST="127.0.0.1"
     export PG_PORT="$raw_port"
 
-    # Wait for Postgres to accept connections (up to 15s)
+    # Wait for Postgres to accept actual database connections (up to 15s)
     for i in $(seq 1 30); do
-        if (echo > /dev/tcp/$PG_HOST/$PG_PORT) 2>/dev/null; then
+        if docker exec "$CONTAINER_NAME" pg_isready -U postgres &>/dev/null; then
             return 0
         fi
         sleep 0.5

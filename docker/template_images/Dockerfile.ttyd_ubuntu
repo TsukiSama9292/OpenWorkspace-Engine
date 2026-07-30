@@ -11,12 +11,16 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     wget \
     openssl \
     ttyd \
+    xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -s /bin/bash ow_user
-# ow_user is allowed to run apt commands without a password prompt
-RUN echo "ow_user ALL=(ALL) NOPASSWD: /usr/bin/apt, /usr/bin/apt-get" > /etc/sudoers.d/ow_user \
-    && chmod 0440 /etc/sudoers.d/ow_user
+
+# Nix installation (Package manager)
+RUN mkdir -p /nix && chown ow_user:ow_user /nix
+RUN su - ow_user -c "curl -L https://nixos.org/nix/install | sh -s -- --no-daemon"
+RUN su - ow_user -c "mkdir -p ~/.config/nix && echo 'experimental-features = nix-command flakes' >> ~/.config/nix/nix.conf"
+ENV PATH="/home/ow_user/.nix-profile/bin:${PATH}"
 
 # Set directory permissions for ow_user
 RUN chown -R ow_user:ow_user /etc/ssl/private /etc/ssl/certs

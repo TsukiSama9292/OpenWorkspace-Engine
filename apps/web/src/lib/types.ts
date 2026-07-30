@@ -19,6 +19,7 @@ export interface Template {
   docker_registry: string;
   remote_type: RemoteType;
   persistent_storage_path: string;
+  container_runtime: string;
   run_config: Record<string, unknown>;
   exec_config: Record<string, unknown>;
   volume_mappings: Record<string, string>;
@@ -32,10 +33,11 @@ export interface Instance {
   name: string;
   template_id: string;
   template_name: string;
+  remote_type: 'kasmvnc' | 'ttyd' | 'jupyter';
   owner_id: string;
   owner_username: string;
   owner_role: Role;
-  status: 'running' | 'stopped' | 'paused' | 'error';
+  status: 'running' | 'stopped' | 'paused' | 'error' | 'starting';
   instance_number: number;
   container_id: string;
   mount_persistent: boolean;

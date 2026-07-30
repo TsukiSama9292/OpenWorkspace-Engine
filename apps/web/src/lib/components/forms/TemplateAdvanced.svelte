@@ -8,6 +8,7 @@
     dns: string;
     shmSize: string;
     networkMode: string;
+    containerRuntime: string;
     envVars: EnvVar[];
     execCommand: string;
     volumeMappings: VolumeMapping[];
@@ -18,6 +19,7 @@
     dns = $bindable(),
     shmSize = $bindable(),
     networkMode = $bindable(),
+    containerRuntime = $bindable(),
     envVars = $bindable(),
     execCommand = $bindable(),
     volumeMappings = $bindable()
@@ -46,6 +48,13 @@
     <label class={labelClass}>
       <span class={spanClass}>Network Mode</span>
       <input type="text" bind:value={networkMode} placeholder="bridge" class={inputClass} />
+    </label>
+    <label class={labelClass}>
+      <span class={spanClass}>Runtime</span>
+      <select bind:value={containerRuntime} class={inputClass}>
+        <option value="">Default</option>
+        <option value="runsc">runsc (gVisor)</option>
+      </select>
     </label>
   </div>
 

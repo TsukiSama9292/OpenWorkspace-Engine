@@ -23,27 +23,33 @@ fi
 
 echo ""
 echo "=========================================="
-echo " Step 2: Configure Password and Start Jupyter Lab (with SSL)"
+echo " Step 2: Configure Token and Start Jupyter Lab (with SSL)"
 echo "=========================================="
 
-# Read JUPYTER_PASSWORD environment variable, default to 'password' if not set
-JUPYTER_PASS="${JUPYTER_PASSWORD:-password}"
-
-# Calculate Jupyter-compatible password hash using python
-echo "Calculating password hash..."
-HASHED_PASS=$(uvx --from jupyterlab python -c "from jupyter_server.auth import passwd; print(passwd('$JUPYTER_PASS'))")
+# Read JUPYTER_TOKEN environment variable, default to 'password' if not set
+JUPYTER_TOKEN="${JUPYTER_TOKEN:-password}"
 
 echo "Starting Jupyter Lab..."
-echo "Default password (if JUPYTER_PASSWORD is not set): password"
-echo "You can customize your password before running the script:"
-echo "  export JUPYTER_PASSWORD='your_secure_password'"
+echo "Default token (if JUPYTER_TOKEN is not set): password"
+echo "You can customize your token before running the script:"
+echo "  export JUPYTER_TOKEN='your_secure_token'"
 echo ""
 
-# Start Jupyter Lab using uvx with SSL certificates and password settings
+# Read JUPYTER_BASE_URL environment variable (optional)
+JUPYTER_BASE_URL="${JUPYTER_BASE_URL:-}"
+
+BASE_URL_ARG=""
+if [ -n "$JUPYTER_BASE_URL" ]; then
+    BASE_URL_ARG="--ServerApp.base_url=$JUPYTER_BASE_URL"
+fi
+
+# Start Jupyter Lab using uvx with SSL certificates and token auth
 uvx --from jupyterlab jupyter lab \
     --ServerApp.certfile="$CERT_DIR/jupyter.crt" \
     --ServerApp.keyfile="$CERT_DIR/jupyter.key" \
-    --ServerApp.password="$HASHED_PASS" \
+    --IdentityProvider.token="$JUPYTER_TOKEN" \
+    --ServerApp.password="" \
     --ip=0.0.0.0 \
     --port=8888 \
-    --no-browser
+    --no-browser \
+    $BASE_URL_ARG

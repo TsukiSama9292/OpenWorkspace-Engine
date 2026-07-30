@@ -4,6 +4,12 @@ import { buildRunConfig, buildExecConfig, buildVolumeMappings, createEmptyEnvVar
 import type { EnvVar, VolumeMapping } from '$lib/utils/format';
 import type { RemoteType } from '$lib/types';
 
+export const DEFAULT_IMAGES: Record<RemoteType, string> = {
+  kasmvnc: 'tsukisama9292/ow-kasmvnc-ubuntu:jammy',
+  ttyd: 'tsukisama9292/ow-ttyd-ubuntu:jammy',
+  jupyter: 'tsukisama9292/ow-jupyter-ubuntu:jammy',
+};
+
 export interface TemplateFormState {
   name: string;
   description: string;
@@ -18,6 +24,7 @@ export interface TemplateFormState {
   dns: string;
   shmSize: string;
   networkMode: string;
+  containerRuntime: string;
   envVars: EnvVar[];
   execCommand: string;
   volumeMappings: VolumeMapping[];
@@ -30,7 +37,7 @@ export function createInitialFormState(): TemplateFormState {
   return {
     name: '',
     description: '',
-    image: 'kasmweb/desktop:1.19.0-rolling-daily',
+    image: DEFAULT_IMAGES.kasmvnc,
     cores: 2,
     ramGb: 4,
     gpuCount: 0,
@@ -41,6 +48,7 @@ export function createInitialFormState(): TemplateFormState {
     dns: '',
     shmSize: '',
     networkMode: '',
+    containerRuntime: '',
     envVars: [createEmptyEnvVar()],
     execCommand: '',
     volumeMappings: [createEmptyVolume()],
@@ -60,6 +68,7 @@ export async function submitTemplate(state: TemplateFormState): Promise<{ error?
     cores: state.cores,
     memory: state.ramGb * 1024 * 1024 * 1024,
     gpu_count: state.gpuCount,
+    container_runtime: state.containerRuntime,
     docker_registry: state.dockerRegistry || null,
     remote_type: state.remoteType,
     run_config: buildRunConfig({

@@ -216,7 +216,7 @@ stateDiagram-v2
 
 ### Container Creation Steps
 
-1. **Pull image** — `kasmweb/desktop:1.19.0-rolling-daily`
+1. **Pull image** — `tsukisama9292/ow-kasmvnc-ubuntu:jammy`
 2. **Create container** with env vars:
    - `VNC_PW=<127-char random>` (enables HTTP Basic Auth on websockify)
    - `KASM_VNC_PORT=6901`

@@ -7,6 +7,7 @@ pub struct Settings {
     pub server_port: u16,
     pub db_max_connections: u32,
     pub docker_network: String,
+    pub container_runtime: String,
 }
 
 impl Settings {
@@ -48,6 +49,8 @@ impl Settings {
                 .map_err(|e| format!("DB_MAX_CONNECTIONS invalid: {}", e))?,
             docker_network: get("DOCKER_NETWORK")
                 .unwrap_or_else(|| "ow-network".to_string()),
+            container_runtime: get("OW_CONTAINER_RUNTIME")
+                .unwrap_or_else(|| "docker".to_string()),
         })
     }
 
@@ -74,6 +77,7 @@ mod tests {
             server_port: 3000,
             db_max_connections: 5,
             docker_network: "ow-network".to_string(),
+            container_runtime: "docker".to_string(),
         };
         assert_eq!(settings.bind_address(), "0.0.0.0:3000");
     }
@@ -88,6 +92,7 @@ mod tests {
             server_port: 8080,
             db_max_connections: 10,
             docker_network: "ow-network".to_string(),
+            container_runtime: "docker".to_string(),
         };
         assert_eq!(settings.bind_address(), "127.0.0.1:8080");
     }
@@ -102,6 +107,7 @@ mod tests {
             server_port: 3000,
             db_max_connections: 5,
             docker_network: "ow-network".to_string(),
+            container_runtime: "docker".to_string(),
         };
         let debug = format!("{:?}", settings);
         assert!(debug.contains("Settings"));
@@ -118,6 +124,7 @@ mod tests {
             server_port: 3000,
             db_max_connections: 5,
             docker_network: "ow-network".to_string(),
+            container_runtime: "docker".to_string(),
         };
         let cloned = settings.clone();
         assert_eq!(settings.database_url, cloned.database_url);
@@ -173,6 +180,7 @@ mod tests {
         assert_eq!(settings.server_port, 3000);
         assert_eq!(settings.db_max_connections, 5);
         assert_eq!(settings.admin_password, "admin");
+        assert_eq!(settings.container_runtime, "docker");
     }
 
     #[test]
@@ -215,6 +223,7 @@ mod tests {
             ("SERVER_PORT", "8080"),
             ("DB_MAX_CONNECTIONS", "20"),
             ("DOCKER_NETWORK", "custom-network"),
+            ("OW_CONTAINER_RUNTIME", "runsc"),
         ]))
         .unwrap();
 
@@ -225,6 +234,39 @@ mod tests {
         assert_eq!(settings.server_port, 8080);
         assert_eq!(settings.db_max_connections, 20);
         assert_eq!(settings.docker_network, "custom-network");
+        assert_eq!(settings.container_runtime, "runsc");
         assert_eq!(settings.bind_address(), "192.168.1.100:8080");
+    }
+
+    #[test]
+    fn test_container_runtime_default_is_docker() {
+        let settings = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://localhost/test"),
+            ("JWT_SECRET", "test"),
+        ]))
+        .unwrap();
+        assert_eq!(settings.container_runtime, "docker");
+    }
+
+    #[test]
+    fn test_container_runtime_custom_value() {
+        let settings = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://localhost/test"),
+            ("JWT_SECRET", "test"),
+            ("OW_CONTAINER_RUNTIME", "runsc"),
+        ]))
+        .unwrap();
+        assert_eq!(settings.container_runtime, "runsc");
+    }
+
+    #[test]
+    fn test_container_runtime_empty_string() {
+        let settings = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://localhost/test"),
+            ("JWT_SECRET", "test"),
+            ("OW_CONTAINER_RUNTIME", ""),
+        ]))
+        .unwrap();
+        assert_eq!(settings.container_runtime, "");
     }
 }

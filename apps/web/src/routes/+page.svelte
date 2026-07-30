@@ -1,10 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
   import { formatMemory } from '$lib/utils/format';
   import { loadDashboard } from './dashboard-data';
   import { performAction, deleteInstance } from '$lib/api/instance-actions';
-  import { launchInstance } from '$lib/api/template-actions';
+  import { launchInstance, deleteTemplate } from '$lib/api/template-actions';
   import { auth, isManager } from '$lib/stores/auth';
+  import { api } from '$lib/api/client';
   import type { Template, Instance, Role } from '$lib/types';
 
   let sidebarOpen = $state(false);
@@ -35,6 +37,13 @@
     configs = data.configs;
     instances = data.instances;
     loading = false;
+
+    const poll = setInterval(async () => {
+      const res = await api.get<{ instances: Instance[] }>('/instances');
+      if (res.data?.instances) instances = res.data.instances;
+    }, 5000);
+
+    return () => clearInterval(poll);
   });
 
   async function loadUsers() {
@@ -66,14 +75,31 @@
     const inst = result.instance;
     if (inst) {
       instances = [...instances, inst];
-      const url = `/vnc/${inst.access_token}/`;
+      const url = '/instances/' + inst.id;
       if (launchTarget === 'tab') {
         window.open(url, '_blank');
       } else {
-        window.location.href = url;
+        goto(url);
       }
     }
     launchModal = { open: false, config: null };
+  }
+
+  function instanceUrl(inst: Instance): string {
+    const base = `/${inst.remote_type}/${inst.access_token}`;
+    if (inst.remote_type === 'jupyter') {
+      return `${base}/lab?token=${encodeURIComponent(inst.access_password ?? '')}`;
+    }
+    return `${base}/`;
+  }
+
+  async function onDeleteConfig(config: Template) {
+    const result = await deleteTemplate(config.id);
+    if (result.error) {
+      alert(result.error);
+      return;
+    }
+    configs = configs.filter(c => c.id !== config.id);
   }
 
   async function onAction(inst: Instance, action: 'start' | 'stop' | 'pause' | 'unpause') {
@@ -111,6 +137,7 @@
     paused: 'dot-paused',
     stopped: 'dot-stopped',
     error: 'dot-error',
+    starting: 'dot-starting',
   };
 
   const templateIcons: Record<string, string> = {
@@ -389,7 +416,7 @@
                     <div class="action-buttons">
                       {#if inst.status === 'running'}
                         {#if inst.access_token}
-                           <a href="/vnc/{inst.access_token}/" target="_blank" class="launch-btn vnc">VNC</a>
+                           <a href={instanceUrl(inst)} target="_blank" class="launch-btn vnc">Open</a>
                         {/if}
                         <button class="launch-btn pause" onclick={() => onAction(inst, 'pause')}>Pause</button>
                         <button class="launch-btn stop" onclick={() => onAction(inst, 'stop')}>Stop</button>
@@ -441,6 +468,7 @@
             <select id="filter-status" class="filter-select" bind:value={filterStatus}>
               <option value="">All Statuses</option>
               <option value="running">Running</option>
+              <option value="starting">Starting</option>
               <option value="paused">Paused</option>
               <option value="stopped">Stopped</option>
               <option value="error">Error</option>
@@ -592,7 +620,8 @@
               </div>
               <div class="ws-actions">
                 <div class="action-buttons">
-                  <button class="launch-btn vnc" onclick={() => openLaunch(config)}>Launch</button>
+                  <a href="/templates/{config.id}/edit/" class="launch-btn edit">Edit</a>
+                  <button class="launch-btn remove" onclick={() => onDeleteConfig(config)}>Delete</button>
                 </div>
               </div>
             </div>
@@ -609,13 +638,13 @@
     background-color: #09090b;
     color: #f4f4f5;
     font-family: 'Plus Jakarta Sans', -apple-system, sans-serif;
-    overflow: hidden;
   }
 
   .dashboard {
     display: flex;
     width: 100vw;
     height: 100vh;
+    overflow: hidden;
     background: radial-gradient(circle at 0% 0%, #18181b 0%, #09090b 100%);
     position: relative;
   }
@@ -1071,6 +1100,17 @@
     box-shadow: 0 0 8px #ef4444;
   }
 
+  .dot-starting {
+    background: #3b82f6;
+    box-shadow: 0 0 8px #3b82f6;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
   .ws-name { font-size: 0.95rem; font-weight: 600; margin: 0; }
   .ws-template { font-size: 0.72rem; color: #71717a; display: block; margin-top: 2px; }
 
@@ -1101,6 +1141,7 @@
 
   .action-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
 
+  a.launch-btn,
   .launch-btn {
     font-size: 0.72rem;
     font-weight: 600;
@@ -1118,12 +1159,14 @@
     font-family: inherit;
   }
 
+  a.launch-btn:hover,
   .launch-btn:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
   .launch-btn.vnc:hover { border-color: #3b82f6; color: #60a5fa; }
   .launch-btn.pause:hover { border-color: #eab308; color: #facc15; }
   .launch-btn.resume:hover { border-color: #22c55e; color: #4ade80; }
   .launch-btn.stop:hover { border-color: #f97316; color: #fb923c; }
   .launch-btn.remove:hover { border-color: #ef4444; color: #f87171; }
+  .launch-btn.edit:hover { border-color: #22c55e; color: #4ade80; }
   .launch-btn.sm { font-size: 0.65rem; padding: 0.3rem 0.55rem; }
 
   .template-icon-sm { font-size: 1rem; }
@@ -1160,12 +1203,6 @@
   .template-icon { font-size: 1.5rem; }
 
   .template-name {
-    font-size: 0.75rem;
-    font-weight: 500;
-    color: #a1a1aa;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
     max-width: 100%;
   }
 
@@ -1343,4 +1380,7 @@
 
   .status-badge.dot-error { color: #f87171; border-color: rgba(239, 68, 68, 0.2); }
   .status-badge.dot-error .status-dot-inline { background: #ef4444; }
+
+  .status-badge.dot-starting { color: #60a5fa; border-color: rgba(59, 130, 246, 0.2); }
+  .status-badge.dot-starting .status-dot-inline { background: #3b82f6; animation: pulse 1.5s ease-in-out infinite; }
 </style>

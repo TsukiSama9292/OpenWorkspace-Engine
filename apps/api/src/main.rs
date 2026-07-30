@@ -53,14 +53,17 @@ async fn main() {
     let instance_repo = WorkspaceInstanceRepository::new(&db);
     match instance_repo.list_all().await {
         Ok(instances) => {
-            let mut count = 0;
+            let mut running_count = 0;
+            let mut starting_count = 0;
             for inst in &instances {
+                vnc_cache.insert(&inst.access_token, &inst.status);
                 if inst.status == "running" {
-                    vnc_cache.insert(&inst.access_token, &inst.status);
-                    count += 1;
+                    running_count += 1;
+                } else if inst.status == "starting" {
+                    starting_count += 1;
                 }
             }
-            tracing::info!("VNC cache loaded: {} running instances", count);
+            tracing::info!("VNC cache loaded: {} running, {} starting instances", running_count, starting_count);
         }
         Err(e) => {
             tracing::warn!("Failed to load instances for VNC cache: {}", e);
@@ -72,7 +75,17 @@ async fn main() {
         .expect("Failed to connect to Docker");
     let docker: Arc<dyn DockerService> = Arc::new(docker_client);
 
-    let state = AppState { db, docker, vnc_cache, settings: settings.clone() };
+    let state = AppState { db, docker, vnc_cache: vnc_cache.clone(), settings: settings.clone() };
+
+    // ── Spawn health worker ──
+    {
+        let worker_db = state.db.clone();
+        let worker_docker = state.docker.clone();
+        let worker_vnc_cache = state.vnc_cache.clone();
+        tokio::spawn(async move {
+            openworkspace_api::health_worker::run(worker_db, worker_docker, worker_vnc_cache).await;
+        });
+    }
 
     let cors = CorsLayer::new()
         .allow_origin(Any)

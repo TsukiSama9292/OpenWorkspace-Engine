@@ -73,6 +73,7 @@ pub mod workspace_template {
         pub exec_config: Json,
         pub volume_mappings: Json,
         pub remote_type: String,
+        pub container_runtime: String,
         pub persistent_storage_path: Option<String>,
         pub created_at: DateTimeUtc,
         pub updated_at: DateTimeUtc,
@@ -211,6 +212,7 @@ pub struct WorkspaceTemplate {
     pub gpu_count: i32,
     pub docker_registry: Option<String>,
     pub remote_type: String,
+    pub container_runtime: String,
     pub run_config: serde_json::Value,
     pub exec_config: serde_json::Value,
     pub volume_mappings: serde_json::Value,
@@ -232,6 +234,7 @@ impl From<workspace_template::Model> for WorkspaceTemplate {
             gpu_count: m.gpu_count,
             docker_registry: m.docker_registry,
             remote_type: m.remote_type,
+            container_runtime: m.container_runtime,
             run_config: m.run_config.into(),
             exec_config: m.exec_config.into(),
             volume_mappings: m.volume_mappings.into(),
@@ -411,6 +414,7 @@ impl<'a> WorkspaceTemplateRepository<'a> {
         gpu_count: i32,
         docker_registry: Option<&str>,
         remote_type: &str,
+        container_runtime: &str,
         run_config: &serde_json::Value,
         exec_config: &serde_json::Value,
         volume_mappings: &serde_json::Value,
@@ -428,6 +432,7 @@ impl<'a> WorkspaceTemplateRepository<'a> {
             gpu_count: Set(gpu_count),
             docker_registry: Set(docker_registry.map(|s| s.to_string())),
             remote_type: Set(remote_type.to_string()),
+            container_runtime: Set(container_runtime.to_string()),
             run_config: Set(run_config.clone().into()),
             exec_config: Set(exec_config.clone().into()),
             volume_mappings: Set(volume_mappings.clone().into()),
@@ -479,6 +484,7 @@ impl<'a> WorkspaceTemplateRepository<'a> {
         gpu_count: i32,
         docker_registry: Option<&str>,
         remote_type: &str,
+        container_runtime: &str,
         run_config: &serde_json::Value,
         exec_config: &serde_json::Value,
         volume_mappings: &serde_json::Value,
@@ -494,6 +500,7 @@ impl<'a> WorkspaceTemplateRepository<'a> {
             gpu_count: Set(gpu_count),
             docker_registry: Set(docker_registry.map(|s| s.to_string())),
             remote_type: Set(remote_type.to_string()),
+            container_runtime: Set(container_runtime.to_string()),
             run_config: Set(run_config.clone().into()),
             exec_config: Set(exec_config.clone().into()),
             volume_mappings: Set(volume_mappings.clone().into()),
@@ -584,6 +591,15 @@ impl<'a> WorkspaceInstanceRepository<'a> {
     pub async fn list_by_owner(&self, owner_id: Uuid) -> Result<Vec<WorkspaceInstance>, sea_orm::DbErr> {
         let models = workspace_instance::Entity::find()
             .filter(workspace_instance::Column::OwnerId.eq(owner_id))
+            .order_by_asc(workspace_instance::Column::CreatedAt)
+            .all(self.db)
+            .await?;
+        Ok(models.into_iter().map(|m| m.into()).collect())
+    }
+
+    pub async fn list_by_status(&self, status: &str) -> Result<Vec<WorkspaceInstance>, sea_orm::DbErr> {
+        let models = workspace_instance::Entity::find()
+            .filter(workspace_instance::Column::Status.eq(status))
             .order_by_asc(workspace_instance::Column::CreatedAt)
             .all(self.db)
             .await?;

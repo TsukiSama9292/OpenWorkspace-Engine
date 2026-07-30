@@ -14,7 +14,7 @@ impl MigrationTrait for Migration {
         .await?;
 
         for col in &[
-            ("image", "VARCHAR(512)", "'kasmweb/desktop:1.19.0-rolling-daily'"),
+            ("image", "VARCHAR(512)", "'tsukisama9292/ow-kasmvnc-ubuntu:jammy'"),
             ("cores", "INTEGER", "2"),
             ("memory", "BIGINT", "4294967296"),
             ("gpu_count", "INTEGER", "0"),

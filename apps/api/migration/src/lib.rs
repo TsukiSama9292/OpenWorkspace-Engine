@@ -9,6 +9,7 @@ mod m20260723_000005_drop_instance_number_unique;
 mod m20260723_000006_add_vnc_password;
 mod m20260723_000007_expand_vnc_password;
 mod m20260723_000008_add_remote_type;
+mod m20260723_000009_add_container_runtime;
 
 pub struct Migrator;
 
@@ -24,6 +25,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260723_000006_add_vnc_password::Migration),
             Box::new(m20260723_000007_expand_vnc_password::Migration),
             Box::new(m20260723_000008_add_remote_type::Migration),
+            Box::new(m20260723_000009_add_container_runtime::Migration),
         ]
     }
 }

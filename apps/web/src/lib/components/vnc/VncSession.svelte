@@ -34,7 +34,7 @@
     if (typeof window === 'undefined') return '';
     const loc = window.location;
     const protocol = loc.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${protocol}//${loc.host}/vnc/${token}/websockify`;
+    return `${protocol}//${loc.host}/kasmvnc/${token}/websockify`;
   }
 
   async function handleFullscreen() {
