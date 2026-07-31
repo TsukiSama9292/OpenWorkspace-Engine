@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { formatMemory } from '$lib/utils/format';
+  import { getTemplateIcon } from '$lib/utils/template-icons';
+  import TemplatePanel from '$lib/components/templates/TemplatePanel.svelte';
+  import { parseDashboardHash, serializeDashboardHash, isTemplatesEditor, confirmDiscardChanges, type DashboardView, type DashboardTab } from '$lib/templates/dashboard-view';
   import { loadDashboard } from './dashboard-data';
   import { performAction, deleteInstance } from '$lib/api/instance-actions';
   import { launchInstance, deleteTemplate } from '$lib/api/template-actions';
@@ -10,8 +12,10 @@
   import type { Template, Instance, Role } from '$lib/types';
 
   let sidebarOpen = $state(false);
-  let activeTab = $state<'instances' | 'templates' | 'sessions' | 'users'>('instances');
+  let view = $state<DashboardView>({ tab: 'instances' });
+  let activeTab = $derived(view.tab);
   let showSettings = $state(false);
+  let panelDirty = $state(false);
   let configs = $state<Template[]>([]);
   let instances = $state<Instance[]>([]);
   let loading = $state(true);
@@ -32,7 +36,46 @@
   let userForm = $state<{ username: string; password: string; role: string }>({ username: '', password: '', role: 'user' });
   let userFormError = $state('');
 
+  function navigateToHash(hash: string) {
+    view = parseDashboardHash(hash);
+    if (window.location.hash !== hash) {
+      window.location.hash = hash;
+    }
+  }
+
+  function confirmLeaveEditor(hash: string): boolean {
+    if (!isTemplatesEditor(view) || !panelDirty) return true;
+    if (serializeDashboardHash(parseDashboardHash(hash)) === serializeDashboardHash(view)) return true;
+    return confirmDiscardChanges();
+  }
+
+  function navigateTab(tab: DashboardTab) {
+    const next: DashboardView = tab === 'templates' ? { tab: 'templates', editor: 'list' } : { tab };
+    const hash = serializeDashboardHash(next);
+    if (!confirmLeaveEditor(hash)) return;
+    navigateToHash(hash);
+  }
+
+  function onHashChange() {
+    const next = parseDashboardHash(window.location.hash);
+    if (!confirmLeaveEditor(window.location.hash)) {
+      history.replaceState(null, '', serializeDashboardHash(view));
+      return;
+    }
+    view = next;
+  }
+
+  function onBeforeUnload(e: BeforeUnloadEvent) {
+    if (panelDirty && isTemplatesEditor(view)) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  }
+
   onMount(async () => {
+    view = parseDashboardHash(window.location.hash);
+    window.addEventListener('hashchange', onHashChange);
+    window.addEventListener('beforeunload', onBeforeUnload);
     const data = await loadDashboard();
     configs = data.configs;
     instances = data.instances;
@@ -43,7 +86,11 @@
       if (res.data?.instances) instances = res.data.instances;
     }, 5000);
 
-    return () => clearInterval(poll);
+    return () => {
+      clearInterval(poll);
+      window.removeEventListener('hashchange', onHashChange);
+      window.removeEventListener('beforeunload', onBeforeUnload);
+    };
   });
 
   async function loadUsers() {
@@ -95,6 +142,7 @@
 
   async function onDeleteConfig(config: Template) {
     const result = await deleteTemplate(config.id);
+    if (result.cancelled) return;
     if (result.error) {
       alert(result.error);
       return;
@@ -139,22 +187,6 @@
     error: 'dot-error',
     starting: 'dot-starting',
   };
-
-  const templateIcons: Record<string, string> = {
-    pytorch: '\u{1F9E0}',
-    ubuntu: '\u{1F427}',
-    rust: '\u2699\uFE0F',
-    python: '\u{1F40D}',
-    default: '\u{1F4E6}',
-  };
-
-  function getTemplateIcon(name: string): string {
-    const lower = name.toLowerCase();
-    for (const [key, icon] of Object.entries(templateIcons)) {
-      if (key !== 'default' && lower.includes(key)) return icon;
-    }
-    return templateIcons.default;
-  }
 
   function canControlInstance(inst: Instance): boolean {
     if (inst.owner_id === $auth?.id) return true;
@@ -252,7 +284,7 @@
       <button
         class="nav-item"
         class:active={activeTab === 'instances'}
-        onclick={() => activeTab = 'instances'}
+        onclick={() => navigateTab('instances')}
       >
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="2" y="3" width="20" height="14" rx="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" />
@@ -264,7 +296,7 @@
         <button
           class="nav-item"
           class:active={activeTab === 'templates'}
-          onclick={() => activeTab = 'templates'}
+          onclick={() => navigateTab('templates')}
         >
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
@@ -275,7 +307,7 @@
         <button
           class="nav-item"
           class:active={activeTab === 'sessions'}
-          onclick={() => activeTab = 'sessions'}
+          onclick={() => navigateTab('sessions')}
         >
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" />
@@ -286,7 +318,7 @@
         <button
           class="nav-item"
           class:active={activeTab === 'users'}
-          onclick={() => { activeTab = 'users'; loadUsers(); }}
+          onclick={() => { navigateTab('users'); loadUsers(); }}
         >
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
@@ -588,46 +620,14 @@
         {/if}
       </section>
 
-    {:else}
-      <div class="templates-header">
-        <a href="/templates/new/" class="btn-create">+ New Template</a>
-      </div>
-      {#if configs.length === 0}
-        <p class="empty-text">No templates yet. Create one to get started.</p>
-      {:else}
-        <div class="instance-grid">
-          {#each configs as config}
-            <div class="ws-card">
-              <div class="ws-card-header">
-                <div>
-                  <div class="ws-title-row">
-                    <span class="template-icon-sm">{getTemplateIcon(config.name)}</span>
-                    <h3 class="ws-name">{config.name}</h3>
-                  </div>
-                  <span class="ws-template">{config.image}</span>
-                </div>
-                <span class="ws-id">{config.id.slice(0, 8)}</span>
-              </div>
-              <div class="ws-metrics">
-                <div class="metric-item">
-                  <span class="metric-label">CPU</span>
-                  <span class="metric-value">{config.cores} cores</span>
-                </div>
-                <div class="metric-item">
-                  <span class="metric-label">RAM</span>
-                  <span class="metric-value">{formatMemory(config.memory)}</span>
-                </div>
-              </div>
-              <div class="ws-actions">
-                <div class="action-buttons">
-                  <a href="/templates/{config.id}/edit/" class="launch-btn edit">Edit</a>
-                  <button class="launch-btn remove" onclick={() => onDeleteConfig(config)}>Delete</button>
-                </div>
-              </div>
-            </div>
-          {/each}
-        </div>
-      {/if}
+    {:else if activeTab === 'templates'}
+      <TemplatePanel
+        {view}
+        bind:configs
+        bind:dirty={panelDirty}
+        onnavigate={navigateToHash}
+        ondelete={onDeleteConfig}
+      />
     {/if}
   </main>
 </div>
@@ -1008,13 +1008,7 @@
     margin: -0.5rem 0 1rem 0;
   }
 
-  .templates-header {
-    display: flex;
-    justify-content: flex-end;
-    margin-bottom: 1.5rem;
-  }
-
-  .btn-create {
+  :global(.btn-create) {
     background: #6366f1;
     color: #fff;
     border: 1px solid rgba(255, 255, 255, 0.2);
@@ -1029,19 +1023,19 @@
     transition: all 0.2s;
   }
 
-  .btn-create:hover { background: #4f46e5; transform: translateY(-1px); }
+  :global(.btn-create:hover) { background: #4f46e5; transform: translateY(-1px); }
 
   .loading-text,
-  .empty-text { color: #71717a; font-size: 0.9rem; }
+  :global(.empty-text) { color: #71717a; font-size: 0.9rem; }
 
   /* Workspace Grid */
-  .instance-grid {
+  :global(.instance-grid) {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     gap: 1rem;
   }
 
-  .ws-card {
+  :global(.ws-card) {
     background: rgba(20, 20, 26, 0.7);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-top: 1px solid rgba(255, 255, 255, 0.18);
@@ -1054,20 +1048,20 @@
     transition: all 0.2s;
   }
 
-  .ws-card:hover {
+  :global(.ws-card:hover) {
     border-color: rgba(99, 102, 241, 0.4);
     box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
   }
 
-  .ws-card.dimmed { opacity: 0.65; }
+  :global(.ws-card.dimmed) { opacity: 0.65; }
 
-  .ws-card-header {
+  :global(.ws-card-header) {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
   }
 
-  .ws-title-row {
+  :global(.ws-title-row) {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -1111,10 +1105,10 @@
     50% { opacity: 0.4; }
   }
 
-  .ws-name { font-size: 0.95rem; font-weight: 600; margin: 0; }
-  .ws-template { font-size: 0.72rem; color: #71717a; display: block; margin-top: 2px; }
+  :global(.ws-name) { font-size: 0.95rem; font-weight: 600; margin: 0; }
+  :global(.ws-template) { font-size: 0.72rem; color: #71717a; display: block; margin-top: 2px; }
 
-  .ws-id {
+  :global(.ws-id) {
     font-family: monospace;
     font-size: 0.65rem;
     color: #52525b;
@@ -1123,7 +1117,7 @@
     border-radius: 4px;
   }
 
-  .ws-metrics {
+  :global(.ws-metrics) {
     display: flex;
     gap: 1.5rem;
     margin: 1rem 0;
@@ -1133,16 +1127,16 @@
     border: 1px solid rgba(255, 255, 255, 0.04);
   }
 
-  .metric-item { display: flex; flex-direction: column; gap: 2px; }
-  .metric-label { font-size: 0.6rem; color: #71717a; text-transform: uppercase; }
-  .metric-value { font-size: 0.8rem; font-weight: 600; color: #a1a1aa; }
+  :global(.metric-item) { display: flex; flex-direction: column; gap: 2px; }
+  :global(.metric-label) { font-size: 0.6rem; color: #71717a; text-transform: uppercase; }
+  :global(.metric-value) { font-size: 0.8rem; font-weight: 600; color: #a1a1aa; }
 
-  .ws-actions { display: flex; flex-direction: column; gap: 6px; }
+  :global(.ws-actions) { display: flex; flex-direction: column; gap: 6px; }
 
-  .action-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+  :global(.action-buttons) { display: flex; flex-wrap: wrap; gap: 6px; }
 
-  a.launch-btn,
-  .launch-btn {
+  :global(a.launch-btn),
+  :global(.launch-btn) {
     font-size: 0.72rem;
     font-weight: 600;
     padding: 0.4rem 0.7rem;
@@ -1159,17 +1153,15 @@
     font-family: inherit;
   }
 
-  a.launch-btn:hover,
-  .launch-btn:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
-  .launch-btn.vnc:hover { border-color: #3b82f6; color: #60a5fa; }
-  .launch-btn.pause:hover { border-color: #eab308; color: #facc15; }
-  .launch-btn.resume:hover { border-color: #22c55e; color: #4ade80; }
-  .launch-btn.stop:hover { border-color: #f97316; color: #fb923c; }
-  .launch-btn.remove:hover { border-color: #ef4444; color: #f87171; }
-  .launch-btn.edit:hover { border-color: #22c55e; color: #4ade80; }
-  .launch-btn.sm { font-size: 0.65rem; padding: 0.3rem 0.55rem; }
-
-  .template-icon-sm { font-size: 1rem; }
+  :global(a.launch-btn:hover),
+  :global(.launch-btn:hover) { background: rgba(255, 255, 255, 0.12); color: #fff; }
+  :global(.launch-btn.vnc:hover) { border-color: #3b82f6; color: #60a5fa; }
+  :global(.launch-btn.pause:hover) { border-color: #eab308; color: #facc15; }
+  :global(.launch-btn.resume:hover) { border-color: #22c55e; color: #4ade80; }
+  :global(.launch-btn.stop:hover) { border-color: #f97316; color: #fb923c; }
+  :global(.launch-btn.remove:hover) { border-color: #ef4444; color: #f87171; }
+  :global(.launch-btn.edit:hover) { border-color: #22c55e; color: #4ade80; }
+  :global(.launch-btn.sm) { font-size: 0.65rem; padding: 0.3rem 0.55rem; }
 
   /* Template Quick Launch */
   .template-grid {

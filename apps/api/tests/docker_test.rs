@@ -51,6 +51,7 @@ async fn test_pause_unpause() {
         volume_mappings: serde_json::json!({}),
         persistent_volume: None,
         command: Some(vec!["sleep".to_string(), "3600".to_string()]),
+        runtime: None,
     };
 
     let id = client
@@ -102,6 +103,7 @@ async fn test_create_container_from_template() {
         volume_mappings: serde_json::json!({}),
         persistent_volume: None,
         command: Some(vec!["sleep".to_string(), "3600".to_string()]),
+        runtime: None,
     };
 
     let id = client
@@ -135,6 +137,7 @@ async fn test_create_container_from_template_with_env_and_dns() {
         volume_mappings: serde_json::json!({}),
         persistent_volume: None,
         command: Some(vec!["sleep".to_string(), "3600".to_string()]),
+        runtime: None,
     };
 
     let id = client
@@ -170,6 +173,7 @@ async fn test_create_container_from_template_with_volume() {
         volume_mappings: serde_json::json!({ "/tmp/ow_test": "/container/data" }),
         persistent_volume: Some(tmp_dir.to_str().unwrap().to_string()),
         command: Some(vec!["sleep".to_string(), "3600".to_string()]),
+        runtime: None,
     };
 
     let id = client
@@ -215,6 +219,7 @@ async fn test_create_container_from_template_with_exec() {
         volume_mappings: serde_json::json!({}),
         persistent_volume: None,
         command: Some(vec!["sleep".to_string(), "3600".to_string()]),
+        runtime: None,
     };
 
     let id = client
@@ -247,6 +252,7 @@ async fn test_create_container_from_template_with_hostname() {
         volume_mappings: serde_json::json!({}),
         persistent_volume: None,
         command: Some(vec!["sleep".to_string(), "3600".to_string()]),
+        runtime: None,
     };
 
     let id = client
@@ -276,6 +282,7 @@ async fn test_create_container_from_template_command_from_run_config() {
         volume_mappings: serde_json::json!({}),
         persistent_volume: None,
         command: None,
+        runtime: None,
     };
 
     let id = client
@@ -306,6 +313,7 @@ async fn test_create_container_from_template_no_command() {
         volume_mappings: serde_json::json!({}),
         persistent_volume: None,
         command: None,
+        runtime: None,
     };
 
     let _result = client.create_container_from_template(&name, 1, &config, "test_password", "").await;
@@ -331,6 +339,7 @@ async fn test_create_container_from_template_with_shm_size_and_network_mode() {
         volume_mappings: serde_json::json!({}),
         persistent_volume: None,
         command: Some(vec!["sleep".to_string(), "3600".to_string()]),
+        runtime: None,
     };
 
     let id = client
@@ -388,6 +397,7 @@ async fn test_create_container_from_template_with_gpu() {
         volume_mappings: serde_json::json!({}),
         persistent_volume: None,
         command: Some(vec!["sleep".to_string(), "3600".to_string()]),
+        runtime: None,
     };
 
     let result = client
@@ -422,6 +432,7 @@ async fn test_create_container_from_template_image_already_cached() {
         volume_mappings: serde_json::json!({}),
         persistent_volume: None,
         command: Some(vec!["sleep".to_string(), "3600".to_string()]),
+        runtime: None,
     };
 
     let _id1 = client
@@ -456,6 +467,7 @@ async fn test_create_container_from_template_cores_and_memory() {
         volume_mappings: serde_json::json!({}),
         persistent_volume: None,
         command: Some(vec!["sleep".to_string(), "3600".to_string()]),
+        runtime: None,
     };
 
     let id = client
@@ -510,6 +522,7 @@ async fn test_inspect_container_state_running() {
         volume_mappings: serde_json::json!({}),
         persistent_volume: None,
         command: Some(vec!["sleep".to_string(), "3600".to_string()]),
+        runtime: None,
     };
 
     let id = client

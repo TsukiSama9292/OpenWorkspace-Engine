@@ -146,7 +146,7 @@ pub fn create_token(user_id: &Uuid, role: &Role, jwt_secret: &str) -> Result<Str
         sub: user_id.to_string(),
         role: role.as_str().to_string(),
         exp: chrono::Utc::now()
-            .checked_add_signed(chrono::Duration::hours(24))
+            .checked_add_signed(chrono::Duration::days(7))
             .unwrap()
             .timestamp() as usize,
     };
@@ -159,10 +159,12 @@ pub fn create_token(user_id: &Uuid, role: &Role, jwt_secret: &str) -> Result<Str
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
+const SESSION_COOKIE_MAX_AGE: i64 = 7 * 24 * 60 * 60;
+
 pub fn set_cookie(headers: &mut axum::http::HeaderMap, token: &str) {
     let cookie = format!(
-        "ow_token={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400",
-        token
+        "ow_token={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={}",
+        token, SESSION_COOKIE_MAX_AGE
     );
     headers.insert(header::SET_COOKIE, cookie.parse().unwrap());
 }
@@ -321,8 +323,29 @@ mod tests {
         let cookie_val = headers.get(header::SET_COOKIE).unwrap().to_str().unwrap();
         assert!(cookie_val.contains("ow_token=test-token"));
         assert!(cookie_val.contains("HttpOnly"));
+        assert!(cookie_val.contains("Secure"));
         assert!(cookie_val.contains("SameSite=Lax"));
-        assert!(cookie_val.contains("Max-Age=86400"));
+        assert!(cookie_val.contains("Max-Age=604800"));
+    }
+
+    #[test]
+    fn test_create_token_expires_in_seven_days() {
+        let user_id = Uuid::new_v4();
+        let role = Role::Admin;
+
+        let token = create_token(&user_id, &role, TEST_SECRET).unwrap();
+        let token_data = decode::<Claims>(
+            &token,
+            &DecodingKey::from_secret(TEST_SECRET.as_bytes()),
+            &Validation::default(),
+        )
+        .unwrap();
+
+        let now = chrono::Utc::now().timestamp() as usize;
+        let seven_days = 7 * 24 * 60 * 60;
+        let remaining = token_data.claims.exp.saturating_sub(now);
+        assert!(remaining > seven_days - 60, "token should last ~7 days, got {remaining}s");
+        assert!(remaining <= seven_days, "token should not exceed 7 days, got {remaining}s");
     }
 
     #[test]

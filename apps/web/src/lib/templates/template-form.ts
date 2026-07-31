@@ -1,11 +1,96 @@
 import { api } from '$lib/api/client';
-import { goto } from '$app/navigation';
 import { buildRunConfig, buildExecConfig, buildVolumeMappings, createEmptyEnvVar, createEmptyVolume } from '$lib/utils/format';
 import type { EnvVar, VolumeMapping } from '$lib/utils/format';
 import type { Template, RemoteType } from '$lib/types';
-import { DEFAULT_IMAGES } from '../../new/template-create';
 
-export type { TemplateFormState } from '../../new/template-create';
+export const DEFAULT_IMAGES: Record<RemoteType, string> = {
+  kasmvnc: 'tsukisama9292/ow-kasmvnc-ubuntu:jammy',
+  ttyd: 'tsukisama9292/ow-ttyd-ubuntu:jammy',
+  jupyter: 'tsukisama9292/ow-jupyter-ubuntu:jammy',
+};
+
+export interface TemplateFormState {
+  name: string;
+  description: string;
+  image: string;
+  cores: number;
+  ramGb: number;
+  gpuCount: number;
+  dockerRegistry: string;
+  persistentStoragePath: string;
+  remoteType: RemoteType;
+  hostname: string;
+  dns: string;
+  shmSize: string;
+  networkMode: string;
+  containerRuntime: string;
+  envVars: EnvVar[];
+  execCommand: string;
+  volumeMappings: VolumeMapping[];
+  showAdvanced: boolean;
+  loading: boolean;
+  error: string;
+}
+
+export function createInitialFormState(): TemplateFormState {
+  return {
+    name: '',
+    description: '',
+    image: DEFAULT_IMAGES.kasmvnc,
+    cores: 2,
+    ramGb: 4,
+    gpuCount: 0,
+    dockerRegistry: '',
+    persistentStoragePath: '',
+    remoteType: 'kasmvnc',
+    hostname: '',
+    dns: '',
+    shmSize: '',
+    networkMode: '',
+    containerRuntime: '',
+    envVars: [createEmptyEnvVar()],
+    execCommand: '',
+    volumeMappings: [createEmptyVolume()],
+    showAdvanced: false,
+    loading: false,
+    error: '',
+  };
+}
+
+function buildTemplateBody(state: TemplateFormState): Record<string, unknown> {
+  return {
+    name: state.name.trim(),
+    description: state.description || null,
+    image: state.image,
+    cores: state.cores,
+    memory: state.ramGb * 1024 * 1024 * 1024,
+    gpu_count: state.gpuCount,
+    container_runtime: state.containerRuntime,
+    docker_registry: state.dockerRegistry || null,
+    remote_type: state.remoteType,
+    run_config: buildRunConfig({
+      hostname: state.hostname,
+      dns: state.dns,
+      shmSize: state.shmSize,
+      networkMode: state.networkMode,
+      envVars: state.envVars,
+    }),
+    exec_config: buildExecConfig(state.execCommand),
+    volume_mappings: buildVolumeMappings(state.volumeMappings),
+    persistent_storage_path: state.persistentStoragePath || null,
+  };
+}
+
+export async function submitTemplate(state: TemplateFormState): Promise<{ error?: string; id?: string }> {
+  if (!state.name.trim()) return { error: 'Name is required' };
+
+  const res = await api.post<{ template: { id: string } }>('/templates', buildTemplateBody(state));
+  if (res.error) return { error: res.error };
+  if (res.data?.template) {
+    return { id: res.data.template.id };
+  }
+  return { error: 'Failed to create template' };
+}
 
 function parseRunConfig(runConfig: Record<string, unknown>): { hostname: string; dns: string; shmSize: string; networkMode: string; envVars: EnvVar[] } {
   const hostname = typeof runConfig.hostname === 'string' ? runConfig.hostname : '';
@@ -33,7 +118,7 @@ function parseVolumeMappings(volMappings: Record<string, string>): VolumeMapping
   return entries.length > 0 ? entries.map(([host, container]) => ({ host, container })) : [createEmptyVolume()];
 }
 
-export function formStateFromTemplate(t: Template) {
+export function formStateFromTemplate(t: Template): TemplateFormState {
   const rc = parseRunConfig(t.run_config as Record<string, unknown>);
   return {
     name: t.name,
@@ -59,42 +144,19 @@ export function formStateFromTemplate(t: Template) {
   };
 }
 
-export async function loadTemplate(id: string): Promise<{ state?: ReturnType<typeof formStateFromTemplate>; error?: string }> {
+export async function loadTemplate(id: string): Promise<{ state?: TemplateFormState; error?: string }> {
   const res = await api.get<{ template: Template }>('/templates/' + id);
   if (res.error) return { error: res.error };
   if (!res.data?.template) return { error: 'Template not found' };
   return { state: formStateFromTemplate(res.data.template) };
 }
 
-export async function updateTemplate(id: string, state: ReturnType<typeof formStateFromTemplate>): Promise<{ error?: string }> {
+export async function updateTemplate(id: string, state: TemplateFormState): Promise<{ error?: string }> {
   if (!state.name.trim()) return { error: 'Name is required' };
 
-  const body = {
-    name: state.name.trim(),
-    description: state.description || null,
-    image: state.image,
-    cores: state.cores,
-    memory: state.ramGb * 1024 * 1024 * 1024,
-    gpu_count: state.gpuCount,
-    container_runtime: state.containerRuntime,
-    docker_registry: state.dockerRegistry || null,
-    remote_type: state.remoteType,
-    run_config: buildRunConfig({
-      hostname: state.hostname,
-      dns: state.dns,
-      shmSize: state.shmSize,
-      networkMode: state.networkMode,
-      envVars: state.envVars,
-    }),
-    exec_config: buildExecConfig(state.execCommand),
-    volume_mappings: buildVolumeMappings(state.volumeMappings),
-    persistent_storage_path: state.persistentStoragePath || null,
-  };
-
-  const res = await api.put<{ template: { id: string } }>('/templates/' + id, body);
+  const res = await api.put<{ template: { id: string } }>('/templates/' + id, buildTemplateBody(state));
   if (res.error) return { error: res.error };
   if (res.data?.template) {
-    goto('/');
     return {};
   }
   return { error: 'Failed to update template' };

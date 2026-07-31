@@ -6,39 +6,55 @@
   import { auth, isAuthenticated } from '$lib/stores/auth';
 
   let { children } = $props();
-  let authChecked = $state(false);
+
+  function isLoginPath(pathname: string): boolean {
+    return pathname === '/login' || pathname === '/login/';
+  }
+
+  let authChecked = $state(
+    typeof window !== 'undefined' && isLoginPath(window.location.pathname)
+  );
 
   onMount(() => {
+    if (isLoginPath(window.location.pathname)) return;
     auth.check().then(() => { authChecked = true; });
   });
+
+  let onLoginPage = $derived(isLoginPath($page.url.pathname));
 
   let showNav = $derived(
     $isAuthenticated
     && $page.url.pathname !== '/'
-    && $page.url.pathname !== '/login/'
+    && !onLoginPage
     && !$page.url.pathname.startsWith('/kasmvnc/')
   );
 
   $effect(() => {
-    if (authChecked && !$isAuthenticated && $page.url.pathname !== '/login/') {
+    if (authChecked && !$isAuthenticated && !onLoginPage) {
       goto('/login');
     }
   });
 </script>
 
-{#if showNav}
-  <nav>
-    <a href="/" class="nav-brand">OpenWorkspace</a>
-    <div class="nav-links">
-      <a href="/">Dashboard</a>
-      <button onclick={() => auth.logout()}>Logout</button>
-    </div>
-  </nav>
-{/if}
+{#if !authChecked}
+  <main class="auth-pending"><p>Loading...</p></main>
+{:else if $isAuthenticated || onLoginPage}
+  {#if showNav}
+    <nav>
+      <a href="/" class="nav-brand">OpenWorkspace</a>
+      <div class="nav-links">
+        <a href="/">Dashboard</a>
+        <button onclick={() => auth.logout()}>Logout</button>
+      </div>
+    </nav>
+  {/if}
 
-<main class={showNav ? 'has-nav' : ''}>
-  {@render children()}
-</main>
+  <main class={showNav ? 'has-nav' : ''}>
+    {@render children()}
+  </main>
+{:else}
+  <main class="auth-pending"><p>Redirecting...</p></main>
+{/if}
 
 <style>
   :global(body) {
