@@ -1,7 +1,9 @@
 mod common;
 
+use chrono::TimeZone;
 use common::TestContext;
 use sea_orm::ActiveModelTrait;
+use sea_orm::ConnectionTrait;
 use sea_orm::Set;
 use openworkspace_api::db::workspace_instance;
 
@@ -558,4 +560,183 @@ async fn test_stop_stopped_no_container_returns_conflict() {
 
     let resp = ctx.post(&format!("/api/instances/{}/stop", instance_id), &serde_json::json!({})).await;
     assert_eq!(resp.status(), 409);
+}
+
+async fn set_instance_running(ctx: &TestContext, instance_id: &str, started_at: chrono::DateTime<chrono::Utc>) {
+    let inst_id = uuid::Uuid::parse_str(instance_id).unwrap();
+    let db_url = common::pg_url(&ctx.db_name);
+    let db = sea_orm::Database::connect(&db_url).await.unwrap();
+    let model = workspace_instance::ActiveModel {
+        id: Set(inst_id),
+        status: Set("running".to_string()),
+        started_at: Set(Some(started_at)),
+        ..Default::default()
+    };
+    model.update(&db).await.unwrap();
+}
+
+#[tokio::test]
+async fn test_auto_sleeps_at_deadline_running() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let config_resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "auto-sleep-deadline",
+        "image": "busybox:1",
+        "max_run_seconds": 3600,
+        "timeout_action": "stop"
+    })).await;
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
+
+    let launch_resp = ctx.post("/api/instances", &serde_json::json!({
+        "template_id": template_id
+    })).await;
+    let launch_body: serde_json::Value = launch_resp.json().await.unwrap();
+    let instance_id = launch_body["instance"]["id"].as_str().unwrap().to_string();
+
+    let started_at = chrono::Utc.with_ymd_and_hms(2026, 7, 1, 12, 0, 0).unwrap();
+    set_instance_running(&ctx, &instance_id, started_at).await;
+
+    let expected = started_at + chrono::Duration::seconds(3600);
+
+    let resp = ctx.get(&format!("/api/instances/{}", instance_id)).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let actual = chrono::DateTime::parse_from_rfc3339(body["instance"]["auto_sleeps_at"].as_str().unwrap()).unwrap();
+    assert_eq!(actual.with_timezone(&chrono::Utc), expected);
+    assert_eq!(body["instance"]["timeout_action"].as_str(), Some("stop"));
+
+    let resp = ctx.get("/api/instances").await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let instances = body["instances"].as_array().unwrap();
+    let inst_json = instances.iter().find(|i| i["id"].as_str() == Some(&instance_id)).unwrap();
+    let actual = chrono::DateTime::parse_from_rfc3339(inst_json["auto_sleeps_at"].as_str().unwrap()).unwrap();
+    assert_eq!(actual.with_timezone(&chrono::Utc), expected);
+    assert_eq!(inst_json["timeout_action"].as_str(), Some("stop"));
+}
+
+#[tokio::test]
+async fn test_auto_sleeps_at_null_without_duration() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let config_resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "auto-sleep-no-duration",
+        "image": "busybox:1"
+    })).await;
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
+
+    let launch_resp = ctx.post("/api/instances", &serde_json::json!({
+        "template_id": template_id
+    })).await;
+    let launch_body: serde_json::Value = launch_resp.json().await.unwrap();
+    let instance_id = launch_body["instance"]["id"].as_str().unwrap().to_string();
+
+    let started_at = chrono::Utc.with_ymd_and_hms(2026, 7, 1, 9, 30, 0).unwrap();
+    set_instance_running(&ctx, &instance_id, started_at).await;
+
+    let resp = ctx.get(&format!("/api/instances/{}", instance_id)).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["instance"]["auto_sleeps_at"].is_null());
+    assert_eq!(body["instance"]["timeout_action"].as_str(), Some("remove"));
+}
+
+#[tokio::test]
+async fn test_auto_sleeps_at_null_when_not_running() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let config_resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "auto-sleep-not-running",
+        "image": "busybox:1",
+        "max_run_seconds": 3600,
+        "timeout_action": "pause"
+    })).await;
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
+
+    let launch_resp = ctx.post("/api/instances", &serde_json::json!({
+        "template_id": template_id
+    })).await;
+    let launch_body: serde_json::Value = launch_resp.json().await.unwrap();
+    let instance_id = launch_body["instance"]["id"].as_str().unwrap().to_string();
+
+    let started_at = chrono::Utc.with_ymd_and_hms(2026, 7, 1, 15, 0, 0).unwrap();
+    let inst_id = uuid::Uuid::parse_str(&instance_id).unwrap();
+    let db_url = common::pg_url(&ctx.db_name);
+    let db = sea_orm::Database::connect(&db_url).await.unwrap();
+    let model = workspace_instance::ActiveModel {
+        id: Set(inst_id),
+        status: Set("paused".to_string()),
+        started_at: Set(Some(started_at)),
+        ..Default::default()
+    };
+    model.update(&db).await.unwrap();
+
+    let resp = ctx.get(&format!("/api/instances/{}", instance_id)).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["instance"]["auto_sleeps_at"].is_null());
+    assert_eq!(body["instance"]["timeout_action"].as_str(), Some("pause"));
+
+    let model = workspace_instance::ActiveModel {
+        id: Set(inst_id),
+        status: Set("stopped".to_string()),
+        ..Default::default()
+    };
+    model.update(&db).await.unwrap();
+
+    let resp = ctx.get(&format!("/api/instances/{}", instance_id)).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["instance"]["auto_sleeps_at"].is_null());
+    assert_eq!(body["instance"]["timeout_action"].as_str(), Some("pause"));
+}
+
+#[tokio::test]
+async fn test_auto_sleep_fields_null_when_template_missing() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let config_resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "auto-sleep-missing-tpl",
+        "image": "busybox:1",
+        "max_run_seconds": 3600,
+        "timeout_action": "stop"
+    })).await;
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
+
+    let launch_resp = ctx.post("/api/instances", &serde_json::json!({
+        "template_id": template_id
+    })).await;
+    let launch_body: serde_json::Value = launch_resp.json().await.unwrap();
+    let instance_id = launch_body["instance"]["id"].as_str().unwrap().to_string();
+
+    let inst_id = uuid::Uuid::parse_str(&instance_id).unwrap();
+    let db_url = common::pg_url(&ctx.db_name);
+    let db = sea_orm::Database::connect(&db_url).await.unwrap();
+    db.execute_unprepared("ALTER TABLE workspace_instances DROP CONSTRAINT workspace_instances_template_id_fkey").await.unwrap();
+    let model = workspace_instance::ActiveModel {
+        id: Set(inst_id),
+        template_id: Set(uuid::Uuid::new_v4()),
+        status: Set("running".to_string()),
+        started_at: Set(Some(chrono::Utc.with_ymd_and_hms(2026, 7, 1, 18, 0, 0).unwrap())),
+        ..Default::default()
+    };
+    model.update(&db).await.unwrap();
+
+    let resp = ctx.get(&format!("/api/instances/{}", instance_id)).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["instance"]["auto_sleeps_at"].is_null());
+    assert!(body["instance"]["timeout_action"].is_null());
+
+    let resp = ctx.get("/api/instances").await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let instances = body["instances"].as_array().unwrap();
+    let inst_json = instances.iter().find(|i| i["id"].as_str() == Some(&instance_id)).unwrap();
+    assert!(inst_json["auto_sleeps_at"].is_null());
+    assert!(inst_json["timeout_action"].is_null());
 }

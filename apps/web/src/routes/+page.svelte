@@ -9,6 +9,7 @@
   import { launchInstance, deleteTemplate } from '$lib/api/template-actions';
   import { auth, isManager } from '$lib/stores/auth';
   import { api } from '$lib/api/client';
+  import { wrapperUrl, formatRemaining, remainingMs } from '$lib/countdown/countdown';
   import type { Template, Instance, Role } from '$lib/types';
 
   let sidebarOpen = $state(false);
@@ -135,11 +136,14 @@
   }
 
   function instanceUrl(inst: Instance): string {
-    const base = `/${inst.remote_type}/${inst.access_token}`;
-    if (inst.remote_type === 'jupyter') {
-      return `${base}/lab?token=${encodeURIComponent(inst.access_password ?? '')}`;
-    }
-    return `${base}/`;
+    return wrapperUrl(inst.remote_type, inst.access_token ?? '');
+  }
+
+  function sleepLabel(inst: Instance): string | null {
+    if (inst.status !== 'running') return null;
+    const remaining = remainingMs(inst.auto_sleeps_at, Date.now());
+    if (remaining === null || remaining <= 0) return null;
+    return `剩 ${formatRemaining(remaining)}`;
   }
 
   async function onDeleteConfig(config: Template) {
@@ -444,6 +448,9 @@
                       <h3 class="ws-name">{inst.name}</h3>
                     </div>
                     <span class="ws-template">{inst.template_name || 'Unknown template'}</span>
+                    {#if sleepLabel(inst)}
+                      <span class="ws-sleep">{sleepLabel(inst)}</span>
+                    {/if}
                   </div>
                   <span class="ws-id">{inst.id.slice(0, 8)}</span>
                 </div>
@@ -527,6 +534,7 @@
                   <th>Owner</th>
                   <th>Template</th>
                   <th>Status</th>
+                  <th>Auto-Sleep</th>
                   <th>Created</th>
                   <th>Actions</th>
                 </tr>
@@ -545,6 +553,11 @@
                         <span class="status-dot-inline"></span>
                         {inst.status}
                       </span>
+                    </td>
+                    <td class="td-sleep">
+                      {#if sleepLabel(inst)}
+                        {sleepLabel(inst)}
+                      {/if}
                     </td>
                     <td class="td-date">{new Date(inst.created_at).toLocaleDateString()}</td>
                     <td class="td-actions">
@@ -1111,6 +1124,22 @@
 
   :global(.ws-name) { font-size: 0.95rem; font-weight: 600; margin: 0; }
   :global(.ws-template) { font-size: 0.72rem; color: #71717a; display: block; margin-top: 2px; }
+
+  .ws-sleep {
+    display: block;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #a1a1aa;
+    margin-top: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .td-sleep {
+    font-size: 0.75rem;
+    color: #a1a1aa;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
 
   :global(.ws-id) {
     font-family: monospace;

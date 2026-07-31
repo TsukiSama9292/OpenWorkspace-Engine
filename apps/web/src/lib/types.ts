@@ -48,6 +48,8 @@ export interface Instance {
   resolved_volume_host_path?: string;
   access_token?: string;
   access_password?: string;
+  auto_sleeps_at?: string | null;
+  timeout_action?: TimeoutAction | null;
   created_at: string;
   updated_at: string;
 }

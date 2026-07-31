@@ -27,6 +27,7 @@
     && $page.url.pathname !== '/'
     && !onLoginPage
     && !$page.url.pathname.startsWith('/kasmvnc/')
+    && !$page.url.pathname.startsWith('/open/')
   );
 
   $effect(() => {

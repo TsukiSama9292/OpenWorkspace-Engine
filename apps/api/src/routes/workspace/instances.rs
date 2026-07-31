@@ -11,7 +11,7 @@ use super::super::AppState;
 use crate::auth::{AuthUser, Role};
 use crate::db::{UserRepository, WorkspaceTemplateRepository, WorkspaceInstance, WorkspaceInstanceRepository};
 use crate::docker::{ContainerConfig, RemoteType};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -34,7 +34,27 @@ fn resolve_runtime(container_runtime: &str, settings_runtime: &str) -> String {
     }
 }
 
-fn instance_to_json(inst: &WorkspaceInstance, template_name: Option<&str>, remote_type: Option<&str>, owner_username: Option<&str>, owner_role: Option<&str>) -> serde_json::Value {
+fn auto_sleep_deadline(inst: &WorkspaceInstance, max_run_seconds: Option<i64>) -> Option<DateTime<Utc>> {
+    if inst.status != "running" {
+        return None;
+    }
+    match (inst.started_at, max_run_seconds) {
+        (Some(started_at), Some(max_run_seconds)) => {
+            Some(started_at + chrono::Duration::seconds(max_run_seconds))
+        }
+        _ => None,
+    }
+}
+
+fn instance_to_json(
+    inst: &WorkspaceInstance,
+    template_name: Option<&str>,
+    remote_type: Option<&str>,
+    owner_username: Option<&str>,
+    owner_role: Option<&str>,
+    max_run_seconds: Option<i64>,
+    timeout_action: Option<&str>,
+) -> serde_json::Value {
     serde_json::json!({
         "id": inst.id,
         "template_id": inst.template_id,
@@ -52,6 +72,8 @@ fn instance_to_json(inst: &WorkspaceInstance, template_name: Option<&str>, remot
         "started_at": inst.started_at,
         "template_name": template_name,
         "remote_type": remote_type,
+        "auto_sleeps_at": auto_sleep_deadline(inst, max_run_seconds),
+        "timeout_action": timeout_action,
         "created_at": inst.created_at,
         "updated_at": inst.updated_at,
     })
@@ -103,11 +125,15 @@ async fn list_instances(
 
     let mut template_names = std::collections::HashMap::new();
     let mut template_remote_types = std::collections::HashMap::new();
+    let mut template_max_run_seconds = std::collections::HashMap::new();
+    let mut template_timeout_actions = std::collections::HashMap::new();
     for inst in &instances {
         if !template_names.contains_key(&inst.template_id) {
             if let Ok(Some(template)) = template_repo.find_by_id(inst.template_id).await {
                 template_names.insert(inst.template_id, template.name);
                 template_remote_types.insert(inst.template_id, template.remote_type);
+                template_max_run_seconds.insert(inst.template_id, template.max_run_seconds);
+                template_timeout_actions.insert(inst.template_id, template.timeout_action);
             }
         }
     }
@@ -129,9 +155,11 @@ async fn list_instances(
         .map(|inst| {
             let template_name = template_names.get(&inst.template_id).map(|s| s.as_str());
             let remote_type = template_remote_types.get(&inst.template_id).map(|s| s.as_str());
+            let max_run_seconds = template_max_run_seconds.get(&inst.template_id).copied().flatten();
+            let timeout_action = template_timeout_actions.get(&inst.template_id).map(|s| s.as_str());
             let owner_username = owner_usernames.get(&inst.owner_id).map(|s| s.as_str());
             let owner_role = owner_roles.get(&inst.owner_id).map(|s| s.as_str());
-            instance_to_json(inst, template_name, remote_type, owner_username, owner_role)
+            instance_to_json(inst, template_name, remote_type, owner_username, owner_role, max_run_seconds, timeout_action)
         })
         .collect();
 
@@ -233,7 +261,7 @@ async fn launch_instance(
             let owner = user_repo.find_by_id(inst.owner_id).await.ok().flatten();
             let owner_username = owner.as_ref().map(|u| u.1.as_str());
             let owner_role = owner.as_ref().map(|u| u.3.as_str());
-            Ok(Json(serde_json::json!({ "instance": instance_to_json(&inst, Some(&template.name), Some(&template.remote_type), owner_username, owner_role) })))
+            Ok(Json(serde_json::json!({ "instance": instance_to_json(&inst, Some(&template.name), Some(&template.remote_type), owner_username, owner_role, template.max_run_seconds, Some(&template.timeout_action)) })))
         }
         Err(e) => {
             tracing::warn!(
@@ -247,7 +275,7 @@ async fn launch_instance(
             let owner = user_repo.find_by_id(inst.owner_id).await.ok().flatten();
             let owner_username = owner.as_ref().map(|u| u.1.as_str());
             let owner_role = owner.as_ref().map(|u| u.3.as_str());
-            Ok(Json(serde_json::json!({ "instance": instance_to_json(&inst, Some(&template.name), Some(&template.remote_type), owner_username, owner_role), "docker_error": e })))
+            Ok(Json(serde_json::json!({ "instance": instance_to_json(&inst, Some(&template.name), Some(&template.remote_type), owner_username, owner_role, template.max_run_seconds, Some(&template.timeout_action)), "docker_error": e })))
         }
     }
 }
@@ -275,12 +303,14 @@ async fn get_instance(
 
     let template_name = template.as_ref().map(|t| t.name.clone());
     let remote_type = template.as_ref().map(|t| t.remote_type.clone());
+    let max_run_seconds = template.as_ref().map(|t| t.max_run_seconds).flatten();
+    let timeout_action = template.as_ref().map(|t| t.timeout_action.clone());
 
     let owner = user_repo.find_by_id(instance.owner_id).await.ok().flatten();
     let owner_username = owner.as_ref().map(|u| u.1.as_str());
     let owner_role = owner.as_ref().map(|u| u.3.as_str());
 
-    Ok(Json(serde_json::json!({ "instance": instance_to_json(&instance, template_name.as_deref(), remote_type.as_deref(), owner_username, owner_role) })))
+    Ok(Json(serde_json::json!({ "instance": instance_to_json(&instance, template_name.as_deref(), remote_type.as_deref(), owner_username, owner_role, max_run_seconds, timeout_action.as_deref()) })))
 }
 
 async fn delete_instance(

@@ -3,6 +3,7 @@
   import { page } from '$app/stores';
   import { api } from '$lib/api/client';
   import { performAction, deleteInstance } from '$lib/api/instance-actions';
+  import { wrapperUrl } from '$lib/countdown/countdown';
   import type { Instance } from '$lib/types';
 
   let instance = $state<Instance | null>(null);
@@ -12,11 +13,7 @@
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
   function instanceUrl(inst: Instance): string {
-    const base = `/${inst.remote_type}/${inst.access_token}`;
-    if (inst.remote_type === 'jupyter') {
-      return `${base}/lab?token=${encodeURIComponent(inst.access_password ?? '')}`;
-    }
-    return `${base}/`;
+    return wrapperUrl(inst.remote_type, inst.access_token ?? '');
   }
 
   async function loadInstance() {

@@ -2,22 +2,48 @@
   import { page } from '$app/stores';
   import { onMount, onDestroy } from 'svelte';
   import VncSession from '$lib/components/vnc/VncSession.svelte';
+  import CountdownOverlay from '$lib/countdown/CountdownOverlay.svelte';
   import { api } from '$lib/api/client';
-  import type { Instance } from '$lib/types';
+  import type { Instance, TimeoutAction } from '$lib/types';
 
   const token = $page.params.token ?? '';
   let password = $state('password');
   let status = $state<'loading' | 'starting' | 'ready'>('loading');
+  let autoSleepsAt = $state<string | null>(null);
+  let timeoutAction = $state<TimeoutAction | null>(null);
+  let hadDeadline = $state(false);
   let pollTimer: ReturnType<typeof setInterval> | undefined;
 
-  onMount(async () => {
+  async function findInstance(): Promise<Instance | undefined> {
     const res = await api.get<{ instances: Instance[] }>('/instances');
-    const inst = res.data?.instances?.find(i => i.access_token === token);
+    return res.data?.instances?.find(i => i.access_token === token);
+  }
+
+  function applyInstance(inst?: Instance) {
+    if (!inst) return;
+    if (inst.access_password) password = inst.access_password;
+    autoSleepsAt = inst.auto_sleeps_at ?? null;
+    timeoutAction = inst.timeout_action ?? null;
+    if (inst.auto_sleeps_at) hadDeadline = true;
+  }
+
+  async function resyncDeadline() {
+    const inst = await findInstance();
+    if (!inst || (hadDeadline && inst.status !== 'running')) {
+      window.location.href = '/';
+      return null;
+    }
+    applyInstance(inst);
+    return { deadline: autoSleepsAt, action: timeoutAction };
+  }
+
+  onMount(async () => {
+    const inst = await findInstance();
     if (!inst) {
       status = 'ready';
       return;
     }
-    if (inst.access_password) password = inst.access_password;
+    applyInstance(inst);
     if (inst.status === 'running') {
       status = 'ready';
       return;
@@ -25,10 +51,9 @@
     if (inst.status === 'starting') {
       status = 'starting';
       pollTimer = setInterval(async () => {
-        const r = await api.get<{ instances: Instance[] }>('/instances');
-        const updated = r.data?.instances?.find(i => i.access_token === token);
+        const updated = await findInstance();
         if (!updated) return;
-        if (updated.access_password) password = updated.access_password;
+        applyInstance(updated);
         if (updated.status === 'running') {
           clearInterval(pollTimer);
           pollTimer = undefined;
@@ -56,5 +81,6 @@
     <p class="text-surface-400 text-sm">The instance is booting up. This may take a moment.</p>
   </div>
 {:else}
+  <CountdownOverlay deadline={autoSleepsAt} action={timeoutAction} onResync={resyncDeadline} />
   <VncSession {token} {password} />
 {/if}
