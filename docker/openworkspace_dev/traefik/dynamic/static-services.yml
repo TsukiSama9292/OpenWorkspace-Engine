@@ -3,7 +3,8 @@ http:
     api-service:
       loadBalancer:
         servers:
-          - url: "http://host.docker.internal:3000"
+          - url: "https://host.docker.internal:3000"
+        serversTransport: api-insecure
 
     web-service:
       loadBalancer:

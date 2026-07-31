@@ -2,20 +2,24 @@ http:
   routers:
     api-router:
       entryPoints:
-        - web
+        - websecure
       rule: "PathPrefix(`/api`)"
       service: "api-service"
+      tls: {}
 
     web-router:
       entryPoints:
-        - web
+        - websecure
       rule: "PathPrefix(`/`)"
       service: "web-service"
+      tls: {}
 
   middlewares:
     vnc-auth:
       forwardAuth:
-        address: "http://host.docker.internal:3000/api/vnc/verify"
+        address: "https://host.docker.internal:3000/api/vnc/verify"
         trustForwardHeader: true
         authResponseHeaders:
           - "X-Forwarded-User"
+        tls:
+          insecureSkipVerify: true

@@ -63,14 +63,14 @@
       onkeydown={handleKeydown}
       placeholder="Paste or type text to send to remote..."
       rows="6"
-      class="w-full rounded p-2.5 text-[13px] font-mono resize-y min-h-[120px] box-border bg-surface-100 border border-surface-300 text-surface-800 focus:outline-none focus:border-primary-400 placeholder:text-surface-400"
+      class="w-full rounded p-2.5 text-[13px] font-mono resize-y min-h-[120px] box-border bg-black/40 border border-surface-700 text-surface-100 focus:outline-none focus:border-primary-400 placeholder:text-surface-500"
     ></textarea>
     {#if syncStatus}
       <div class="text-[11px] text-primary-500">{syncStatus}</div>
     {/if}
     <div class="flex gap-2 justify-end">
-      <button class="px-3.5 py-1.5 rounded text-[13px] font-sans cursor-pointer border border-surface-300 bg-surface-200 text-surface-800 transition-all hover:bg-surface-300" onclick={handlePaste}>Read from clipboard</button>
-      <button class="px-3.5 py-1.5 rounded text-[13px] font-sans cursor-pointer border border-surface-300 bg-surface-200 text-surface-800 transition-all hover:bg-surface-300" onclick={handleCopy}>Copy to clipboard</button>
+      <button class="px-3.5 py-1.5 rounded text-[13px] font-sans cursor-pointer border border-surface-700 bg-black/40 text-surface-100 transition-all hover:bg-surface-800" onclick={handlePaste}>Read from clipboard</button>
+      <button class="px-3.5 py-1.5 rounded text-[13px] font-sans cursor-pointer border border-surface-700 bg-black/40 text-surface-100 transition-all hover:bg-surface-800" onclick={handleCopy}>Copy to clipboard</button>
       <button class="px-3.5 py-1.5 rounded text-[13px] font-sans cursor-pointer border border-transparent bg-primary-500 text-primary-contrast-500 font-medium transition-all hover:bg-primary-600" onclick={handleSend}>Send to remote</button>
     </div>
   </div>

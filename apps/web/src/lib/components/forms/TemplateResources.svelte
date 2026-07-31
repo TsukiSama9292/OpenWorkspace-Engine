@@ -16,9 +16,9 @@
   }: Props = $props();
 
   const STORAGE_HINT = '/data/persistent/{template_name}/{user_id}';
-  const inputClass = 'px-3 py-2 border border-surface-300 rounded bg-surface-50 text-surface-800 focus:outline-none focus:border-primary-500 w-full';
+  const inputClass = 'px-3 py-2 bg-black/40 border border-white/10 rounded text-white placeholder:text-zinc-500 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/25 w-full';
   const labelClass = 'flex flex-col gap-1';
-  const spanClass = 'text-sm text-surface-600';
+  const spanClass = 'text-sm text-zinc-400';
 </script>
 
 <div class="grid grid-cols-3 gap-3">

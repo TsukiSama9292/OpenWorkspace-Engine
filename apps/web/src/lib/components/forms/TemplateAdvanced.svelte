@@ -25,13 +25,13 @@
     volumeMappings = $bindable()
   }: Props = $props();
 
-  const inputClass = 'px-3 py-2 border border-surface-300 rounded bg-white text-surface-800 focus:outline-none focus:border-primary-500 w-full';
+  const inputClass = 'px-3 py-2 bg-black/40 border border-white/10 rounded text-white placeholder:text-zinc-500 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/25 w-full';
   const labelClass = 'flex flex-col gap-1';
-  const spanClass = 'text-sm text-surface-600';
+  const spanClass = 'text-sm text-zinc-400';
 </script>
 
-<div class="p-4 border border-surface-300 rounded-lg bg-surface-50 flex flex-col gap-4">
-  <h2 class="text-base font-semibold text-surface-700">Run Config</h2>
+<div class="p-4 border border-surface-800 rounded-lg bg-transparent flex flex-col gap-4">
+  <h2 class="text-base font-semibold text-surface-200">Run Config</h2>
   <label class={labelClass}>
     <span class={spanClass}>Hostname</span>
     <input type="text" bind:value={hostname} placeholder="kasm-ubuntu" class={inputClass} />
@@ -60,7 +60,7 @@
 
   <EnvVarRows bind:envVars />
 
-  <h2 class="text-base font-semibold text-surface-700">Exec Config</h2>
+  <h2 class="text-base font-semibold text-surface-200">Exec Config</h2>
   <label class={labelClass}>
     <span class={spanClass}>Post-start Command</span>
     <input type="text" bind:value={execCommand} placeholder="bash -c 'echo hello'" class={inputClass} />

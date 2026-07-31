@@ -41,6 +41,10 @@
 </main>
 
 <style>
+  :global(body) {
+    margin: 0;
+  }
+
   nav {
     display: flex;
     justify-content: space-between;

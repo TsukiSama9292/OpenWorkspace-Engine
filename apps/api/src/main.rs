@@ -1,3 +1,4 @@
+use axum_server::tls_rustls::RustlsConfig;
 use openworkspace_api::core::Settings;
 use openworkspace_api::db::{WorkspaceInstanceRepository, UserRepository};
 use openworkspace_api::docker::{DockerClient, DockerService};
@@ -21,6 +22,11 @@ async fn main() {
         .init();
 
     let settings = Settings::new().expect("Failed to load settings");
+
+    rustls::crypto::CryptoProvider::install_default(
+        rustls::crypto::aws_lc_rs::default_provider(),
+    )
+    .expect("Failed to install default crypto provider");
 
     tracing::info!("Connecting to database...");
 
@@ -97,10 +103,17 @@ async fn main() {
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    let bind = settings.bind_address();
-    let listener = tokio::net::TcpListener::bind(&bind)
+    let addr: std::net::SocketAddr = settings.bind_address().parse().expect("Invalid bind address");
+    let tls_config = RustlsConfig::from_pem_file(
+        settings.ssl_cert_path.clone(),
+        settings.ssl_key_path.clone(),
+    )
+    .await
+    .expect("Failed to load TLS cert/key");
+
+    tracing::info!("Server running on https://{}", addr);
+    axum_server::bind_rustls(addr, tls_config)
+        .serve(app.into_make_service())
         .await
         .unwrap();
-    tracing::info!("Server running on http://{}", bind);
-    axum::serve(listener, app).await.unwrap();
 }

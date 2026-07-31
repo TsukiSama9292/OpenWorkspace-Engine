@@ -21,13 +21,13 @@
 </script>
 
 <div class="max-w-xl mx-auto">
-  <h1 class="text-2xl font-bold text-surface-800 mb-6">New Template</h1>
+  <h1 class="text-2xl font-bold text-surface-100 mb-6">New Template</h1>
 
   <form class="flex flex-col gap-4" onsubmit={onSubmit}>
     <TemplateBasics bind:name={form.name} bind:description={form.description} bind:image={form.image} bind:remoteType={form.remoteType} />
     <TemplateResources bind:cores={form.cores} bind:ramGb={form.ramGb} bind:gpuCount={form.gpuCount} bind:dockerRegistry={form.dockerRegistry} bind:persistentStoragePath={form.persistentStoragePath} />
 
-    <button type="button" class="text-sm text-surface-500 hover:text-surface-700 bg-transparent border-none cursor-pointer text-left p-0" onclick={() => form.showAdvanced = !form.showAdvanced}>
+    <button type="button" class="text-sm text-surface-400 hover:text-surface-100 bg-transparent border-none cursor-pointer text-left p-0" onclick={() => form.showAdvanced = !form.showAdvanced}>
       {form.showAdvanced ? '▾ Hide Advanced' : '▸ Show Advanced'}
     </button>
 
@@ -40,7 +40,7 @@
     {/if}
 
     <div class="flex justify-end gap-3 mt-2">
-      <a href="/" class="px-4 py-2 text-surface-500 no-underline hover:text-surface-700">Cancel</a>
+      <a href="/" class="px-4 py-2 text-surface-400 no-underline hover:text-surface-100">Cancel</a>
       <button
         type="submit"
         disabled={form.loading}

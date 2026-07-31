@@ -52,8 +52,8 @@
 {#if status === 'starting'}
   <div class="flex flex-col items-center justify-center min-h-screen">
     <div class="w-12 h-12 border-4 border-primary-500 border-t-transparent rounded-full animate-spin mb-6"></div>
-    <h2 class="text-xl font-semibold text-surface-800 mb-2">Starting Instance</h2>
-    <p class="text-surface-500 text-sm">The instance is booting up. This may take a moment.</p>
+    <h2 class="text-xl font-semibold text-surface-100 mb-2">Starting Instance</h2>
+    <p class="text-surface-400 text-sm">The instance is booting up. This may take a moment.</p>
   </div>
 {:else}
   <VncSession {token} {password} />

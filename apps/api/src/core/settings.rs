@@ -8,6 +8,8 @@ pub struct Settings {
     pub db_max_connections: u32,
     pub docker_network: String,
     pub container_runtime: String,
+    pub ssl_cert_path: String,
+    pub ssl_key_path: String,
 }
 
 impl Settings {
@@ -51,6 +53,10 @@ impl Settings {
                 .unwrap_or_else(|| "ow-network".to_string()),
             container_runtime: get("OW_CONTAINER_RUNTIME")
                 .unwrap_or_else(|| "docker".to_string()),
+            ssl_cert_path: get("SSL_CERT_PATH")
+                .unwrap_or_else(|| "./certs/api/cert.pem".to_string()),
+            ssl_key_path: get("SSL_KEY_PATH")
+                .unwrap_or_else(|| "./certs/api/key.pem".to_string()),
         })
     }
 
@@ -78,6 +84,8 @@ mod tests {
             db_max_connections: 5,
             docker_network: "ow-network".to_string(),
             container_runtime: "docker".to_string(),
+            ssl_cert_path: "./certs/api/cert.pem".to_string(),
+            ssl_key_path: "./certs/api/key.pem".to_string(),
         };
         assert_eq!(settings.bind_address(), "0.0.0.0:3000");
     }
@@ -93,6 +101,8 @@ mod tests {
             db_max_connections: 10,
             docker_network: "ow-network".to_string(),
             container_runtime: "docker".to_string(),
+            ssl_cert_path: "./certs/api/cert.pem".to_string(),
+            ssl_key_path: "./certs/api/key.pem".to_string(),
         };
         assert_eq!(settings.bind_address(), "127.0.0.1:8080");
     }
@@ -108,6 +118,8 @@ mod tests {
             db_max_connections: 5,
             docker_network: "ow-network".to_string(),
             container_runtime: "docker".to_string(),
+            ssl_cert_path: "./certs/api/cert.pem".to_string(),
+            ssl_key_path: "./certs/api/key.pem".to_string(),
         };
         let debug = format!("{:?}", settings);
         assert!(debug.contains("Settings"));
@@ -125,6 +137,8 @@ mod tests {
             db_max_connections: 5,
             docker_network: "ow-network".to_string(),
             container_runtime: "docker".to_string(),
+            ssl_cert_path: "./certs/api/cert.pem".to_string(),
+            ssl_key_path: "./certs/api/key.pem".to_string(),
         };
         let cloned = settings.clone();
         assert_eq!(settings.database_url, cloned.database_url);
@@ -181,6 +195,8 @@ mod tests {
         assert_eq!(settings.db_max_connections, 5);
         assert_eq!(settings.admin_password, "admin");
         assert_eq!(settings.container_runtime, "docker");
+        assert_eq!(settings.ssl_cert_path, "./certs/api/cert.pem");
+        assert_eq!(settings.ssl_key_path, "./certs/api/key.pem");
     }
 
     #[test]
@@ -224,6 +240,8 @@ mod tests {
             ("DB_MAX_CONNECTIONS", "20"),
             ("DOCKER_NETWORK", "custom-network"),
             ("OW_CONTAINER_RUNTIME", "runsc"),
+            ("SSL_CERT_PATH", "/etc/certs/cert.pem"),
+            ("SSL_KEY_PATH", "/etc/certs/key.pem"),
         ]))
         .unwrap();
 
@@ -235,6 +253,8 @@ mod tests {
         assert_eq!(settings.db_max_connections, 20);
         assert_eq!(settings.docker_network, "custom-network");
         assert_eq!(settings.container_runtime, "runsc");
+        assert_eq!(settings.ssl_cert_path, "/etc/certs/cert.pem");
+        assert_eq!(settings.ssl_key_path, "/etc/certs/key.pem");
         assert_eq!(settings.bind_address(), "192.168.1.100:8080");
     }
 

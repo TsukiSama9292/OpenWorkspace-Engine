@@ -24,6 +24,7 @@ services:
       - "--serversTransport.insecureSkipVerify=true"
     ports:
       - "80:80"
+      - "443:443"
       - "8080:8080"
     extra_hosts:
       - "host.docker.internal:host-gateway" # 💥 讓 Traefik 容器能連回宿主機的 3000 和 5173
@@ -31,6 +32,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./traefik/dynamic:/etc/traefik/dynamic
+      - ../../certs/traefik:/etc/traefik/certs:ro
 
   postgresql:
     image: postgres:18-alpine
