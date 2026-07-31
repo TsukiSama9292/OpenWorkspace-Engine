@@ -16,8 +16,6 @@ jsonwebtoken = "9"
 bcrypt = "0.17"
 bollard = "0.18"
 futures-util = "0.3"
-axum-server = { version = "0.8", features = ["tls-rustls"] }
-rustls = { version = "0.23", features = ["aws-lc-rs"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }

@@ -90,6 +90,8 @@ impl WorkerTestContext {
                 &serde_json::json!({}),
                 &serde_json::json!({}),
                 None,
+                None,
+                "remove",
             )
             .await
             .unwrap();
@@ -108,6 +110,59 @@ impl WorkerTestContext {
         repo.update_status(instance.id, "starting").await.unwrap();
         instance.id
     }
+
+    async fn create_template_with_auto_sleep(
+        &self,
+        name: &str,
+        max_run_seconds: Option<i64>,
+        timeout_action: &str,
+    ) -> uuid::Uuid {
+        let repo = WorkspaceTemplateRepository::new(&self.db);
+        let template = repo
+            .create(
+                name,
+                None,
+                self.admin_id,
+                "test-image",
+                1,
+                1024,
+                0,
+                None,
+                "kasmvnc",
+                "docker",
+                &serde_json::json!({}),
+                &serde_json::json!({}),
+                &serde_json::json!({}),
+                None,
+                max_run_seconds,
+                timeout_action,
+            )
+            .await
+            .unwrap();
+        template.id
+    }
+
+    async fn create_running_instance(
+        &self,
+        template_id: uuid::Uuid,
+        started_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> uuid::Uuid {
+        let repo = WorkspaceInstanceRepository::new(&self.db);
+        let instance = repo
+            .launch(template_id, self.admin_id, "auto-sleep-instance", false, None)
+            .await
+            .unwrap();
+        repo.update_container_id(instance.id, "test-container-id")
+            .await
+            .unwrap();
+        repo.update_status(instance.id, "running").await.unwrap();
+        repo.update_started_at(instance.id, started_at).await.unwrap();
+        instance.id
+    }
+}
+
+fn docker_err(msg: &str) -> bollard::errors::Error {
+    std::io::Error::new(std::io::ErrorKind::Other, msg).into()
 }
 
 impl Drop for WorkerTestContext {
@@ -191,7 +246,7 @@ async fn test_probe_timeout_sets_error() {
     // Set updated_at to 130 seconds ago to trigger timeout
     let id_str = instance_id.to_string();
     let raw_sql = format!(
-        "UPDATE workspace_instance SET updated_at = NOW() - INTERVAL '130 seconds' WHERE id = '{}'",
+        "UPDATE workspace_instances SET updated_at = NOW() - INTERVAL '130 seconds' WHERE id = '{}'",
         id_str
     );
     ctx.db.execute(sea_orm::Statement::from_string(
@@ -227,4 +282,340 @@ async fn test_probe_timeout_sets_error() {
 
     let instance = instance_repo.find_by_id(instance_id).await.unwrap().unwrap();
     assert_eq!(instance.status, "error", "should become error after timeout");
+}
+
+// ── check_auto_sleep ──
+
+#[tokio::test]
+async fn test_auto_sleep_remove_over_limit() {
+    let ctx = WorkerTestContext::new().await;
+    let now = chrono::Utc::now();
+    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-remove", Some(3600), "remove").await;
+    let instance_id = ctx.create_running_instance(template_id, Some(now - chrono::Duration::seconds(3601))).await;
+
+    let mut mock_docker = MockDockerService::new();
+    mock_docker.expect_stop_container_by_id()
+        .returning(|_| Box::pin(async { Ok(()) }));
+    mock_docker.expect_remove_container_by_id()
+        .returning(|_| Box::pin(async { Ok(()) }));
+
+    let vnc_cache = VncCache::new();
+    let instance_repo = WorkspaceInstanceRepository::new(&ctx.db);
+    let template_repo = WorkspaceTemplateRepository::new(&ctx.db);
+    let instance = instance_repo.find_by_id(instance_id).await.unwrap().unwrap();
+    vnc_cache.insert(&instance.access_token, "running");
+
+    let count = health_worker::check_auto_sleep(
+        &instance_repo,
+        &template_repo,
+        &mock_docker,
+        &vnc_cache,
+        now,
+    ).await.unwrap();
+    assert_eq!(count, 1);
+
+    assert!(instance_repo.find_by_id(instance_id).await.unwrap().is_none());
+    assert!(vnc_cache.get(&instance.access_token).is_none());
+}
+
+#[tokio::test]
+async fn test_auto_sleep_remove_ignores_docker_failure() {
+    let ctx = WorkerTestContext::new().await;
+    let now = chrono::Utc::now();
+    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-remove-err", Some(3600), "remove").await;
+    let instance_id = ctx.create_running_instance(template_id, Some(now - chrono::Duration::seconds(3601))).await;
+
+    let mut mock_docker = MockDockerService::new();
+    mock_docker.expect_stop_container_by_id()
+        .returning(|_| Box::pin(async { Err(docker_err("stop failed")) }));
+    mock_docker.expect_remove_container_by_id()
+        .returning(|_| Box::pin(async { Err(docker_err("remove failed")) }));
+
+    let vnc_cache = VncCache::new();
+    let instance_repo = WorkspaceInstanceRepository::new(&ctx.db);
+    let template_repo = WorkspaceTemplateRepository::new(&ctx.db);
+
+    let count = health_worker::check_auto_sleep(
+        &instance_repo,
+        &template_repo,
+        &mock_docker,
+        &vnc_cache,
+        now,
+    ).await.unwrap();
+    assert_eq!(count, 1);
+    assert!(instance_repo.find_by_id(instance_id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn test_auto_sleep_stop_over_limit() {
+    let ctx = WorkerTestContext::new().await;
+    let now = chrono::Utc::now();
+    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-stop", Some(3600), "stop").await;
+    let instance_id = ctx.create_running_instance(template_id, Some(now - chrono::Duration::seconds(3601))).await;
+
+    let mut mock_docker = MockDockerService::new();
+    mock_docker.expect_stop_container_by_id()
+        .returning(|_| Box::pin(async { Ok(()) }));
+
+    let vnc_cache = VncCache::new();
+    let instance_repo = WorkspaceInstanceRepository::new(&ctx.db);
+    let template_repo = WorkspaceTemplateRepository::new(&ctx.db);
+
+    let count = health_worker::check_auto_sleep(
+        &instance_repo,
+        &template_repo,
+        &mock_docker,
+        &vnc_cache,
+        now,
+    ).await.unwrap();
+    assert_eq!(count, 1);
+
+    let instance = instance_repo.find_by_id(instance_id).await.unwrap().unwrap();
+    assert_eq!(instance.status, "stopped");
+    assert!(instance.started_at.is_none());
+}
+
+#[tokio::test]
+async fn test_auto_sleep_pause_over_limit() {
+    let ctx = WorkerTestContext::new().await;
+    let now = chrono::Utc::now();
+    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-pause", Some(3600), "pause").await;
+    let instance_id = ctx.create_running_instance(template_id, Some(now - chrono::Duration::seconds(3601))).await;
+
+    let mut mock_docker = MockDockerService::new();
+    mock_docker.expect_pause_container_by_id()
+        .returning(|_| Box::pin(async { Ok(()) }));
+
+    let vnc_cache = VncCache::new();
+    let instance_repo = WorkspaceInstanceRepository::new(&ctx.db);
+    let template_repo = WorkspaceTemplateRepository::new(&ctx.db);
+
+    let count = health_worker::check_auto_sleep(
+        &instance_repo,
+        &template_repo,
+        &mock_docker,
+        &vnc_cache,
+        now,
+    ).await.unwrap();
+    assert_eq!(count, 1);
+
+    let instance = instance_repo.find_by_id(instance_id).await.unwrap().unwrap();
+    assert_eq!(instance.status, "paused");
+    assert!(instance.started_at.is_none());
+}
+
+#[tokio::test]
+async fn test_auto_sleep_not_reached_limit() {
+    let ctx = WorkerTestContext::new().await;
+    let now = chrono::Utc::now();
+    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-not-yet", Some(3600), "remove").await;
+    let instance_id = ctx.create_running_instance(template_id, Some(now - chrono::Duration::seconds(3599))).await;
+
+    let mock_docker = MockDockerService::new();
+    let vnc_cache = VncCache::new();
+    let instance_repo = WorkspaceInstanceRepository::new(&ctx.db);
+    let template_repo = WorkspaceTemplateRepository::new(&ctx.db);
+
+    let count = health_worker::check_auto_sleep(
+        &instance_repo,
+        &template_repo,
+        &mock_docker,
+        &vnc_cache,
+        now,
+    ).await.unwrap();
+    assert_eq!(count, 0);
+
+    let instance = instance_repo.find_by_id(instance_id).await.unwrap().unwrap();
+    assert_eq!(instance.status, "running");
+}
+
+#[tokio::test]
+async fn test_auto_sleep_skips_old_instance_without_started_at() {
+    let ctx = WorkerTestContext::new().await;
+    let now = chrono::Utc::now();
+    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-old", Some(3600), "remove").await;
+    let instance_id = ctx.create_running_instance(template_id, None).await;
+
+    let mock_docker = MockDockerService::new();
+    let vnc_cache = VncCache::new();
+    let instance_repo = WorkspaceInstanceRepository::new(&ctx.db);
+    let template_repo = WorkspaceTemplateRepository::new(&ctx.db);
+
+    let count = health_worker::check_auto_sleep(
+        &instance_repo,
+        &template_repo,
+        &mock_docker,
+        &vnc_cache,
+        now,
+    ).await.unwrap();
+    assert_eq!(count, 0);
+
+    let instance = instance_repo.find_by_id(instance_id).await.unwrap().unwrap();
+    assert_eq!(instance.status, "running");
+}
+
+#[tokio::test]
+async fn test_auto_sleep_skips_disabled_template() {
+    let ctx = WorkerTestContext::new().await;
+    let now = chrono::Utc::now();
+    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-disabled", None, "remove").await;
+    let instance_id = ctx.create_running_instance(template_id, Some(now - chrono::Duration::seconds(7200))).await;
+
+    let mock_docker = MockDockerService::new();
+    let vnc_cache = VncCache::new();
+    let instance_repo = WorkspaceInstanceRepository::new(&ctx.db);
+    let template_repo = WorkspaceTemplateRepository::new(&ctx.db);
+
+    let count = health_worker::check_auto_sleep(
+        &instance_repo,
+        &template_repo,
+        &mock_docker,
+        &vnc_cache,
+        now,
+    ).await.unwrap();
+    assert_eq!(count, 0);
+
+    let instance = instance_repo.find_by_id(instance_id).await.unwrap().unwrap();
+    assert_eq!(instance.status, "running");
+}
+
+#[tokio::test]
+async fn test_auto_sleep_reads_template_config_each_scan() {
+    let ctx = WorkerTestContext::new().await;
+    let now = chrono::Utc::now();
+    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-recheck", Some(7200), "stop").await;
+    let instance_id = ctx.create_running_instance(template_id, Some(now - chrono::Duration::seconds(4000))).await;
+
+    let instance_repo = WorkspaceInstanceRepository::new(&ctx.db);
+    let template_repo = WorkspaceTemplateRepository::new(&ctx.db);
+
+    let vnc_cache = VncCache::new();
+    let mock_docker = MockDockerService::new();
+    let count = health_worker::check_auto_sleep(
+        &instance_repo,
+        &template_repo,
+        &mock_docker,
+        &vnc_cache,
+        now,
+    ).await.unwrap();
+    assert_eq!(count, 0, "raised limit should not trigger");
+
+    ctx.db.execute(sea_orm::Statement::from_string(
+        sea_orm::DatabaseBackend::Postgres,
+        format!("UPDATE workspace_templates SET max_run_seconds = 3600 WHERE id = '{}'", template_id),
+    )).await.unwrap();
+
+    let mut mock_docker = MockDockerService::new();
+    mock_docker.expect_stop_container_by_id()
+        .returning(|_| Box::pin(async { Ok(()) }));
+    let count = health_worker::check_auto_sleep(
+        &instance_repo,
+        &template_repo,
+        &mock_docker,
+        &vnc_cache,
+        now,
+    ).await.unwrap();
+    assert_eq!(count, 1, "lowered limit should trigger on next scan");
+
+    let instance = instance_repo.find_by_id(instance_id).await.unwrap().unwrap();
+    assert_eq!(instance.status, "stopped");
+}
+
+#[tokio::test]
+async fn test_auto_sleep_stop_clears_vnc_cache_and_route() {
+    let ctx = WorkerTestContext::new().await;
+    let now = chrono::Utc::now();
+    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-stop-cache", Some(3600), "stop").await;
+    let instance_id = ctx.create_running_instance(template_id, Some(now - chrono::Duration::seconds(3601))).await;
+
+    let mut mock_docker = MockDockerService::new();
+    mock_docker.expect_stop_container_by_id()
+        .returning(|_| Box::pin(async { Ok(()) }));
+
+    let vnc_cache = VncCache::new();
+    let instance_repo = WorkspaceInstanceRepository::new(&ctx.db);
+    let template_repo = WorkspaceTemplateRepository::new(&ctx.db);
+    let instance = instance_repo.find_by_id(instance_id).await.unwrap().unwrap();
+    vnc_cache.insert(&instance.access_token, "running");
+
+    health_worker::check_auto_sleep(
+        &instance_repo,
+        &template_repo,
+        &mock_docker,
+        &vnc_cache,
+        now,
+    ).await.unwrap();
+
+    assert!(vnc_cache.get(&instance.access_token).is_none());
+}
+
+#[tokio::test]
+async fn test_auto_sleep_pause_preserves_vnc_cache() {
+    let ctx = WorkerTestContext::new().await;
+    let now = chrono::Utc::now();
+    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-pause-cache", Some(3600), "pause").await;
+    let instance_id = ctx.create_running_instance(template_id, Some(now - chrono::Duration::seconds(3601))).await;
+
+    let mut mock_docker = MockDockerService::new();
+    mock_docker.expect_pause_container_by_id()
+        .returning(|_| Box::pin(async { Ok(()) }));
+
+    let vnc_cache = VncCache::new();
+    let instance_repo = WorkspaceInstanceRepository::new(&ctx.db);
+    let template_repo = WorkspaceTemplateRepository::new(&ctx.db);
+    let instance = instance_repo.find_by_id(instance_id).await.unwrap().unwrap();
+    vnc_cache.insert(&instance.access_token, "running");
+
+    health_worker::check_auto_sleep(
+        &instance_repo,
+        &template_repo,
+        &mock_docker,
+        &vnc_cache,
+        now,
+    ).await.unwrap();
+
+    let found = instance_repo.find_by_id(instance_id).await.unwrap().unwrap();
+    assert_eq!(found.status, "paused");
+    assert!(
+        vnc_cache.get(&instance.access_token).is_some(),
+        "pause should keep the VNC route/cache alive for resume"
+    );
+}
+
+#[tokio::test]
+async fn test_auto_sleep_no_double_trigger_on_rescan() {
+    let ctx = WorkerTestContext::new().await;
+    let now = chrono::Utc::now();
+    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-rescan", Some(3600), "stop").await;
+    let instance_id = ctx.create_running_instance(template_id, Some(now - chrono::Duration::seconds(3601))).await;
+
+    let mut mock_docker = MockDockerService::new();
+    mock_docker.expect_stop_container_by_id()
+        .times(1)
+        .returning(|_| Box::pin(async { Ok(()) }));
+
+    let vnc_cache = VncCache::new();
+    let instance_repo = WorkspaceInstanceRepository::new(&ctx.db);
+    let template_repo = WorkspaceTemplateRepository::new(&ctx.db);
+
+    let first = health_worker::check_auto_sleep(
+        &instance_repo,
+        &template_repo,
+        &mock_docker,
+        &vnc_cache,
+        now,
+    ).await.unwrap();
+    assert_eq!(first, 1);
+
+    let second = health_worker::check_auto_sleep(
+        &instance_repo,
+        &template_repo,
+        &mock_docker,
+        &vnc_cache,
+        now,
+    ).await.unwrap();
+    assert_eq!(second, 0, "already-triggered instance should not re-trigger");
+
+    let instance = instance_repo.find_by_id(instance_id).await.unwrap().unwrap();
+    assert_eq!(instance.status, "stopped");
 }

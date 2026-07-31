@@ -303,6 +303,8 @@ async fn test_template_to_json_fields_in_response() {
     assert_eq!(cfg["exec_config"]["cmd"], true);
     assert_eq!(cfg["volume_mappings"]["/h"], "/c");
     assert_eq!(cfg["persistent_storage_path"], "/data");
+    assert!(cfg["max_run_seconds"].is_null());
+    assert_eq!(cfg["timeout_action"], "remove");
     assert_eq!(cfg["instance_count"], 0);
     assert!(cfg["owner_id"].is_string());
     assert!(cfg["created_at"].is_string());
@@ -418,3 +420,146 @@ async fn test_template_response_includes_container_runtime() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert!(body["template"].get("container_runtime").is_some());
 }
+
+#[tokio::test]
+async fn test_create_template_with_auto_sleep() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "auto-sleep-config",
+        "image": "busybox:1",
+        "max_run_seconds": 3600,
+        "timeout_action": "stop"
+    })).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["template"]["max_run_seconds"], 3600);
+    assert_eq!(body["template"]["timeout_action"], "stop");
+
+    let template_id = body["template"]["id"].as_str().unwrap();
+    let resp = ctx.get(&format!("/api/templates/{}", template_id)).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["template"]["max_run_seconds"], 3600);
+    assert_eq!(body["template"]["timeout_action"], "stop");
+}
+
+#[tokio::test]
+async fn test_create_template_default_auto_sleep_disabled() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "no-auto-sleep-config",
+        "image": "busybox:1"
+    })).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["template"]["max_run_seconds"].is_null());
+    assert_eq!(body["template"]["timeout_action"], "remove");
+}
+
+#[tokio::test]
+async fn test_create_template_rejects_max_run_seconds_below_minimum() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "too-short-config",
+        "image": "busybox:1",
+        "max_run_seconds": 59
+    })).await;
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_create_template_rejects_invalid_timeout_action() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "bad-action-config",
+        "image": "busybox:1",
+        "max_run_seconds": 3600,
+        "timeout_action": "explode"
+    })).await;
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_update_template_auto_sleep() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "auto-sleep-update",
+        "image": "busybox:1"
+    })).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let template_id = body["template"]["id"].as_str().unwrap();
+
+    let resp = ctx.put(&format!("/api/templates/{}", template_id), &serde_json::json!({
+        "name": "auto-sleep-update",
+        "image": "busybox:1",
+        "cores": 2,
+        "memory": 4294967296_i64,
+        "gpu_count": 0,
+        "run_config": {},
+        "exec_config": {},
+        "volume_mappings": {},
+        "max_run_seconds": 7200,
+        "timeout_action": "pause"
+    })).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["template"]["max_run_seconds"], 7200);
+    assert_eq!(body["template"]["timeout_action"], "pause");
+
+    let resp = ctx.put(&format!("/api/templates/{}", template_id), &serde_json::json!({
+        "name": "auto-sleep-update",
+        "image": "busybox:1",
+        "cores": 2,
+        "memory": 4294967296_i64,
+        "gpu_count": 0,
+        "run_config": {},
+        "exec_config": {},
+        "volume_mappings": {},
+        "max_run_seconds": null,
+        "timeout_action": "remove"
+    })).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["template"]["max_run_seconds"].is_null());
+    assert_eq!(body["template"]["timeout_action"], "remove");
+}
+
+#[tokio::test]
+async fn test_update_template_rejects_invalid_auto_sleep() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "auto-sleep-bad-update",
+        "image": "busybox:1"
+    })).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let template_id = body["template"]["id"].as_str().unwrap();
+
+    let resp = ctx.put(&format!("/api/templates/{}", template_id), &serde_json::json!({
+        "name": "auto-sleep-bad-update",
+        "image": "busybox:1",
+        "cores": 2,
+        "memory": 4294967296_i64,
+        "gpu_count": 0,
+        "run_config": {},
+        "exec_config": {},
+        "volume_mappings": {},
+        "max_run_seconds": 30
+    })).await;
+    assert_eq!(resp.status(), 400);
+}
+

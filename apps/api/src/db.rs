@@ -1,5 +1,5 @@
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Insert, Order, PaginatorTrait, QueryFilter, QueryOrder, Set};
-use sea_orm::sea_query::OnConflict;
+use sea_orm::sea_query::{Expr, OnConflict};
 use uuid::Uuid;
 
 fn generate_access_token() -> String {
@@ -75,6 +75,8 @@ pub mod workspace_template {
         pub remote_type: String,
         pub container_runtime: String,
         pub persistent_storage_path: Option<String>,
+        pub max_run_seconds: Option<i64>,
+        pub timeout_action: String,
         pub created_at: DateTimeUtc,
         pub updated_at: DateTimeUtc,
     }
@@ -125,6 +127,7 @@ pub mod workspace_instance {
         pub access_password: String,
         pub mount_persistent: bool,
         pub resolved_volume_host_path: Option<String>,
+        pub started_at: Option<DateTimeUtc>,
         pub created_at: DateTimeUtc,
         pub updated_at: DateTimeUtc,
     }
@@ -217,6 +220,8 @@ pub struct WorkspaceTemplate {
     pub exec_config: serde_json::Value,
     pub volume_mappings: serde_json::Value,
     pub persistent_storage_path: Option<String>,
+    pub max_run_seconds: Option<i64>,
+    pub timeout_action: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -239,6 +244,8 @@ impl From<workspace_template::Model> for WorkspaceTemplate {
             exec_config: m.exec_config.into(),
             volume_mappings: m.volume_mappings.into(),
             persistent_storage_path: m.persistent_storage_path,
+            max_run_seconds: m.max_run_seconds,
+            timeout_action: m.timeout_action,
             created_at: m.created_at,
             updated_at: m.updated_at,
         }
@@ -258,6 +265,7 @@ pub struct WorkspaceInstance {
     pub access_password: String,
     pub mount_persistent: bool,
     pub resolved_volume_host_path: Option<String>,
+    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -276,6 +284,7 @@ impl From<workspace_instance::Model> for WorkspaceInstance {
             access_password: m.access_password,
             mount_persistent: m.mount_persistent,
             resolved_volume_host_path: m.resolved_volume_host_path,
+            started_at: m.started_at,
             created_at: m.created_at,
             updated_at: m.updated_at,
         }
@@ -419,6 +428,8 @@ impl<'a> WorkspaceTemplateRepository<'a> {
         exec_config: &serde_json::Value,
         volume_mappings: &serde_json::Value,
         persistent_storage_path: Option<&str>,
+        max_run_seconds: Option<i64>,
+        timeout_action: &str,
     ) -> Result<WorkspaceTemplate, sea_orm::DbErr> {
         let id = Uuid::new_v4();
         let model = workspace_template::ActiveModel {
@@ -437,6 +448,8 @@ impl<'a> WorkspaceTemplateRepository<'a> {
             exec_config: Set(exec_config.clone().into()),
             volume_mappings: Set(volume_mappings.clone().into()),
             persistent_storage_path: Set(persistent_storage_path.map(|s| s.to_string())),
+            max_run_seconds: Set(max_run_seconds),
+            timeout_action: Set(timeout_action.to_string()),
             ..Default::default()
         };
         let inserted = model.insert(self.db).await?;
@@ -489,6 +502,8 @@ impl<'a> WorkspaceTemplateRepository<'a> {
         exec_config: &serde_json::Value,
         volume_mappings: &serde_json::Value,
         persistent_storage_path: Option<&str>,
+        max_run_seconds: Option<i64>,
+        timeout_action: &str,
     ) -> Result<bool, sea_orm::DbErr> {
         let result = workspace_template::Entity::update(workspace_template::ActiveModel {
             id: Set(id),
@@ -505,6 +520,8 @@ impl<'a> WorkspaceTemplateRepository<'a> {
             exec_config: Set(exec_config.clone().into()),
             volume_mappings: Set(volume_mappings.clone().into()),
             persistent_storage_path: Set(persistent_storage_path.map(|s| s.to_string())),
+            max_run_seconds: Set(max_run_seconds),
+            timeout_action: Set(timeout_action.to_string()),
             ..Default::default()
         })
         .filter(workspace_template::Column::Id.eq(id))
@@ -657,6 +674,38 @@ impl<'a> WorkspaceInstanceRepository<'a> {
             Err(sea_orm::DbErr::RecordNotFound(_)) | Err(sea_orm::DbErr::RecordNotUpdated) => Ok(false),
             Err(e) => Err(e),
         }
+    }
+
+    pub async fn update_started_at(
+        &self,
+        id: Uuid,
+        started_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<bool, sea_orm::DbErr> {
+        let result = workspace_instance::Entity::update(workspace_instance::ActiveModel {
+            id: Set(id),
+            started_at: Set(started_at),
+            ..Default::default()
+        })
+        .filter(workspace_instance::Column::Id.eq(id))
+        .exec(self.db)
+        .await;
+        match result {
+            Ok(_) => Ok(true),
+            Err(sea_orm::DbErr::RecordNotFound(_)) | Err(sea_orm::DbErr::RecordNotUpdated) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub async fn list_running_with_started_at(
+        &self,
+    ) -> Result<Vec<WorkspaceInstance>, sea_orm::DbErr> {
+        let models = workspace_instance::Entity::find()
+            .filter(workspace_instance::Column::Status.eq("running"))
+            .filter(Expr::col(workspace_instance::Column::StartedAt).is_not_null())
+            .order_by_asc(workspace_instance::Column::CreatedAt)
+            .all(self.db)
+            .await?;
+        Ok(models.into_iter().map(|m| m.into()).collect())
     }
 
     pub async fn delete(&self, id: Uuid) -> Result<bool, sea_orm::DbErr> {

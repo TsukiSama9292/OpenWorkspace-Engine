@@ -101,6 +101,17 @@ pnpm run dev
 
 This starts Traefik + PostgreSQL via Docker Compose, then runs the Rust API and Vite dev server concurrently.
 
+> **Dev runs on plain HTTP** — open `http://localhost`. No certificates needed.
+
+### HTTPS in Production
+
+This stack serves everything (frontend, `/api`, VNC WebSocket) from one Traefik origin over plain HTTP. For HTTPS, do **not** enable TLS inside Traefik — put a TLS-terminating proxy in front instead:
+
+- **Cloudflare** — enable **Proxied** on your DNS record; TLS is terminated at Cloudflare's edge and forwarded to `:80`. No cert management on your side.
+- **Let's Encrypt** — run a front reverse proxy (Traefik ACME, Caddy, or nginx) that obtains certs automatically and proxies to `:80`.
+
+Self-signed/local CA certs are not suitable: Chromium never bypasses certificate errors for `fetch()` subresource calls, so `/api` requests will fail with `ERR_CERT_AUTHORITY_INVALID`. See [docs/development.md](docs/development.md) for details.
+
 See [docs/development.md](docs/development.md) for environment variables, debugging, and production build.
 
 ---

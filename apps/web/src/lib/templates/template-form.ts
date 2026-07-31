@@ -1,7 +1,9 @@
 import { api } from '$lib/api/client';
 import { buildRunConfig, buildExecConfig, buildVolumeMappings, createEmptyEnvVar, createEmptyVolume } from '$lib/utils/format';
 import type { EnvVar, VolumeMapping } from '$lib/utils/format';
-import type { Template, RemoteType } from '$lib/types';
+import type { Template, RemoteType, TimeoutAction } from '$lib/types';
+
+export type { TimeoutAction } from '$lib/types';
 
 export const DEFAULT_IMAGES: Record<RemoteType, string> = {
   kasmvnc: 'tsukisama9292/ow-kasmvnc-ubuntu:jammy',
@@ -24,6 +26,8 @@ export interface TemplateFormState {
   shmSize: string;
   networkMode: string;
   containerRuntime: string;
+  maxRunSeconds: number | null;
+  timeoutAction: TimeoutAction;
   envVars: EnvVar[];
   execCommand: string;
   volumeMappings: VolumeMapping[];
@@ -48,6 +52,8 @@ export function createInitialFormState(): TemplateFormState {
     shmSize: '',
     networkMode: '',
     containerRuntime: '',
+    maxRunSeconds: null,
+    timeoutAction: 'remove',
     envVars: [createEmptyEnvVar()],
     execCommand: '',
     volumeMappings: [createEmptyVolume()],
@@ -78,6 +84,8 @@ function buildTemplateBody(state: TemplateFormState): Record<string, unknown> {
     exec_config: buildExecConfig(state.execCommand),
     volume_mappings: buildVolumeMappings(state.volumeMappings),
     persistent_storage_path: state.persistentStoragePath || null,
+    max_run_seconds: state.maxRunSeconds,
+    timeout_action: state.timeoutAction,
   };
 }
 
@@ -135,6 +143,8 @@ export function formStateFromTemplate(t: Template): TemplateFormState {
     shmSize: rc.shmSize,
     networkMode: rc.networkMode,
     containerRuntime: t.container_runtime,
+    maxRunSeconds: t.max_run_seconds ?? null,
+    timeoutAction: t.timeout_action ?? 'remove',
     envVars: rc.envVars,
     execCommand: parseExecConfig(t.exec_config as Record<string, unknown>),
     volumeMappings: parseVolumeMappings(t.volume_mappings as Record<string, string>),

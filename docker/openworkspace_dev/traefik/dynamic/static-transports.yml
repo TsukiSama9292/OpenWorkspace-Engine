@@ -1,6 +1,4 @@
 http:
   serversTransports:
-    api-insecure:
-      insecureSkipVerify: true
     kasm-insecure:
       insecureSkipVerify: true

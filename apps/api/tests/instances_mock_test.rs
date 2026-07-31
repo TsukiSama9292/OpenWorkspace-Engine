@@ -25,6 +25,13 @@ fn docker_err(msg: &str) -> bollard::errors::Error {
     std::io::Error::new(std::io::ErrorKind::Other, msg).into()
 }
 
+fn docker_404() -> bollard::errors::Error {
+    bollard::errors::Error::DockerResponseServerError {
+        status_code: 404,
+        message: "No such container".to_string(),
+    }
+}
+
 impl MockContext {
     async fn new<F: FnOnce(&mut MockDockerService)>(setup_mock: F) -> Self {
         ensure_pg().await;
@@ -67,8 +74,6 @@ impl MockContext {
             db_max_connections: 5,
             docker_network: "ow-test".to_string(),
             container_runtime: "docker".to_string(),
-            ssl_cert_path: "./certs/api/cert.pem".to_string(),
-            ssl_key_path: "./certs/api/key.pem".to_string(),
         };
 
         openworkspace_api::db::UserRepository::new(&db)
@@ -459,10 +464,16 @@ async fn test_pause_success() {
     let token = ctx.login_admin().await;
     let (_, instance_id) = create_config_and_instance(&ctx, &token, "pause-success").await;
     set_instance_status(&ctx.db, &instance_id, "running", Some("abc123def456")).await;
+    use openworkspace_api::db::WorkspaceInstanceRepository;
+    let id: uuid::Uuid = instance_id.parse().unwrap();
+    WorkspaceInstanceRepository::new(&ctx.db).update_started_at(id, Some(chrono::Utc::now())).await.unwrap();
 
     let resp = ctx.post_auth(&format!("/api/instances/{}/pause", instance_id), &serde_json::json!({}), &token).await;
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["status"], "paused");
+
+    let found = WorkspaceInstanceRepository::new(&ctx.db).find_by_id(id).await.unwrap().unwrap();
+    assert!(found.started_at.is_none());
 }
 
 // ── Test 14: unpause_instance — success (lines 564-570) ──
@@ -481,10 +492,42 @@ async fn test_unpause_success() {
     let token = ctx.login_admin().await;
     let (_, instance_id) = create_config_and_instance(&ctx, &token, "unpause-success").await;
     set_instance_status(&ctx.db, &instance_id, "paused", Some("abc123def456")).await;
+    use openworkspace_api::db::WorkspaceInstanceRepository;
+    let id: uuid::Uuid = instance_id.parse().unwrap();
+    WorkspaceInstanceRepository::new(&ctx.db).update_started_at(id, None).await.unwrap();
 
     let resp = ctx.post_auth(&format!("/api/instances/{}/unpause", instance_id), &serde_json::json!({}), &token).await;
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["status"], "running");
+
+    let found = WorkspaceInstanceRepository::new(&ctx.db).find_by_id(id).await.unwrap().unwrap();
+    assert!(found.started_at.is_some());
+}
+
+#[tokio::test]
+async fn test_stop_clears_started_at() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+        m.expect_stop_container_by_id()
+            .returning(|_| Box::pin(async { Ok(()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let (_, instance_id) = create_config_and_instance(&ctx, &token, "stop-clears-started-at").await;
+    set_instance_status(&ctx.db, &instance_id, "running", Some("abc123def456")).await;
+    use openworkspace_api::db::WorkspaceInstanceRepository;
+    let id: uuid::Uuid = instance_id.parse().unwrap();
+    WorkspaceInstanceRepository::new(&ctx.db).update_started_at(id, Some(chrono::Utc::now())).await.unwrap();
+
+    let resp = ctx.post_auth(&format!("/api/instances/{}/stop", instance_id), &serde_json::json!({}), &token).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "stopped");
+
+    let found = WorkspaceInstanceRepository::new(&ctx.db).find_by_id(id).await.unwrap().unwrap();
+    assert!(found.started_at.is_none());
 }
 
 // ── Test 15: start_instance — start with container_id, start succeeds (lines 306-316) ──
@@ -634,6 +677,7 @@ async fn test_get_instance() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["instance"]["id"], instance_id);
+    assert_eq!(body["instance"]["started_at"], serde_json::Value::Null, "started_at should be emitted in instance JSON (null for fresh instance)");
 }
 
 // ── Test 22: start_instance — already running conflict (lines 293-297) ──
@@ -757,6 +801,28 @@ async fn test_delete_with_container_success() {
 
     let token = ctx.login_admin().await;
     let (_, instance_id) = create_config_and_instance(&ctx, &token, "delete-ok").await;
+
+    let resp = ctx.delete_auth(&format!("/api/instances/{}", instance_id), &token).await;
+    assert_eq!(resp.status(), 204);
+}
+
+// ── Test 27b: delete_instance — container already gone (404 on stop and remove) ──
+
+#[tokio::test]
+async fn test_delete_with_container_already_removed() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+        m.expect_stop_container_by_id()
+            .returning(|_| Box::pin(async { Err(docker_404()) }));
+        m.expect_remove_container_by_id()
+            .returning(|_| Box::pin(async { Err(docker_404()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let (_, instance_id) = create_config_and_instance(&ctx, &token, "delete-404").await;
 
     let resp = ctx.delete_auth(&format!("/api/instances/{}", instance_id), &token).await;
     assert_eq!(resp.status(), 204);

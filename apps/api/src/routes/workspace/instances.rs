@@ -11,6 +11,7 @@ use super::super::AppState;
 use crate::auth::{AuthUser, Role};
 use crate::db::{UserRepository, WorkspaceTemplateRepository, WorkspaceInstance, WorkspaceInstanceRepository};
 use crate::docker::{ContainerConfig, RemoteType};
+use chrono::Utc;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -48,6 +49,7 @@ fn instance_to_json(inst: &WorkspaceInstance, template_name: Option<&str>, remot
         "access_password": inst.access_password,
         "mount_persistent": inst.mount_persistent,
         "resolved_volume_host_path": inst.resolved_volume_host_path,
+        "started_at": inst.started_at,
         "template_name": template_name,
         "remote_type": remote_type,
         "created_at": inst.created_at,
@@ -304,11 +306,8 @@ async fn delete_instance(
     state.vnc_cache.remove(&instance.access_token);
 
     if let Some(ref container_id) = instance.container_id {
-        let _ = state.docker.stop_container_by_id(container_id).await;
-        match state.docker.remove_container_by_id(container_id).await {
-            Ok(()) => tracing::info!("Container removed for instance '{}'", instance.name),
-            Err(e) => tracing::warn!("Failed to remove container for '{}': {}", instance.name, e),
-        }
+        crate::docker::stop_and_remove_container(&*state.docker, container_id, &instance.name)
+            .await;
     }
 
     match instance_repo.delete(id).await {
@@ -549,6 +548,7 @@ async fn stop_instance(
             Json(serde_json::json!({"error": "Failed to update status"})),
         )
     })?;
+    instance_repo.update_started_at(instance.id, None).await.ok();
 
     tracing::info!("Instance '{}' stopped", instance.name);
 
@@ -616,6 +616,7 @@ async fn pause_instance(
             Json(serde_json::json!({"error": "Failed to update status"})),
         )
     })?;
+    instance_repo.update_started_at(instance.id, None).await.ok();
 
     tracing::info!("Instance '{}' paused", instance.name);
 
@@ -681,6 +682,13 @@ async fn unpause_instance(
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": "Failed to update status"})),
+        )
+    })?;
+    instance_repo.update_started_at(instance.id, Some(Utc::now())).await.map_err(|e| {
+        tracing::error!("Failed to update started_at: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Failed to update started_at"})),
         )
     })?;
 

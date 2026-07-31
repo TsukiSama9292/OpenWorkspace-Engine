@@ -207,6 +207,32 @@ docker logs ow-traefik -f
 | Container not starting | Image pull failed | Check `docker logs ow-kasm-{n}` |
 | Vite HMR showing instead of VNC | Route priority conflict | The `vnc-page` route should have higher priority than `web-router` |
 
+## HTTP (Dev) vs HTTPS (Production)
+
+The dev stack runs on **plain HTTP** — open `http://localhost` (Traefik `web` entrypoint on `:80`). No certificates are needed or generated; browsers treat `http://localhost` as a secure context, so auth cookies, WebSocket, and the VNC viewer all work without TLS warnings.
+
+```bash
+# Dev URLs
+http://localhost/          # SvelteKit UI
+http://localhost/api/      # Rust API (same origin, no CORS)
+http://localhost:8080/     # Traefik dashboard
+```
+
+For **HTTPS**, do NOT enable TLS inside this project's Traefik. Instead, put a TLS-terminating proxy in front of it — the recommended options are:
+
+- **Cloudflare** — enable "Proxied" on your DNS record; Cloudflare terminates TLS at its edge and forwards to this stack's `:80`. Zero cert management on your side, plus DDoS/bot protection.
+- **Let's Encrypt** — run a TLS-terminating reverse proxy (Traefik ACME, Caddy, or nginx) that obtains certificates via HTTP-01/DNS-01 and proxies to this stack's `:80`.
+
+Both work because all routes (frontend, `/api`, and per-instance `/kasmvnc`, `/ttyd`, `/jupyter` WebSocket paths) are served from the same Traefik origin — the upstream stays plain HTTP and the TLS is fully handled in front.
+
+### If you really want TLS inside Traefik
+
+1. Re-add a `websecure` entrypoint on `:443` in `traefik/traefik.yml`.
+2. Re-add `websecure` + `tls: {}` to the routers (currently `web` only).
+3. Terminate TLS with `certificatesResolvers` (Let's Encrypt DNS-01 for a domain you control) or static certs.
+
+Prefer the front-proxy approach above — the browser only trusts public CAs, and self-signed/local CA certs make every `/api` fetch fail with `ERR_CERT_AUTHORITY_INVALID` (Chromium never bypasses certificate errors for subresource fetches).
+
 ## Production Build
 
 ```bash

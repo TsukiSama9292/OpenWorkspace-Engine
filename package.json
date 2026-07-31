@@ -4,7 +4,7 @@
   "scripts": {
     "init": "bash ./scripts/docker-network.sh",
     "clean": "chmod +x ./scripts/* && ./scripts/clean.sh",
-    "dev": "bash ./scripts/generate_ssl.sh && bash ./scripts/kill-dev.sh && pnpm run init && pnpm run docker:dev:up && concurrently --kill-others --names api,web --prefix-colors blue,green \"pnpm run dev:api\" \"pnpm run dev:web\"",
+    "dev": "bash ./scripts/kill-dev.sh && pnpm run init && pnpm run docker:dev:up && concurrently --kill-others --names api,web --prefix-colors blue,green \"pnpm run dev:api\" \"pnpm run dev:web\"",
     "dev:api": "pnpm --filter api dev",
     "dev:web": "pnpm --filter web dev",
     "dev:stop": "pnpm run docker:dev:down",

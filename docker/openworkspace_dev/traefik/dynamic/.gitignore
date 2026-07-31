@@ -3,3 +3,4 @@
 !static-transports.yml
 !.gitignore
 *.yml
+!certs.yml

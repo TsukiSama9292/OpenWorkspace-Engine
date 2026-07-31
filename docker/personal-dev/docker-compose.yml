@@ -16,3 +16,15 @@ services:
     volumes:
       - ../../:/home/user/workspace/OpenWorkspace-Engine/
       - ~/.local/share/opencode/:/home/user/.local/share/opencode/
+#     networks:
+#       - usb_macvlan
+
+# networks:
+#   usb_macvlan:
+#     driver: macvlan
+#     driver_opts:
+#       parent: enx1a4d793aeca5
+#     ipam:
+#       config:
+#         - subnet: 10.122.78.0/24
+#           gateway: 10.122.78.89

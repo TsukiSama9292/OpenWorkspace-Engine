@@ -1,8 +1,6 @@
 entryPoints:
   web:
     address: ":80"
-  websecure:
-    address: ":443"
 
 providers:
   file:
@@ -12,11 +10,6 @@ providers:
 api:
   dashboard: true
   insecure: true
-
-tls:
-  certificates:
-    - certFile: /etc/traefik/certs/cert.pem
-      keyFile: /etc/traefik/certs/key.pem
 
 log:
   level: INFO

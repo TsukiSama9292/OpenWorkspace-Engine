@@ -69,6 +69,8 @@ export function createDirtySnapshot(state: TemplateFormState): Record<string, un
     shmSize: state.shmSize ? Number(state.shmSize) : '',
     networkMode: state.networkMode,
     containerRuntime: state.containerRuntime,
+    maxRunSeconds: state.maxRunSeconds,
+    timeoutAction: state.timeoutAction,
     envVars: state.envVars.map(e => ({ key: e.key, value: e.value })),
     execCommand: state.execCommand,
     volumeMappings: state.volumeMappings.map(v => ({ host: v.host, container: v.container })),

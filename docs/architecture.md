@@ -242,8 +242,6 @@ The API injects a custom `kasmvnc.yaml` that:
 entryPoints:
   web:
     address: ":80"
-  websecure:
-    address: ":443"
 
 providers:
   file:
@@ -254,6 +252,8 @@ api:
   dashboard: true        # Debug UI on :8080
   insecure: true
 ```
+
+The dev stack is **HTTP-only** by design (browsers treat `http://localhost` as a secure context). For HTTPS in production, terminate TLS in front of this stack — e.g. **Cloudflare** (proxied DNS) or **Let's Encrypt** via a front reverse proxy (Traefik ACME / Caddy / nginx) forwarding to `:80`.
 
 ### Dynamic Config Files
 

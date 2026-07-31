@@ -11,8 +11,8 @@
   let pollTimer: ReturnType<typeof setInterval> | undefined;
 
   onMount(async () => {
-    const res = await api.get<Instance[]>('/instances');
-    const inst = res.data?.find(i => i.access_token === token);
+    const res = await api.get<{ instances: Instance[] }>('/instances');
+    const inst = res.data?.instances?.find(i => i.access_token === token);
     if (!inst) {
       status = 'ready';
       return;
@@ -25,8 +25,8 @@
     if (inst.status === 'starting') {
       status = 'starting';
       pollTimer = setInterval(async () => {
-        const r = await api.get<Instance[]>('/instances');
-        const updated = r.data?.find(i => i.access_token === token);
+        const r = await api.get<{ instances: Instance[] }>('/instances');
+        const updated = r.data?.instances?.find(i => i.access_token === token);
         if (!updated) return;
         if (updated.access_password) password = updated.access_password;
         if (updated.status === 'running') {

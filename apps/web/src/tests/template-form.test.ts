@@ -28,6 +28,8 @@ const template: Template = {
   remote_type: 'kasmvnc',
   persistent_storage_path: '/data/dev',
   container_runtime: 'docker',
+  max_run_seconds: 7200,
+  timeout_action: 'stop',
   run_config: {
     hostname: 'devbox',
     dns: ['8.8.8.8', '1.1.1.1'],
@@ -56,6 +58,8 @@ const populatedState: TemplateFormState = {
   shmSize: '268435456',
   networkMode: 'bridge',
   containerRuntime: 'docker',
+  maxRunSeconds: 3600,
+  timeoutAction: 'stop',
   envVars: [{ key: 'FOO', value: 'bar' }],
   execCommand: 'bash',
   volumeMappings: [{ host: '/h', container: '/c' }],
@@ -78,6 +82,8 @@ describe('template-form', () => {
       expect(state.ramGb).toBe(4);
       expect(state.gpuCount).toBe(0);
       expect(state.remoteType).toBe('kasmvnc');
+      expect(state.maxRunSeconds).toBeNull();
+      expect(state.timeoutAction).toBe('remove');
       expect(state.envVars).toEqual([{ key: '', value: '' }]);
       expect(state.volumeMappings).toEqual([{ host: '', container: '' }]);
     });
@@ -112,7 +118,9 @@ describe('template-form', () => {
           },
           exec_config: { go: { cmd: 'bash' } },
           volume_mappings: { '/h': '/c' },
-          persistent_storage_path: '/data'
+          persistent_storage_path: '/data',
+          max_run_seconds: 3600,
+          timeout_action: 'stop'
         })
       }));
     });
@@ -137,7 +145,9 @@ describe('template-form', () => {
           run_config: {},
           exec_config: {},
           volume_mappings: {},
-          persistent_storage_path: null
+          persistent_storage_path: null,
+          max_run_seconds: null,
+          timeout_action: 'remove'
         })
       }));
     });
@@ -182,6 +192,8 @@ describe('template-form', () => {
         shmSize: '268435456',
         networkMode: 'bridge',
         containerRuntime: 'docker',
+        maxRunSeconds: 7200,
+        timeoutAction: 'stop',
         envVars: [
           { key: 'FOO', value: 'bar' },
           { key: 'EMPTY', value: '' }
@@ -203,6 +215,12 @@ describe('template-form', () => {
       expect(state.envVars).toEqual([{ key: '', value: '' }]);
       expect(state.execCommand).toBe('');
       expect(state.volumeMappings).toEqual([{ host: '', container: '' }]);
+    });
+
+    it('maps auto-sleep fields, defaulting a missing duration to off', () => {
+      const state = formStateFromTemplate({ ...template, max_run_seconds: null, timeout_action: 'remove' });
+      expect(state.maxRunSeconds).toBeNull();
+      expect(state.timeoutAction).toBe('remove');
     });
   });
 
@@ -266,7 +284,9 @@ describe('template-form', () => {
           },
           exec_config: { go: { cmd: 'bash' } },
           volume_mappings: { '/h': '/c' },
-          persistent_storage_path: '/data'
+          persistent_storage_path: '/data',
+          max_run_seconds: 3600,
+          timeout_action: 'stop'
         })
       }));
     });

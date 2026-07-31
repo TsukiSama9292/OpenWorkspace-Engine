@@ -40,6 +40,8 @@ fn template_to_json(template: &WorkspaceTemplate, instance_count: i64) -> serde_
         "exec_config": template.exec_config,
         "volume_mappings": template.volume_mappings,
         "persistent_storage_path": template.persistent_storage_path,
+        "max_run_seconds": template.max_run_seconds,
+        "timeout_action": template.timeout_action,
         "instance_count": instance_count,
         "created_at": template.created_at,
         "updated_at": template.updated_at,
@@ -70,6 +72,10 @@ struct CreateTemplateRequest {
     persistent_storage_path: Option<String>,
     #[serde(default = "default_container_runtime")]
     container_runtime: String,
+    #[serde(default)]
+    max_run_seconds: Option<i64>,
+    #[serde(default = "default_timeout_action")]
+    timeout_action: String,
 }
 
 #[derive(Deserialize)]
@@ -89,6 +95,10 @@ struct UpdateTemplateRequest {
     persistent_storage_path: Option<String>,
     #[serde(default = "default_container_runtime")]
     container_runtime: String,
+    #[serde(default)]
+    max_run_seconds: Option<i64>,
+    #[serde(default = "default_timeout_action")]
+    timeout_action: String,
 }
 
 fn default_image() -> String {
@@ -105,6 +115,30 @@ fn default_remote_type() -> String {
 }
 fn default_container_runtime() -> String {
     "docker".to_string()
+}
+fn default_timeout_action() -> String {
+    "remove".to_string()
+}
+
+fn validate_auto_sleep(
+    max_run_seconds: Option<i64>,
+    timeout_action: &str,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if let Some(seconds) = max_run_seconds {
+        if seconds < 60 {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "max_run_seconds must be at least 60"})),
+            ));
+        }
+    }
+    if !matches!(timeout_action, "remove" | "stop" | "pause") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "timeout_action must be one of: remove, stop, pause"})),
+        ));
+    }
+    Ok(())
 }
 
 async fn list_templates(
@@ -160,6 +194,8 @@ async fn create_template(
         input.volume_mappings
     };
 
+    validate_auto_sleep(input.max_run_seconds, &input.timeout_action)?;
+
     let template = repo
         .create(
             &input.name,
@@ -176,6 +212,8 @@ async fn create_template(
             &exec_config,
             &volume_mappings,
             input.persistent_storage_path.as_deref(),
+            input.max_run_seconds,
+            &input.timeout_action,
         )
         .await
         .map_err(|e| {
@@ -232,6 +270,9 @@ async fn update_template(
         return Err(StatusCode::FORBIDDEN);
     }
 
+    validate_auto_sleep(input.max_run_seconds, &input.timeout_action)
+        .map_err(|(status, _)| status)?;
+
     let updated = repo
         .update(
             id,
@@ -248,6 +289,8 @@ async fn update_template(
             &input.exec_config,
             &input.volume_mappings,
             input.persistent_storage_path.as_deref(),
+            input.max_run_seconds,
+            &input.timeout_action,
         )
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

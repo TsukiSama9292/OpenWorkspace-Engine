@@ -90,8 +90,6 @@ impl TestContext {
             db_max_connections: 5,
             docker_network: "ow-test".to_string(),
             container_runtime: "docker".to_string(),
-            ssl_cert_path: "./certs/api/cert.pem".to_string(),
-            ssl_key_path: "./certs/api/key.pem".to_string(),
         };
 
         UserRepository::new(&db)

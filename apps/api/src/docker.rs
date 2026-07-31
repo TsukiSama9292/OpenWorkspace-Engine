@@ -1,6 +1,6 @@
 use bollard::container::{
-    Config, CreateContainerOptions, ListContainersOptions, StartContainerOptions,
-    StopContainerOptions, UploadToContainerOptions,
+    Config, CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
+    StartContainerOptions, StopContainerOptions, UploadToContainerOptions,
 };
 use bollard::image::CreateImageOptions;
 use bollard::models::ContainerSummary;
@@ -145,6 +145,40 @@ pub trait DockerService: Send + Sync {
         container_id: &str,
         network_name: &str,
     ) -> Result<String, String>;
+}
+
+pub fn is_container_not_found(err: &bollard::errors::Error) -> bool {
+    matches!(
+        err,
+        bollard::errors::Error::DockerResponseServerError {
+            status_code: 404,
+            ..
+        }
+    )
+}
+
+pub async fn stop_and_remove_container(
+    docker: &dyn DockerService,
+    container_id: &str,
+    instance_name: &str,
+) {
+    match docker.stop_container_by_id(container_id).await {
+        Ok(()) => {}
+        Err(ref e) if is_container_not_found(e) => {}
+        Err(e) => tracing::warn!(
+            "Failed to stop container for '{}': {} (proceeding with removal)",
+            instance_name,
+            e
+        ),
+    }
+
+    match docker.remove_container_by_id(container_id).await {
+        Ok(()) => tracing::info!("Container removed for instance '{}'", instance_name),
+        Err(ref e) if is_container_not_found(e) => {
+            tracing::info!("Container for '{}' already removed", instance_name);
+        }
+        Err(e) => tracing::warn!("Failed to remove container for '{}': {}", instance_name, e),
+    }
 }
 
 pub struct DockerClient {
@@ -349,6 +383,7 @@ impl DockerService for DockerClient {
 
         let host_config = bollard::models::HostConfig {
             privileged: Some(false),
+            cap_drop: Some(vec!["NET_RAW".to_string(), "NET_ADMIN".to_string()]),
             nano_cpus: if config.cores > 0 {
                 Some((config.cores as i64) * 1_000_000_000)
             } else {
@@ -524,7 +559,7 @@ impl DockerService for DockerClient {
         container_id: &str,
     ) -> Result<(), bollard::errors::Error> {
         self.docker
-            .stop_container(container_id, None::<StopContainerOptions>)
+            .stop_container(container_id, Some(StopContainerOptions { t: 10 }))
             .await
     }
 
@@ -532,7 +567,16 @@ impl DockerService for DockerClient {
         &self,
         container_id: &str,
     ) -> Result<(), bollard::errors::Error> {
-        self.docker.remove_container(container_id, None).await
+        self.docker
+            .remove_container(
+                container_id,
+                Some(RemoveContainerOptions {
+                    v: false,
+                    force: true,
+                    link: false,
+                }),
+            )
+            .await
     }
 
     async fn inspect_container_state(
@@ -582,6 +626,28 @@ impl DockerService for DockerClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_is_container_not_found_matches_404() {
+        let not_found = bollard::errors::Error::DockerResponseServerError {
+            status_code: 404,
+            message: "No such container".to_string(),
+        };
+        assert!(is_container_not_found(&not_found));
+    }
+
+    #[test]
+    fn test_is_container_not_found_rejects_other_errors() {
+        let conflict = bollard::errors::Error::DockerResponseServerError {
+            status_code: 409,
+            message: "container is running".to_string(),
+        };
+        assert!(!is_container_not_found(&conflict));
+
+        let io = std::io::Error::new(std::io::ErrorKind::Other, "network down");
+        let io_err: bollard::errors::Error = io.into();
+        assert!(!is_container_not_found(&io_err));
+    }
 
     #[test]
     fn test_runtime_to_host_config_docker_returns_none() {

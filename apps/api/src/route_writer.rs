@@ -30,6 +30,7 @@ fn write_vnc_route_to(dir: &PathBuf, token: &str, container_ip: &str, vnc_passwo
         - web
       middlewares:
         - "kasmvnc-{token}-auth"
+        - "kasmvnc-{token}-strip"
   services:
     kasmvnc-{token}:
       loadBalancer:
@@ -41,6 +42,10 @@ fn write_vnc_route_to(dir: &PathBuf, token: &str, container_ip: &str, vnc_passwo
       headers:
         customRequestHeaders:
           Authorization: "{auth_header}"
+    kasmvnc-{token}-strip:
+      stripPrefix:
+        prefixes:
+          - "/kasmvnc/{token}"
 "#,
         token = token,
         ip = container_ip,
@@ -171,6 +176,11 @@ mod tests {
         assert!(content.contains("PathPrefix(`/kasmvnc/tok1/websockify`)"));
         assert!(content.contains("https://10.0.0.1:6901"));
         assert!(content.contains("kasm-insecure"));
+        assert!(content.contains("web"));
+        assert!(content.contains("kasmvnc-tok1-strip"));
+        assert!(content.contains("stripPrefix"));
+        assert!(content.contains("/kasmvnc/tok1"));
+        assert!(!content.contains("tls"));
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -185,6 +195,8 @@ mod tests {
         assert!(content.contains("stripPrefix"));
         assert!(content.contains("/ttyd/tok1"));
         assert!(content.contains("Authorization"));
+        assert!(content.contains("web"));
+        assert!(!content.contains("tls"));
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -197,6 +209,8 @@ mod tests {
         assert!(content.contains("https://10.0.0.1:8888"));
         assert!(content.contains("kasm-insecure"));
         assert!(!content.contains("stripPrefix"), "jupyter route should not strip prefix");
+        assert!(content.contains("web"));
+        assert!(!content.contains("tls"));
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -301,6 +315,7 @@ mod tests {
         assert!(ws.contains(&format!("kasmvnc/{}", token)));
         assert!(ws.contains("kasm-insecure"));
         assert!(ws.contains(&format!("kasmvnc-{}-auth", token)));
+        assert!(ws.contains(&format!("kasmvnc-{}-strip", token)));
         assert!(ws.contains("https://172.17.0.5:6901"));
         assert!(ws.contains("entryPoints"));
         assert!(ws.contains("loadBalancer"));

@@ -8,6 +8,8 @@ export interface User {
 
 export type RemoteType = 'kasmvnc' | 'ttyd' | 'jupyter';
 
+export type TimeoutAction = 'remove' | 'stop' | 'pause';
+
 export interface Template {
   id: string;
   name: string;
@@ -20,6 +22,8 @@ export interface Template {
   remote_type: RemoteType;
   persistent_storage_path: string;
   container_runtime: string;
+  max_run_seconds: number | null;
+  timeout_action: TimeoutAction;
   run_config: Record<string, unknown>;
   exec_config: Record<string, unknown>;
   volume_mappings: Record<string, string>;
