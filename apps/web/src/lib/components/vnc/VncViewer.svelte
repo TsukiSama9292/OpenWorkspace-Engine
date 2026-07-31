@@ -32,9 +32,10 @@
     onError: (() => void) | null;
   } = { onConnect: null, onDisconnect: null, onCredentials: null, onClipboard: null, onError: null };
 
-  let prevPassword = password;
+  let prevPassword = $state<string | null>(null);
 
   onMount(() => {
+    prevPassword = password;
     if (!url || !container) return;
     connect();
   });

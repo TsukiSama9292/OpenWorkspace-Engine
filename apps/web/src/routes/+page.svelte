@@ -72,14 +72,16 @@
     }
   }
 
-  onMount(async () => {
+  onMount(() => {
     view = parseDashboardHash(window.location.hash);
     window.addEventListener('hashchange', onHashChange);
     window.addEventListener('beforeunload', onBeforeUnload);
-    const data = await loadDashboard();
-    configs = data.configs;
-    instances = data.instances;
-    loading = false;
+
+    loadDashboard().then((data) => {
+      configs = data.configs;
+      instances = data.instances;
+      loading = false;
+    });
 
     const poll = setInterval(async () => {
       const res = await api.get<{ instances: Instance[] }>('/instances');
@@ -219,17 +221,19 @@
     const { api } = await import('$lib/api/client');
 
     if (editingUser) {
+      const editingId = editingUser.id;
       const body: Record<string, string> = {};
       if (userForm.username) body.username = userForm.username;
       if (userForm.password) body.password = userForm.password;
       if (userForm.role) body.role = userForm.role;
-      const res = await api.put<{ user: { id: string; username: string; role: string; created_at: string } }>(`/users/${editingUser.id}`, body);
+      const res = await api.put<{ user: { id: string; username: string; role: string; created_at: string } }>(`/users/${editingId}`, body);
       if (res.error) {
         userFormError = res.error;
         return;
       }
-      if (res.data?.user) {
-        users = users.map(u => u.id === editingUser.id ? res.data.user : u);
+      const updated = res.data?.user;
+      if (updated) {
+        users = users.map(u => u.id === editingId ? updated : u);
       }
     } else {
       if (!userForm.username || !userForm.password) {

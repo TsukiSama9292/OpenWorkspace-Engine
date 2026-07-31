@@ -158,18 +158,6 @@
     color: #a1a1aa;
   }
 
-  .oss-badge {
-    font-size: 0.65rem;
-    font-family: monospace;
-    font-weight: 500;
-    padding: 2px 6px;
-    border-radius: 4px;
-    background: rgba(99, 102, 241, 0.15);
-    border: 1px solid rgba(99, 102, 241, 0.3);
-    color: #818cf8;
-    letter-spacing: 0.05em;
-  }
-
   .status-pulse {
     width: 6px;
     height: 6px;
@@ -186,6 +174,7 @@
     margin: 0 0 1rem 0;
     background: linear-gradient(to bottom right, #ffffff, #a1a1aa);
     -webkit-background-clip: text;
+    background-clip: text;
     -webkit-text-fill-color: transparent;
   }
 
