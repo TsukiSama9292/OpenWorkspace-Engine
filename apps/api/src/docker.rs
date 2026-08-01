@@ -1,13 +1,16 @@
 use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
-    StartContainerOptions, StopContainerOptions, UploadToContainerOptions,
+    StartContainerOptions, StopContainerOptions, UploadToContainerOptions, WaitContainerOptions,
 };
 use bollard::image::CreateImageOptions;
 use bollard::models::ContainerSummary;
+use bollard::volume::{CreateVolumeOptions, RemoveVolumeOptions};
 use bollard::Docker;
 use futures_util::stream::TryStreamExt;
+use std::collections::HashMap;
 use std::default::Default;
 use std::str::FromStr;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RemoteType {
@@ -72,7 +75,7 @@ pub struct ContainerConfig {
     pub run_config: serde_json::Value,
     pub exec_config: serde_json::Value,
     pub volume_mappings: serde_json::Value,
-    pub persistent_volume: Option<String>,
+    pub persistent_volume_name: Option<String>,
     pub command: Option<Vec<String>>,
     pub runtime: Option<String>,
     pub network_bandwidth_up_mbps: i32,
@@ -167,9 +170,55 @@ pub trait DockerService: Send + Sync {
         container_id: &str,
         port: u16,
     ) -> Result<bool, String>;
+
+    /// Create a clean, empty host data directory for an Instance and declare a
+    /// Local Bind-mounted Named Volume over it. The API runs in a container and
+    /// cannot touch host files, so a short-lived `alpine` helper container
+    /// `mkdir -p`s the host dir and `chown`s it to UID/GID 1000 (the uid of
+    /// both `kasm-user` and `ow_user`); the volume is then declared with
+    /// `driver=local`, `type=none` / `device=<host_path>` / `o=bind`. The first
+    /// container to mount the empty volume gets Docker's copy-up of the image's
+    /// built-in home files.
+    async fn prepare_persistent_volume(
+        &self,
+        host_path: &str,
+        volume_name: &str,
+    ) -> Result<(), String>;
+
+    /// Tear down an Instance's persistent data: empty the host data directory
+    /// (via an `alpine` helper container) and remove the Volume declaration, so
+    /// no orphaned data or stale volume blocks a later re-populate. Used by
+    /// `reset_persistent` (and wiping a broken `error` record); `delete` keeps
+    /// the data for reuse.
+    async fn remove_persistent_volume(
+        &self,
+        host_path: &str,
+        volume_name: &str,
+    ) -> Result<(), String>;
+
+    /// Recreate a lost Volume declaration for a persistent Instance on restart.
+    /// The host data dir and volume name come from the stored
+    /// `resolved_volume_host_path`, so only the local-bind Volume mapping is
+    /// (re)declared if Docker no longer knows it — the data itself is already on
+    /// the host and must not be re-populated.
+    async fn ensure_persistent_volume(
+        &self,
+        host_path: &str,
+        volume_name: &str,
+    ) -> Result<(), String>;
 }
 
 pub fn is_container_not_found(err: &bollard::errors::Error) -> bool {
+    matches!(
+        err,
+        bollard::errors::Error::DockerResponseServerError {
+            status_code: 404,
+            ..
+        }
+    )
+}
+
+pub fn is_volume_not_found(err: &bollard::errors::Error) -> bool {
     matches!(
         err,
         bollard::errors::Error::DockerResponseServerError {
@@ -375,9 +424,13 @@ impl DockerService for DockerClient {
             }
         }
 
-        // Persistent storage volume
-        if let Some(ref persistent_path) = config.persistent_volume {
-            binds.push(format!("{}:/home/kasm_user/persistent:rw", persistent_path));
+        // Persistent storage volume: mount the named local-bind volume at the
+        // per-remote-type home dir (whole home). Docker populates the volume
+        // from the image's built-in home files on first (empty) mount.
+        if let Some(ref volume_name) = config.persistent_volume_name {
+            if let Some(target) = crate::persistent_volume::persistent_container_target(config.remote_type.as_str()) {
+                binds.push(format!("{}:{}:rw", volume_name, target));
+            }
         }
 
         // ── DNS ──
@@ -763,6 +816,204 @@ impl DockerService for DockerClient {
         )?;
 
         Ok(ss_output_has_connection(&output, port))
+    }
+
+    /// Create the (empty, 1000:1000-owned) host data directory via an alpine
+    /// helper container, then declare the Local Bind-mounted Named Volume over
+    /// it. If the Volume declaration already exists — e.g. a previous Instance
+    /// was deleted but its data preserved for reuse — the existing data is left
+    /// untouched and the existing Volume is reused as-is.
+    async fn prepare_persistent_volume(
+        &self,
+        host_path: &str,
+        volume_name: &str,
+    ) -> Result<(), String> {
+        match self.docker.inspect_volume(volume_name).await {
+            Ok(_) => return Ok(()),
+            Err(ref e) if is_volume_not_found(e) => {}
+            Err(e) => return Err(format!("Failed to inspect volume '{}': {}", volume_name, e)),
+        }
+
+        self.run_helper_container(
+            "prepare",
+            host_path,
+            vec!["sh", "-c", "mkdir -p /storage && chown 1000:1000 /storage"],
+        )
+        .await?;
+
+        self.create_local_bind_volume(host_path, volume_name).await
+    }
+
+    /// Empty the host data directory via an alpine helper container, then
+    /// remove the Volume declaration (tolerating an already-removed volume).
+    async fn remove_persistent_volume(
+        &self,
+        host_path: &str,
+        volume_name: &str,
+    ) -> Result<(), String> {
+        self.run_helper_container(
+            "remove",
+            host_path,
+            vec!["sh", "-c", "find /storage -mindepth 1 -delete"],
+        )
+        .await?;
+
+        match self
+            .docker
+            .remove_volume(volume_name, None::<RemoveVolumeOptions>)
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(ref e) if is_volume_not_found(e) => Ok(()),
+            Err(e) => Err(format!("Failed to remove volume '{}': {}", volume_name, e)),
+        }
+    }
+
+    /// Re-declare the local-bind Volume if Docker no longer knows it. The host
+    /// data dir already holds the Instance's data, so a missing declaration is
+    /// simply recreated — no helper run, no re-population.
+    async fn ensure_persistent_volume(
+        &self,
+        host_path: &str,
+        volume_name: &str,
+    ) -> Result<(), String> {
+        match self.docker.inspect_volume(volume_name).await {
+            Ok(_) => Ok(()),
+            Err(ref e) if is_volume_not_found(e) => {
+                self.create_local_bind_volume(host_path, volume_name).await
+            }
+            Err(e) => Err(format!(
+                "Failed to inspect volume '{}': {}",
+                volume_name, e
+            )),
+        }
+    }
+}
+
+impl DockerClient {
+    /// Declare a Local Bind-mounted Named Volume over `host_path`. The same
+    /// declaration is shared by `prepare_persistent_volume` (fresh creation)
+    /// and `ensure_persistent_volume` (re-creation after loss).
+    async fn create_local_bind_volume(
+        &self,
+        host_path: &str,
+        volume_name: &str,
+    ) -> Result<(), String> {
+        let mut driver_opts = HashMap::new();
+        driver_opts.insert("type".to_string(), "none".to_string());
+        driver_opts.insert("device".to_string(), host_path.to_string());
+        driver_opts.insert("o".to_string(), "bind".to_string());
+        let opts = CreateVolumeOptions {
+            name: volume_name.to_string(),
+            driver: "local".to_string(),
+            driver_opts,
+            ..Default::default()
+        };
+        self.docker
+            .create_volume(opts)
+            .await
+            .map_err(|e| format!("Failed to create volume '{}': {}", volume_name, e))?;
+        Ok(())
+    }
+
+    /// Run a short-lived `alpine` helper container that bind-mounts `host_path`
+    /// at `/storage`, executes `cmd` as root, waits for it to finish, and
+    /// removes the container. Any non-zero exit fails the operation. The API
+    /// runs in a container without host filesystem access; every host-side
+    /// filesystem mutation for persistent storage goes through here.
+    async fn run_helper_container(
+        &self,
+        purpose: &str,
+        host_path: &str,
+        cmd: Vec<&str>,
+    ) -> Result<(), String> {
+        if self.docker.inspect_image("alpine:latest").await.is_err() {
+            tracing::info!("Pulling 'alpine' for persistent-volume helper...");
+            self.docker
+                .create_image(
+                    Some(CreateImageOptions {
+                        from_image: "alpine",
+                        tag: "latest",
+                        ..Default::default()
+                    }),
+                    None,
+                    None,
+                )
+                .try_collect::<Vec<_>>()
+                .await
+                .map_err(|e| format!("Failed to pull alpine helper image: {}", e))?;
+        }
+
+        let name = format!(
+            "ow-vol-{}-{}-{}",
+            purpose,
+            std::process::id(),
+            Uuid::new_v4().simple()
+        );
+
+        let host_config = bollard::models::HostConfig {
+            binds: Some(vec![format!("{}:/storage", host_path)]),
+            ..Default::default()
+        };
+        let config = Config {
+            image: Some("alpine"),
+            cmd: Some(cmd),
+            host_config: Some(host_config),
+            ..Default::default()
+        };
+
+        let container = self
+            .docker
+            .create_container(
+                Some(CreateContainerOptions {
+                    name: name.clone(),
+                    ..Default::default()
+                }),
+                config,
+            )
+            .await
+            .map_err(|e| format!("Failed to create helper container '{}': {}", name, e))?;
+
+        self.docker
+            .start_container(&container.id, None::<StartContainerOptions<String>>)
+            .await
+            .map_err(|e| format!("Failed to start helper container '{}': {}", name, e))?;
+
+        let wait_result = self
+            .docker
+            .wait_container(&container.id, None::<WaitContainerOptions<String>>)
+            .try_collect::<Vec<_>>()
+            .await;
+
+        let _ = self
+            .docker
+            .remove_container(
+                &container.id,
+                Some(RemoveContainerOptions {
+                    v: false,
+                    force: true,
+                    link: false,
+                }),
+            )
+            .await;
+
+        match wait_result {
+            Ok(statuses) => {
+                let exit_code = statuses.first().map(|r| r.status_code).unwrap_or(-1);
+                if exit_code != 0 {
+                    Err(format!(
+                        "Helper container '{}' failed with exit code {}",
+                        name, exit_code
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+            Err(e) => Err(format!(
+                "Failed waiting for helper container '{}': {}",
+                name, e
+            )),
+        }
     }
 }
 

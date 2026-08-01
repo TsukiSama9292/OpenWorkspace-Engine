@@ -94,7 +94,7 @@ The actual test runner is `apps/api/scripts/run_tests.sh`, which starts a Postgr
 
 ```bash
 cd apps/api && bash scripts/check.sh
-cd apps/api && bash scripts/run_tests.sh
+cd apps/api && bash scripts/run_tests.sh 2>&1 | grep -iE "(fail|warn|error|failed|warning|summary)"
 ```
 
 ### How to fix warnings

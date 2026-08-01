@@ -85,9 +85,9 @@ export function iframeSrc(
 }
 
 export const TIMEOUT_ACTION_LABELS: Record<TimeoutAction, string> = {
-  pause: '暫停',
-  stop: '停止',
-  remove: '移除'
+  pause: 'Pause',
+  stop: 'Stop',
+  remove: 'Remove'
 };
 
 export function keepTimePolicyLine(
@@ -96,11 +96,13 @@ export function keepTimePolicyLine(
 ): string | null {
   if (!keepTimeSeconds || keepTimeSeconds <= 0) return null;
   if (!keepTimeAction) return null;
+  const unit = (n: number, label: string): string =>
+    `${n} ${label}${n === 1 ? '' : 's'}`;
   const duration = keepTimeSeconds % 3600 === 0
-    ? `${keepTimeSeconds / 3600} 小時`
+    ? unit(keepTimeSeconds / 3600, 'hour')
     : keepTimeSeconds % 60 === 0
-      ? `${keepTimeSeconds / 60} 分鐘`
-      : `${keepTimeSeconds} 秒`;
+      ? unit(keepTimeSeconds / 60, 'minute')
+      : unit(keepTimeSeconds, 'second');
   const action = TIMEOUT_ACTION_LABELS[keepTimeAction] ?? TIMEOUT_ACTION_LABELS.pause;
-  return `閒置 ${duration}後${action}`;
+  return `Idle ${duration} then ${action}`;
 }

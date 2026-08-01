@@ -1,6 +1,6 @@
 # [OpenWorkspace Engine](https://github.com/TsukiSama9292/OpenWorkspace-Engine)
 
-**Multi-tenant container orchestration platform** — provisions isolated containers (desktop, Jupyter Lab, terminal) on demand, exposed through Traefik reverse proxy with JWT authentication.
+**Multi-tenant container orchestration platform** — provisions isolated containers (desktop, Jupyter Lab, terminal) on demand, exposed through Traefik reverse proxy with JWT authentication, auto-sleep, idle-based keep-time reclamation, per-template network bandwidth caps, and persistent user data that survives restarts.
 
 > Lightweight container orchestration with browser-based access — turn any server into a shared dev environment.
 
@@ -43,7 +43,7 @@ See [docs/terminology.md](docs/terminology.md) for the full mapping from old nam
 ```
 Browser ──> Traefik :80 ──> Rust API :3000 (Axum)
                         ──> SvelteKit SPA (nginx :80)
-                        ──> KasmVNC containers :6901 (WebSocket)
+                        ──> KasmVNC / ttyd / Jupyter Lab containers
 ```
 
 **Key mechanism:** The API generates per-instance Traefik route YAML files into a watched directory. Traefik hot-reloads them via inotify — new VNC instances are immediately accessible without proxy restart.
@@ -59,8 +59,9 @@ See [docs/architecture.md](docs/architecture.md) for routing flows, container li
 | **Control Plane API** | Rust + Axum 0.8 | Zero-cost abstraction, <20MB RAM, high-concurrency non-blocking I/O |
 | **Frontend** | SvelteKit 2 + Svelte 5 (static SPA) | Runes reactivity, zero SSR CPU cost on host |
 | **Remote Desktop** | KasmVNC | Browser-native HTML5 Canvas, WebSocket transport |
-| **Reverse Proxy** | Traefik v3 | Docker Provider + file-based hot-reload routing |
+| **Reverse Proxy** | Traefik v3 | File Provider + inotify hot-reload routing (no Docker socket) |
 | **Container Orchestration** | bollard 0.18 (Rust Docker API) | Async container lifecycle control |
+| **Network QoS** | Linux `tc`/HTB | Kernel-level per-instance upload/download bandwidth caps |
 | **Database** | PostgreSQL 18 + DashMap cache | Persistent storage + O(1) in-memory token verification |
 
 ---
@@ -71,19 +72,25 @@ See [docs/architecture.md](docs/architecture.md) for routing flows, container li
 OpenWorkspace-Engine/
 ├── apps/
 │   ├── api/                    # Rust/Axum REST API
-│   │   ├── migrations/         # SQLx auto-migrations
+│   │   ├── migration/          # SQLx auto-migrations
 │   │   └── src/
 │   │       ├── main.rs         # Server entrypoint
-│   │       ├── routes.rs       # HTTP handlers
-│   │       ├── auth.rs         # JWT + cookie + RBAC
-│   │       ├── db.rs           # PostgreSQL repositories
+│   │       ├── routes/         # HTTP handlers (auth, templates, instances)
+│   │       ├── health_worker.rs# Background worker (auto-sleep, keep-time)
+│   │       ├── network_qos.rs  # tc/HTB bandwidth shaping logic
 │   │       ├── docker.rs       # bollard Docker client
-│   │       └── vnc_trafik.rs   # Traefik YAML generation
+│   │       ├── db.rs           # PostgreSQL repositories
+│   │       └── route_writer.rs # Traefik YAML generation
 │   └── web/                    # SvelteKit frontend
 │       └── src/
 │           ├── lib/            # API client, stores, types, VNC components
 │           └── routes/         # Pages (dashboard, login, instances, VNC, users)
 ├── docker/
+│   ├── template_images/        # Dockerfiles for instance templates
+│   │   ├── Dockerfile.jupyterlab_ubuntu
+│   │   ├── Dockerfile.ttyd_ubuntu
+│   │   └── Dockerfile.kasmvnc_ubuntu
+│   ├── openworkspace/          # Production stack (Traefik + PostgreSQL + web + api)
 │   └── openworkspace_dev/      # Dev infrastructure (Traefik + PostgreSQL)
 ├── scripts/                    # Kill-dev, network creation, cleanup
 └── docs/                       # Documentation
@@ -93,15 +100,49 @@ OpenWorkspace-Engine/
 
 ## Quick Start
 
+### Development
+
 ```bash
 # Prerequisites: Node.js ≥18, pnpm 9, Rust (stable), Docker + Compose v2
 
 pnpm run dev
 ```
 
-This starts Traefik + PostgreSQL via Docker Compose, then runs the Rust API and Vite dev server concurrently.
+This runs `kill-dev.sh` → creates the `ow-network` Docker network → starts Traefik + PostgreSQL via Docker Compose → runs the Rust API and Vite dev server concurrently.
 
 > **Dev runs on plain HTTP** — open `http://localhost`. No certificates needed.
+
+### Production
+
+1. **Build (or pull) the three template images.** From the repo root:
+
+   ```bash
+   # Option A — build locally (recommended; keep images in sync with this repo)
+   cd docker/template_images
+   docker build -t tsukisama9292/ow-jupyter-ubuntu:jammy -f Dockerfile.jupyterlab_ubuntu .
+   docker build -t tsukisama9292/ow-ttyd-ubuntu:jammy -f Dockerfile.ttyd_ubuntu .
+   docker build -t tsukisama9292/ow-kasmvnc-ubuntu:jammy -f Dockerfile.kasmvnc_ubuntu --build-arg BASE_TAG=1.19.0-rolling-daily .
+   ```
+
+   ```bash
+   # Option B — pull prebuilt images from Docker Hub
+   docker pull tsukisama9292/ow-jupyter-ubuntu:jammy
+   docker pull tsukisama9292/ow-ttyd-ubuntu:jammy
+   docker pull tsukisama9292/ow-kasmvnc-ubuntu:jammy
+   ```
+
+2. **Start the production stack** (Traefik + PostgreSQL + nginx web + Rust API):
+
+   ```bash
+   cd /path/to/OpenWorkspace-Engine
+   docker compose -f docker/openworkspace/docker-compose.yml up -d
+   ```
+
+   The compose file builds `ow-web:latest` and `ow-api:latest` from source, so no separate image build is needed for the platform itself. Instance containers are then launched on demand from the template images above.
+
+   Set secrets via environment variables or a `.env` file next to the compose file: `JWT_SECRET` (change from default), `ADMIN_PASSWORD`, `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`.
+
+> **Note on tc/HTB bandwidth shaping:** applying per-instance bandwidth caps requires `nsenter`/`tc` capabilities on the host. Run `pnpm run network:allow` once to grant them, or disable bandwidth limits on templates to skip `tc` entirely. See [docs/development.md](docs/development.md).
 
 ### HTTPS in Production
 
@@ -124,7 +165,7 @@ See [docs/development.md](docs/development.md) for environment variables, debugg
 - **Terminal (ttyd)** — Lightweight browser-based terminal for quick CLI access
 
 ### Security & Isolation
-- **Cross-tenant isolation** — All instance traffic over SSL/TLS; each instance protected by a per-instance access token (94<sup>127</sup> combinations). Prevents tenants from directly accessing another tenant's instance via the container network — every request must go through the proxy with a valid token
+- **Cross-tenant isolation** — Every instance protected by a per-instance access token (94<sup>127</sup> combinations). Prevents tenants from directly accessing another tenant's instance via the container network — every request must go through the proxy with a valid token
 - **gVisor sandboxing** — Template-level `Container Runtime` option to select `runsc(gVisor)`, intercepting high-risk syscalls for host protection
 - **JWT Cookie Auth** — `ow_token` cookie + Traefik ForwardAuth for WebSocket upgrade validation
 - **Headless Instance Auth** — Proxy injects credentials server-side for KasmVNC, Jupyter Lab, and ttyd; browser never sees secrets, users never manually auth to instances
@@ -133,6 +174,21 @@ See [docs/development.md](docs/development.md) for environment variables, debugg
 ### User Package Management
 - **Nix + User Namespaces** — Fully isolated package management without affecting the host
 - **gVisor + sudo** — Alternative mode: run under `runsc(gVisor)` with sudo capability for traditional workflows
+
+### Resource Governance
+- **Auto-Sleep (run-time limit)** — Per-template `max_run_seconds`; when an instance has been `running` past the limit, a background worker executes the configured `timeout_action` (`remove` / `stop` / `pause`). A browser countdown overlay warns the user and auto-redirects when the deadline hits.
+- **Keep Time (idle reclamation)** — Per-template `keep_time_seconds` + `keep_time_action`. An instance stays alive only while its browser tab is **open, visible and focused** — the frontend sends a heartbeat every 10s while focused, and the worker reclaims (`pause` / `stop` / `remove`) the instance after it has been idle (tab hidden, unfocused, or never opened) for longer than `keep_time_seconds`.
+- **Network Bandwidth Limiting** — Per-template `network_bandwidth_up_mbps` / `network_bandwidth_down_mbps` (0 = unlimited), enforced in the kernel with `tc`/HTB on the instance's veth pair. A single tenant can no longer saturate the host's link.
+
+### Persistent User Data
+- **Whole-home persistence** — A user's entire home directory survives stop, restart, and delete. Backed by a Docker **Local Bind-mounted Named Volume** at a fixed host path; the first (empty) mount auto-populates the image's built-in home files (`.bashrc`, X11/VNC/Jupyter configs), so environments start intact instead of masking to a blank screen.
+- **Server-resolved paths** — The host path is resolved and validated **by the API** as `{root}/{template_name}/{user_id}` (absolute, no `..`, no injection). Clients never supply a path, so no tenant can mount an arbitrary host directory.
+- **Three launch modes** — Per launch: **Use** persistent storage (reuse existing data), **No** persistent storage (ephemeral, unlimited), or **Reset** persistent storage (wipe the data and start fresh, with a frontend confirm warning).
+- **One persistent instance per (Template, owner)** — A second persistent launch for the same template+user is rejected with 409 until the old one is removed.
+- **Delete keeps data** — Removing an instance only removes its container, route, and DB record; the data stays on disk so a later `use_persistent` launch picks up exactly where you left off. Only an explicit reset wipes it.
+- **Restart resilience** — Restarting re-declares a lost volume declaration and backfills the resolved path for legacy instances, never overwriting user data.
+
+See [docs/persistent-storage.md](docs/persistent-storage.md) for the full design and lifecycle.
 
 ### Instance & Account Management
 - **Lifecycle control** — Admins start, pause, and remove instances from the dashboard
@@ -146,10 +202,13 @@ See [docs/development.md](docs/development.md) for environment variables, debugg
 - **Dynamic VNC Routing** — Traefik file provider with directory watching; new instances hot-reload in seconds
 - **DashMap Cache** — O(1) VNC token lookup skips DB round-trip on every WebSocket handshake
 - **cgroups Resource Limits** — CPU cores + memory hard limits injected at container creation
+- **tc/HTB Bandwidth Shaping** — upload shaped on the container's egress `eth0`, download on the host-side veth; re-applied on every container start (Docker recreates the veth pair). Fail-open: shaping errors log and never kill a session
+- **Background Lifecycle Worker** — 3-second scan enforcing auto-sleep deadlines and keep-time idle reclamation; heartbeat endpoint resets the idle clock while a tab is focused
 
 | Documentation | Contents |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | System architecture, routing, lifecycle, DB schema |
+| [docs/persistent-storage.md](docs/persistent-storage.md) | Persistent user data: paths, volume lifecycle, launch modes |
 | [docs/frontend.md](docs/frontend.md) | SvelteKit structure, components, CSS strategy |
 | [docs/rbac.md](docs/rbac.md) | Role permissions matrix, implementation |
 | [docs/vnc-auth.md](docs/vnc-auth.md) | VNC password flow, Traefik header injection, security model |
@@ -165,7 +224,7 @@ See [docs/development.md](docs/development.md) for environment variables, debugg
 | Phase | Focus | Status |
 |---|---|---|
 | **1** | Core infrastructure — dynamic routing, auth, container lifecycle, DB | ✅ Complete |
-| **2** | Jupyter Lab, ttyd terminal, auto-sleep | 🔜 Partially complete |
+| **2** | Jupyter Lab, ttyd terminal, auto-sleep, keep-time idle reclamation, network bandwidth limits, persistent user data | ✅ Complete |
 | **3** | Cluster monitor, audit logging, Tailscale mesh, multi-host orchestration | 📋 Planned |
 
 ---

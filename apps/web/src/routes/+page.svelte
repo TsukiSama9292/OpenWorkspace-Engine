@@ -23,6 +23,9 @@
 
   let launchModal = $state<{ open: boolean; config: Template | null }>({ open: false, config: null });
   let launchTarget = $state<'current' | 'tab'>('current');
+  let launchPersistence = $state<'use_persistent' | 'no_persistent' | 'reset_persistent'>('use_persistent');
+  let prevLaunchPersistence = $state<'use_persistent' | 'no_persistent' | 'reset_persistent'>('use_persistent');
+  let showPersistenceSelect = $derived(!!launchModal.config?.persistent_storage_path);
 
   let filterUser = $state('');
   let filterStatus = $state('');
@@ -113,11 +116,31 @@
   function openLaunch(config: Template) {
     launchModal = { open: true, config };
     launchTarget = 'current';
+    launchPersistence = 'use_persistent';
+    prevLaunchPersistence = 'use_persistent';
+  }
+
+  function onLaunchPersistenceChange(event: Event) {
+    const next = (event.currentTarget as HTMLSelectElement).value as
+      | 'use_persistent'
+      | 'no_persistent'
+      | 'reset_persistent';
+    if (next === 'reset_persistent') {
+      const proceed = window.confirm(
+        'Reset persistent storage will erase the existing data and start a fresh environment. Continue?'
+      );
+      if (!proceed) {
+        launchPersistence = prevLaunchPersistence;
+        (event.currentTarget as HTMLSelectElement).value = prevLaunchPersistence;
+        return;
+      }
+    }
+    prevLaunchPersistence = next;
   }
 
   async function confirmLaunch() {
     if (!launchModal.config) return;
-    const result = await launchInstance(launchModal.config.id);
+    const result = await launchInstance(launchModal.config.id, launchPersistence);
     if (result.error) {
       alert(result.error);
       return;
@@ -143,7 +166,7 @@
     if (inst.status !== 'running') return null;
     const remaining = remainingMs(inst.auto_sleeps_at, Date.now());
     if (remaining === null || remaining <= 0) return null;
-    return `剩 ${formatRemaining(remaining)}`;
+    return `Left ${formatRemaining(remaining)}`;
   }
 
   async function onDeleteConfig(config: Template) {
@@ -387,6 +410,21 @@
           <option value="tab">New Tab</option>
         </select>
       </div>
+      {#if showPersistenceSelect}
+        <div class="modal-field">
+          <label for="launch-persistence" class="modal-label">Data Persistence</label>
+          <select
+            id="launch-persistence"
+            class="modal-select"
+            bind:value={launchPersistence}
+            onchange={onLaunchPersistenceChange}
+          >
+            <option value="use_persistent">Use persistent storage</option>
+            <option value="no_persistent">No persistent storage</option>
+            <option value="reset_persistent">Reset persistent storage</option>
+          </select>
+        </div>
+      {/if}
       <div class="modal-actions">
         <button class="modal-cancel" onclick={() => launchModal = { open: false, config: null }}>Cancel</button>
         <button class="modal-confirm" onclick={confirmLaunch}>Launch</button>
@@ -446,6 +484,9 @@
                     <div class="ws-title-row">
                       <span class="status-dot {statusColors[inst.status] || 'dot-stopped'}"></span>
                       <h3 class="ws-name">{inst.name}</h3>
+                      {#if inst.mount_persistent}
+                        <span class="persist-badge">persist</span>
+                      {/if}
                     </div>
                     <span class="ws-template">{inst.template_name || 'Unknown template'}</span>
                     {#if sleepLabel(inst)}
@@ -1082,6 +1123,18 @@
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+
+  .persist-badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.68rem;
+    font-weight: 600;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    color: #a5b4fc;
+    background: rgba(99, 102, 241, 0.12);
+    border: 1px solid rgba(129, 140, 248, 0.25);
   }
 
   .status-dot {

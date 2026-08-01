@@ -5,12 +5,12 @@ import KeepTimeLine from '$lib/components/instances/KeepTimeLine.svelte';
 describe('KeepTimeLine', () => {
   it('shows the policy line when keep-time is configured', () => {
     render(KeepTimeLine, { props: { keepTimeSeconds: 900, keepTimeAction: 'pause' } });
-    expect(screen.getByText('閒置 15 分鐘後暫停')).toBeTruthy();
+    expect(screen.getByText('Idle 15 minutes then Pause')).toBeTruthy();
   });
 
   it('shows hours for a long keep-time', () => {
     render(KeepTimeLine, { props: { keepTimeSeconds: 7200, keepTimeAction: 'stop' } });
-    expect(screen.getByText('閒置 2 小時後停止')).toBeTruthy();
+    expect(screen.getByText('Idle 2 hours then Stop')).toBeTruthy();
   });
 
   it('renders nothing when keep-time is disabled', () => {

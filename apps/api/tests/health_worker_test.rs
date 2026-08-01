@@ -756,9 +756,7 @@ async fn test_keep_time_pause_fires() {
     let mut mock_docker = MockDockerService::new();
     mock_docker.expect_has_session_connection()
         .returning(|_, _| Box::pin(async { Ok(false) }));
-    mock_docker.expect_stop_container_by_id()
-        .returning(|_| Box::pin(async { Ok(()) }));
-    mock_docker.expect_remove_container_by_id()
+    mock_docker.expect_pause_container_by_id()
         .returning(|_| Box::pin(async { Ok(()) }));
 
     let vnc_cache = VncCache::new();
@@ -822,6 +820,8 @@ async fn test_keep_time_remove_fires() {
     let instance_id = ctx.create_running_instance_with_last_seen_at(template_id, Some(now - chrono::Duration::seconds(7200))).await;
 
     let mut mock_docker = MockDockerService::new();
+    mock_docker.expect_has_session_connection()
+        .returning(|_, _| Box::pin(async { Ok(false) }));
     mock_docker.expect_stop_container_by_id()
         .returning(|_| Box::pin(async { Ok(()) }));
     mock_docker.expect_remove_container_by_id()

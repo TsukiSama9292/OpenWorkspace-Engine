@@ -23,7 +23,7 @@ networks:
   usb_macvlan:
     driver: macvlan
     driver_opts:
-      parent: enx024a8ad86441
+      parent: enx76aa6565f345
     ipam:
       config:
         - subnet: 10.122.78.0/24

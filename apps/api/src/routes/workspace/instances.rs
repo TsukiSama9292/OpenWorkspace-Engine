@@ -9,8 +9,9 @@ use uuid::Uuid;
 
 use super::super::AppState;
 use crate::auth::{AuthUser, Role};
-use crate::db::{UserRepository, WorkspaceTemplateRepository, WorkspaceInstance, WorkspaceInstanceRepository};
+use crate::db::{UserRepository, WorkspaceTemplate, WorkspaceTemplateRepository, WorkspaceInstance, WorkspaceInstanceRepository};
 use crate::docker::{ContainerConfig, RemoteType};
+use crate::persistent_volume::{persistent_volume_name, resolve_persistent_host_path, resolve_persistent_host_path_opt};
 use chrono::{DateTime, Utc};
 
 pub fn routes() -> Router<AppState> {
@@ -115,11 +116,23 @@ async fn can_manage_instance(
     Ok(auth.role.can_manage_instance(&owner_role))
 }
 
+/// How a launch request wants the Instance's persistent storage handled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum PersistenceMode {
+    /// Mount a persistent volume and reuse its data across launches.
+    UsePersistent,
+    /// Do not mount a persistent volume.
+    NoPersistent,
+    /// Wipe any existing data, then mount a fresh persistent volume.
+    ResetPersistent,
+}
+
 #[derive(Deserialize)]
 struct LaunchInstanceRequest {
     template_id: Uuid,
+    persistence: Option<PersistenceMode>,
     mount_persistent: Option<bool>,
-    resolved_volume_host_path: Option<String>,
 }
 
 async fn list_instances(
@@ -190,6 +203,37 @@ async fn list_instances(
     Ok(Json(serde_json::json!({ "instances": instances_json })))
 }
 
+/// Build the JSON body returned when a launch fails *after* the DB record was
+/// created (volume prep or container creation): the Instance is kept and
+/// reported in `error` state (spec §3), alongside a `docker_error` field —
+/// mirroring the pre-existing container-creation failure path.
+async fn launch_error_response(
+    state: &AppState,
+    mut instance: WorkspaceInstance,
+    template: &WorkspaceTemplate,
+    docker_error: &str,
+) -> serde_json::Value {
+    instance.status = "error".to_string();
+    let user_repo = UserRepository::new(&state.db);
+    let owner = user_repo.find_by_id(instance.owner_id).await.ok().flatten();
+    let owner_username = owner.as_ref().map(|u| u.1.as_str());
+    let owner_role = owner.as_ref().map(|u| u.3.as_str());
+    serde_json::json!({
+        "instance": instance_to_json(
+            &instance,
+            Some(&template.name),
+            Some(&template.remote_type),
+            owner_username,
+            owner_role,
+            template.max_run_seconds,
+            Some(&template.timeout_action),
+            template.keep_time_seconds,
+            Some(&template.keep_time_action),
+        ),
+        "docker_error": docker_error,
+    })
+}
+
 async fn launch_instance(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -214,15 +258,87 @@ async fn launch_instance(
             Json(serde_json::json!({"error": "Template not found"})),
         ))?;
 
-    let mount = input.mount_persistent.unwrap_or(false);
-    let resolved_path = if mount {
-        input.resolved_volume_host_path.as_deref()
+    let mode = input.persistence.unwrap_or_else(|| {
+        if input.mount_persistent.unwrap_or(false) {
+            PersistenceMode::UsePersistent
+        } else {
+            PersistenceMode::NoPersistent
+        }
+    });
+
+    let wants_persistence = matches!(mode, PersistenceMode::UsePersistent | PersistenceMode::ResetPersistent);
+    let resolved_path = if wants_persistence {
+        match resolve_persistent_host_path_opt(
+            template.persistent_storage_path.as_deref(),
+            &template.name,
+            &auth.user_id.to_string(),
+        ) {
+            Ok(path) => path,
+            Err(e) => {
+                tracing::warn!(
+                    "Persistent launch rejected for template '{}' (owner={}): invalid persistent_storage_path: {:?}",
+                    template.name,
+                    auth.user_id,
+                    e
+                );
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("Template has an invalid persistent storage path: {:?}", e)
+                    })),
+                ));
+            }
+        }
     } else {
         None
     };
 
+    let mut replace_broken = false;
+    if resolved_path.is_some() {
+        let existing = instance_repo
+            .find_persistent_by_template_and_owner(input.template_id, auth.user_id)
+            .await
+            .map_err(|e| {
+                tracing::error!(
+                    "Failed to check for existing persistent instance (template={}, owner={}): {}",
+                    input.template_id,
+                    auth.user_id,
+                    e
+                );
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Failed to launch instance"})),
+                )
+            })?;
+        match existing {
+            Some(existing) if existing.status != "error" => {
+                return Err((
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "error": "An instance with persistent storage already exists for this template and user"
+                    })),
+                ));
+            }
+            Some(existing) => {
+                // A prior launch failed (status `error`) and never became a real
+                // tenant, so it can be replaced. Drop its stale record to keep
+                // the one-persistent-instance invariant, then wipe + re-prepare.
+                tracing::warn!(
+                    "Replacing broken persistent instance {} (template={}, owner={})",
+                    existing.id,
+                    input.template_id,
+                    auth.user_id
+                );
+                instance_repo.delete(existing.id).await.ok();
+                replace_broken = true;
+            }
+            None => {}
+        }
+    }
+
+    let mount = resolved_path.is_some();
     let instance = instance_repo
-        .launch(input.template_id, auth.user_id, &template.name, mount, resolved_path)
+        .launch(input.template_id, auth.user_id, &template.name, mount, resolved_path.as_deref())
         .await
         .map_err(|e| {
             tracing::error!("Failed to launch instance (template={}, owner={}): {}", input.template_id, auth.user_id, e);
@@ -231,6 +347,43 @@ async fn launch_instance(
                 Json(serde_json::json!({"error": "Failed to launch instance"})),
             )
         })?;
+
+    // Prepare the persistent volume only after the DB record exists, so a
+    // helper/volume failure leaves a visible `error` Instance (DB record kept,
+    // spec §3) instead of silently failing the launch with no trace. A broken
+    // (error) record being replaced is wiped first, then re-prepared.
+    if let Some(host_path) = resolved_path.as_deref() {
+        let volume_name = persistent_volume_name(host_path);
+        let wipe = replace_broken || mode == PersistenceMode::ResetPersistent;
+        if wipe {
+            if let Err(e) = state.docker
+                .remove_persistent_volume(host_path, &volume_name)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to remove persistent volume before reset (template={}, owner={}): {}",
+                    input.template_id,
+                    auth.user_id,
+                    e
+                );
+                instance_repo.update_status(instance.id, "error").await.ok();
+                return Ok(Json(launch_error_response(&state, instance, &template, &e).await));
+            }
+        }
+        if let Err(e) = state.docker
+            .prepare_persistent_volume(host_path, &volume_name)
+            .await
+        {
+            tracing::warn!(
+                "Failed to prepare persistent volume for instance (template={}, owner={}): {}",
+                input.template_id,
+                auth.user_id,
+                e
+            );
+            instance_repo.update_status(instance.id, "error").await.ok();
+            return Ok(Json(launch_error_response(&state, instance, &template, &e).await));
+        }
+    }
 
     tracing::info!(
         "Instance '{}' launched (id={}, template={})",
@@ -250,7 +403,7 @@ async fn launch_instance(
         run_config: template.run_config.clone(),
         exec_config: template.exec_config.clone(),
         volume_mappings: template.volume_mappings.clone(),
-        persistent_volume: resolved_path.map(|s| s.to_string()),
+        persistent_volume_name: resolved_path.as_deref().map(persistent_volume_name),
         command: None,
         runtime: Some(resolve_runtime(&template.container_runtime, &state.settings.container_runtime)),
         network_bandwidth_up_mbps: template.network_bandwidth_up_mbps,
@@ -296,12 +449,7 @@ async fn launch_instance(
                 e
             );
             instance_repo.update_status(instance.id, "error").await.ok();
-            let mut inst = instance;
-            inst.status = "error".to_string();
-            let owner = user_repo.find_by_id(inst.owner_id).await.ok().flatten();
-            let owner_username = owner.as_ref().map(|u| u.1.as_str());
-            let owner_role = owner.as_ref().map(|u| u.3.as_str());
-            Ok(Json(serde_json::json!({ "instance": instance_to_json(&inst, Some(&template.name), Some(&template.remote_type), owner_username, owner_role, template.max_run_seconds, Some(&template.timeout_action), template.keep_time_seconds, Some(&template.keep_time_action)), "docker_error": e })))
+            Ok(Json(launch_error_response(&state, instance, &template, &e).await))
         }
     }
 }
@@ -368,6 +516,16 @@ async fn delete_instance(
             .await;
     }
 
+    // Persistent data (host dir + Volume declaration) is deliberately kept on
+    // delete: "remove" only destroys the container and DB record so the data
+    // can be reused by a later launch. Only `reset_persistent` wipes it.
+    if instance.mount_persistent {
+        tracing::info!(
+            "Instance '{}' deleted; persistent data kept for reuse",
+            instance.name
+        );
+    }
+
     match instance_repo.delete(id).await {
         Ok(true) => Ok(StatusCode::NO_CONTENT),
         Ok(false) => Err(StatusCode::NOT_FOUND),
@@ -383,7 +541,7 @@ async fn start_instance(
     let instance_repo = WorkspaceInstanceRepository::new(&state.db);
     let template_repo = WorkspaceTemplateRepository::new(&state.db);
 
-    let instance = instance_repo
+    let mut instance = instance_repo
         .find_by_id(id)
         .await
         .map_err(|e| {
@@ -419,6 +577,40 @@ async fn start_instance(
 
     let template = template_repo.find_by_id(instance.template_id).await.ok().flatten();
     let remote_type: RemoteType = template.as_ref().map(|t| t.remote_type.parse().ok()).flatten().unwrap_or(RemoteType::KasmVnc);
+
+    // Migration backfill: a legacy `mount_persistent = true` instance may have
+    // no stored host path. Resolve it from the template now and persist it so
+    // the volume can be ensured and mounted.
+    if instance.mount_persistent && instance.resolved_volume_host_path.is_none() {
+        if let Some(t) = template.as_ref() {
+            match t.persistent_storage_path.as_deref() {
+                Some(root) => match resolve_persistent_host_path(root, &t.name, &auth.user_id.to_string()) {
+                    Ok(path) => {
+                        tracing::info!(
+                            "Backfilling resolved persistent host path for instance '{}'",
+                            instance.name
+                        );
+                        instance_repo
+                            .update_resolved_volume_host_path(instance.id, Some(&path))
+                            .await
+                            .ok();
+                        instance.resolved_volume_host_path = Some(path);
+                    }
+                    Err(e) => tracing::warn!(
+                        "Could not backfill resolved persistent path for instance '{}': {:?}",
+                        instance.name,
+                        e
+                    ),
+                },
+                None => tracing::warn!(
+                    "Instance '{}' is persistent but template '{}' has no persistent_storage_path",
+                    instance.name,
+                    t.name
+                ),
+            }
+        }
+    }
+    let resolved_host_path = instance.resolved_volume_host_path.as_deref();
 
     let new_container_id = match instance.container_id {
         Some(ref cid) => {
@@ -456,73 +648,27 @@ async fn start_instance(
                 }
                 _ => {
                     tracing::warn!("Container for '{}' not found, creating new one", instance.name);
-                    let template = template_repo.find_by_id(instance.template_id).await.ok().flatten();
-                    if let Some(template) = template {
-                        let container_config = ContainerConfig {
-                            image: template.image,
-                            cores: template.cores,
-                            memory: template.memory,
-                            gpu_count: template.gpu_count,
-                            remote_type: remote_type.clone(),
-                            run_config: template.run_config,
-                            exec_config: template.exec_config,
-                            volume_mappings: template.volume_mappings,
-                            persistent_volume: instance.resolved_volume_host_path.clone(),
-                            command: None,
-                            runtime: Some(resolve_runtime(&template.container_runtime, &state.settings.container_runtime)),
-                            network_bandwidth_up_mbps: template.network_bandwidth_up_mbps,
-                            network_bandwidth_down_mbps: template.network_bandwidth_down_mbps,
-                        };
-                        let new_id = state.docker.create_container_from_template(&instance.name, instance.instance_number, &container_config, &instance.access_password, &instance.access_token).await.map_err(|e| {
-                            tracing::error!("Failed to create container for '{}': {}", instance.name, e);
-                            (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(serde_json::json!({"error": "Failed to create container"})),
-                            )
-                        })?;
-                        Some(new_id)
-                    } else {
-                        return Err((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(serde_json::json!({"error": "Template not found for instance"})),
-                        ));
-                    }
+                    let t = template.as_ref().ok_or((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({"error": "Template not found for instance"})),
+                    ))?;
+                    Some(
+                        create_container_for_start(&state, t, &instance, &remote_type, resolved_host_path)
+                            .await?,
+                    )
                 }
             }
         }
         None => {
             tracing::info!("No container for instance '{}', creating new one", instance.name);
-            let template = template_repo.find_by_id(instance.template_id).await.ok().flatten();
-            if let Some(template) = template {
-                let container_config = ContainerConfig {
-                    image: template.image,
-                    cores: template.cores,
-                    memory: template.memory,
-                    gpu_count: template.gpu_count,
-                    remote_type: remote_type.clone(),
-                    run_config: template.run_config,
-                    exec_config: template.exec_config,
-                    volume_mappings: template.volume_mappings,
-                    persistent_volume: instance.resolved_volume_host_path.clone(),
-                    command: None,
-                    runtime: Some(resolve_runtime(&template.container_runtime, &state.settings.container_runtime)),
-                    network_bandwidth_up_mbps: template.network_bandwidth_up_mbps,
-                    network_bandwidth_down_mbps: template.network_bandwidth_down_mbps,
-                };
-                let new_id = state.docker.create_container_from_template(&instance.name, instance.instance_number, &container_config, &instance.access_password, &instance.access_token).await.map_err(|e| {
-                    tracing::error!("Failed to create container for '{}': {}", instance.name, e);
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({"error": "Failed to create container"})),
-                    )
-                })?;
-                Some(new_id)
-            } else {
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": "Template not found for instance"})),
-                ));
-            }
+            let t = template.as_ref().ok_or((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Template not found for instance"})),
+            ))?;
+            Some(
+                create_container_for_start(&state, t, &instance, &remote_type, resolved_host_path)
+                    .await?,
+            )
         }
     };
 
@@ -554,6 +700,52 @@ async fn start_instance(
         "status": "starting",
         "container_id": container_id_str
     })))
+}
+
+/// Build the `ContainerConfig` and create the container for `instance`. For a
+/// persistent instance this also ensures the Volume declaration still exists
+/// (re-declaring a lost local-bind volume per spec §補充), so a plain named
+/// volume is never silently created by Docker instead.
+async fn create_container_for_start(
+    state: &AppState,
+    template: &WorkspaceTemplate,
+    instance: &WorkspaceInstance,
+    remote_type: &RemoteType,
+    resolved_host_path: Option<&str>,
+) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    if let Some(host_path) = resolved_host_path {
+        let volume_name = persistent_volume_name(host_path);
+        state.docker.ensure_persistent_volume(host_path, &volume_name).await.map_err(|e| {
+            tracing::error!("Failed to ensure persistent volume for '{}': {}", instance.name, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Failed to ensure persistent volume"})),
+            )
+        })?;
+    }
+
+    let container_config = ContainerConfig {
+        image: template.image.clone(),
+        cores: template.cores,
+        memory: template.memory,
+        gpu_count: template.gpu_count,
+        remote_type: remote_type.clone(),
+        run_config: template.run_config.clone(),
+        exec_config: template.exec_config.clone(),
+        volume_mappings: template.volume_mappings.clone(),
+        persistent_volume_name: resolved_host_path.map(persistent_volume_name),
+        command: None,
+        runtime: Some(resolve_runtime(&template.container_runtime, &state.settings.container_runtime)),
+        network_bandwidth_up_mbps: template.network_bandwidth_up_mbps,
+        network_bandwidth_down_mbps: template.network_bandwidth_down_mbps,
+    };
+    state.docker.create_container_from_template(&instance.name, instance.instance_number, &container_config, &instance.access_password, &instance.access_token).await.map_err(|e| {
+        tracing::error!("Failed to create container for '{}': {}", instance.name, e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Failed to create container"})),
+        )
+    })
 }
 
 async fn stop_instance(

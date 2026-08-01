@@ -214,6 +214,10 @@ stateDiagram-v2
     Deleted --> [*]
 ```
 
+For persistent Instances, delete keeps the user's data (host dir + volume) so
+it can be reused by a later launch; only a reset wipes it. See
+[Persistent Storage](persistent-storage.md).
+
 ### Container Creation Steps
 
 1. **Pull image** — `tsukisama9292/ow-kasmvnc-ubuntu:jammy`

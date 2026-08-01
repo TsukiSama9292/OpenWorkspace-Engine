@@ -25,7 +25,7 @@
     keepTimeAction = $bindable()
   }: Props = $props();
 
-  const STORAGE_HINT = '/data/persistent/{template_name}/{user_id}';
+  const STORAGE_HINT = '/data/persistent';
   const inputClass = 'px-3 py-2 bg-black/40 border border-white/10 rounded text-white placeholder:text-zinc-500 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/25 w-full';
   const labelClass = 'flex flex-col gap-1';
   const spanClass = 'text-sm text-zinc-400';
@@ -105,9 +105,9 @@
 </label>
 
 <label class={labelClass}>
-  <span class={spanClass}>Persistent Storage Path</span>
+  <span class={spanClass}>Persistent Root Directory</span>
   <input type="text" bind:value={persistentStoragePath} placeholder={STORAGE_HINT} class={inputClass} />
-  <span class="text-xs text-surface-400">Template variables: {'{'}template_name{'}'}, {'{'}user_id{'}'}</span>
+  <span class="text-xs text-surface-400">Host root directory; per-instance subfolders are appended by the API</span>
 </label>
 
 <div class="grid grid-cols-2 gap-3">

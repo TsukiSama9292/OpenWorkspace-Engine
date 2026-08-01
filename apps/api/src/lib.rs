@@ -4,6 +4,7 @@ pub mod db;
 pub mod docker;
 pub mod health_worker;
 pub mod network_qos;
+pub mod persistent_volume;
 pub mod routes;
 pub mod timeout_action;
 pub mod vnc_cache;

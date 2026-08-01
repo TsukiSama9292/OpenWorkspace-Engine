@@ -1314,3 +1314,658 @@ async fn test_heartbeat_refreshes_keep_time_deadline() {
     let hi = (after + chrono::Duration::seconds(3600) + chrono::Duration::seconds(5)).timestamp_millis();
     assert!(deadline.timestamp_millis() >= lo && deadline.timestamp_millis() <= hi);
 }
+
+// ── Ticket 03: launch persistence mode ──────────────────────────
+
+async fn create_persistent_template(
+    ctx: &MockContext,
+    token: &str,
+    name: &str,
+    persistent_storage_path: Option<&str>,
+) -> String {
+    let body = serde_json::json!({
+        "name": name,
+        "image": "busybox:1",
+        "persistent_storage_path": persistent_storage_path,
+    });
+    let resp = ctx.post_auth("/api/templates", &body, token).await;
+    resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string()
+}
+
+async fn admin_user_id(ctx: &MockContext) -> String {
+    use openworkspace_api::db::UserRepository;
+    let admin = UserRepository::new(&ctx.db)
+        .find_by_username("admin")
+        .await
+        .unwrap()
+        .expect("admin user must exist");
+    admin.0.to_string()
+}
+
+#[tokio::test]
+async fn test_launch_use_persistent_resolves_server_side() {
+    let prepared: std::sync::Arc<std::sync::Mutex<Vec<String>>> = std::sync::Arc::default();
+    let prepared_for_mock = prepared.clone();
+    let ctx = MockContext::new(move |m| {
+        let prepared = prepared_for_mock.clone();
+        m.expect_prepare_persistent_volume()
+            .returning(move |host_path, volume_name| {
+                let mut log = prepared.lock().unwrap();
+                log.push(host_path.to_string());
+                log.push(volume_name.to_string());
+                Box::pin(async { Ok(()) })
+            });
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let owner_id = admin_user_id(&ctx).await;
+    let template_id = create_persistent_template(&ctx, &token, "persist-srv", Some("/mnt/ow_dir")).await;
+
+    let resp = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "persistence": "use_persistent",
+        "resolved_volume_host_path": "/evil/client/ignored",
+        "mount_persistent": false,
+    }), &token).await;
+    assert_eq!(resp.status(), 200, "body: {:?}", resp.text().await);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["instance"]["mount_persistent"], true);
+    let expected_path = format!("/mnt/ow_dir/{}/{}", "persist-srv", owner_id);
+    assert_eq!(body["instance"]["resolved_volume_host_path"], expected_path);
+
+    let log = prepared.lock().unwrap();
+    assert_eq!(log.len(), 2, "prepare_persistent_volume must be called exactly once with both args");
+    assert_eq!(log[0], expected_path, "host_path must be the server-resolved path, not the client's");
+    assert_eq!(
+        log[1],
+        openworkspace_api::persistent_volume::persistent_volume_name(&expected_path)
+    );
+}
+
+#[tokio::test]
+async fn test_launch_legacy_mount_persistent_maps_to_use() {
+    let ctx = MockContext::new(|m| {
+        m.expect_prepare_persistent_volume()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let owner_id = admin_user_id(&ctx).await;
+    let template_id = create_persistent_template(&ctx, &token, "persist-legacy", Some("/mnt/ow_dir")).await;
+
+    let resp = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "mount_persistent": true,
+        "resolved_volume_host_path": "/evil/client/ignored"
+    }), &token).await;
+    assert_eq!(resp.status(), 200, "body: {:?}", resp.text().await);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["instance"]["mount_persistent"], true);
+    assert_eq!(
+        body["instance"]["resolved_volume_host_path"],
+        format!("/mnt/ow_dir/{}/{}", "persist-legacy", owner_id)
+    );
+}
+
+#[tokio::test]
+async fn test_launch_second_persistent_same_template_and_owner_conflicts() {
+    let ctx = MockContext::new(|m| {
+        m.expect_prepare_persistent_volume()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        m.expect_create_container_from_template()
+            .times(2)
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .times(2)
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let template_id = create_persistent_template(&ctx, &token, "persist-conflict", Some("/mnt/ow_dir")).await;
+
+    let first = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "persistence": "use_persistent",
+    }), &token).await;
+    assert_eq!(first.status(), 200);
+    let first_body: serde_json::Value = first.json().await.unwrap();
+    assert_eq!(first_body["instance"]["mount_persistent"], true);
+
+    let second = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "persistence": "use_persistent",
+    }), &token).await;
+    assert_eq!(second.status(), 409);
+    let second_body: serde_json::Value = second.json().await.unwrap();
+    assert!(second_body["error"].as_str().unwrap().contains("persistent storage already exists"));
+
+    let reset = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "persistence": "reset_persistent",
+    }), &token).await;
+    assert_eq!(reset.status(), 409);
+
+    let non_persistent = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "persistence": "no_persistent",
+    }), &token).await;
+    assert_eq!(non_persistent.status(), 200);
+    let np_body: serde_json::Value = non_persistent.json().await.unwrap();
+    assert_eq!(np_body["instance"]["mount_persistent"], false);
+}
+
+#[tokio::test]
+async fn test_launch_persistent_conflict_is_per_owner() {
+    let ctx = MockContext::new(|m| {
+        m.expect_prepare_persistent_volume()
+            .times(2)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        m.expect_create_container_from_template()
+            .times(2)
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .times(2)
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let template_id = create_persistent_template(&ctx, &token, "persist-per-owner", Some("/mnt/ow_dir")).await;
+
+    let first = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "persistence": "use_persistent",
+    }), &token).await;
+    assert_eq!(first.status(), 200);
+
+    let other = ctx.post_auth("/api/users", &serde_json::json!({
+        "username": "other_persist_user",
+        "password": "password123",
+        "role": "user",
+    }), &token).await;
+    assert_eq!(other.status(), 200);
+    let other_token = ctx.login_user("other_persist_user", "password123").await;
+
+    let resp = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "persistence": "use_persistent",
+    }), &other_token).await;
+    assert_eq!(resp.status(), 200, "a different owner must be allowed to launch persistently");
+}
+
+#[tokio::test]
+async fn test_launch_null_persistent_root_degrades_to_no_persistent() {
+    let ctx = MockContext::new(|m| {
+        m.expect_prepare_persistent_volume()
+            .never();
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let template_id = create_persistent_template(&ctx, &token, "persist-null-root", None).await;
+
+    let resp = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "persistence": "use_persistent",
+        "resolved_volume_host_path": "/evil/client/ignored"
+    }), &token).await;
+    assert_eq!(resp.status(), 200, "body: {:?}", resp.text().await);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["instance"]["mount_persistent"], false);
+    assert_eq!(body["instance"]["resolved_volume_host_path"], serde_json::Value::Null);
+}
+
+// ── Ticket 04: reset & remove cleanup ──────────────────────────
+
+#[tokio::test]
+async fn test_reset_persistent_removes_then_prepares() {
+    let log: std::sync::Arc<std::sync::Mutex<Vec<String>>> = std::sync::Arc::default();
+    let log_for_mock = log.clone();
+    let ctx = MockContext::new(move |m| {
+        let log = log_for_mock.clone();
+        m.expect_remove_persistent_volume()
+            .returning(move |host_path, volume_name| {
+                log.lock().unwrap().push(format!("remove|{}|{}", host_path, volume_name));
+                Box::pin(async { Ok(()) })
+            });
+        let log = log_for_mock.clone();
+        m.expect_prepare_persistent_volume()
+            .returning(move |host_path, volume_name| {
+                log.lock().unwrap().push(format!("prepare|{}|{}", host_path, volume_name));
+                Box::pin(async { Ok(()) })
+            });
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let owner_id = admin_user_id(&ctx).await;
+    let template_id = create_persistent_template(&ctx, &token, "persist-reset", Some("/mnt/ow_dir")).await;
+
+    let resp = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "persistence": "reset_persistent",
+        "mount_persistent": false,
+    }), &token).await;
+    assert_eq!(resp.status(), 200, "body: {:?}", resp.text().await);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["instance"]["mount_persistent"], true);
+
+    let expected_path = format!("/mnt/ow_dir/{}/{}", "persist-reset", owner_id);
+    let expected_volume = openworkspace_api::persistent_volume::persistent_volume_name(&expected_path);
+    let log = log.lock().unwrap();
+    assert_eq!(
+        log.as_slice(),
+        &[
+            format!("remove|{}|{}", expected_path, expected_volume),
+            format!("prepare|{}|{}", expected_path, expected_volume),
+        ],
+        "reset_persistent must remove the old volume before re-preparing"
+    );
+}
+
+#[tokio::test]
+async fn test_reset_persistent_no_remove_for_plain_use() {
+    let log: std::sync::Arc<std::sync::Mutex<Vec<String>>> = std::sync::Arc::default();
+    let log_for_mock = log.clone();
+    let ctx = MockContext::new(move |m| {
+        let log = log_for_mock.clone();
+        m.expect_remove_persistent_volume()
+            .returning(move |host_path, volume_name| {
+                log.lock().unwrap().push(format!("remove|{}|{}", host_path, volume_name));
+                Box::pin(async { Ok(()) })
+            });
+        let log = log_for_mock.clone();
+        m.expect_prepare_persistent_volume()
+            .returning(move |host_path, volume_name| {
+                log.lock().unwrap().push(format!("prepare|{}|{}", host_path, volume_name));
+                Box::pin(async { Ok(()) })
+            });
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let template_id = create_persistent_template(&ctx, &token, "persist-plain-use", Some("/mnt/ow_dir")).await;
+
+    let resp = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "persistence": "use_persistent",
+    }), &token).await;
+    assert_eq!(resp.status(), 200, "body: {:?}", resp.text().await);
+
+    let log = log.lock().unwrap();
+    assert_eq!(log.len(), 1, "plain use must only prepare (no remove), got {:?}", *log);
+    assert!(log[0].starts_with("prepare|"), "plain use must not call remove_persistent_volume");
+}
+
+#[tokio::test]
+async fn test_reset_persistent_with_existing_instance_conflicts() {
+    let ctx = MockContext::new(|m| {
+        m.expect_remove_persistent_volume()
+            .never();
+        m.expect_prepare_persistent_volume()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        m.expect_create_container_from_template()
+            .times(1)
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let template_id = create_persistent_template(&ctx, &token, "persist-reset-conflict", Some("/mnt/ow_dir")).await;
+
+    let first = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "persistence": "use_persistent",
+    }), &token).await;
+    assert_eq!(first.status(), 200);
+
+    let reset = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "persistence": "reset_persistent",
+    }), &token).await;
+    assert_eq!(reset.status(), 409);
+    let body: serde_json::Value = reset.json().await.unwrap();
+    assert!(body["error"].as_str().unwrap().contains("persistent storage already exists"));
+}
+
+#[tokio::test]
+async fn test_delete_persistent_instance_preserves_volume() {
+    let ctx = MockContext::new(|m| {
+        m.expect_prepare_persistent_volume()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+        m.expect_stop_container_by_id()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        m.expect_remove_container_by_id()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        m.expect_remove_persistent_volume()
+            .never();
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let template_id = create_persistent_template(&ctx, &token, "persist-delete", Some("/mnt/ow_dir")).await;
+
+    let resp = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "persistence": "use_persistent",
+    }), &token).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let instance_id = body["instance"]["id"].as_str().unwrap();
+
+    let resp = ctx.delete_auth(&format!("/api/instances/{}", instance_id), &token).await;
+    assert_eq!(resp.status(), 204);
+
+    let list = ctx.get_auth("/api/instances", &token).await;
+    let list_body: serde_json::Value = list.json().await.unwrap();
+    assert!(
+        list_body["instances"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["id"].as_str() != Some(instance_id)),
+        "delete must remove the DB record"
+    );
+}
+
+// ── Ticket 03 gaps: error-state launch, restart volume ensure, migration backfill ──
+
+/// Insert a workspace instance row directly (bypassing the launch route), so
+/// tests can fabricate legacy / stopped / error instances.
+async fn insert_instance(
+    db: &DatabaseConnection,
+    template_id: &str,
+    owner_id: &str,
+    name: &str,
+    status: &str,
+    mount_persistent: bool,
+    resolved_volume_host_path: Option<&str>,
+    container_id: Option<&str>,
+) -> String {
+    use openworkspace_api::db::workspace_instance;
+    use sea_orm::{ActiveModelTrait, Set};
+    let id = uuid::Uuid::new_v4();
+    let model = workspace_instance::ActiveModel {
+        id: Set(id),
+        template_id: Set(template_id.parse().unwrap()),
+        name: Set(name.to_string()),
+        instance_number: Set(1),
+        owner_id: Set(owner_id.parse().unwrap()),
+        container_id: Set(container_id.map(|s| s.to_string())),
+        status: Set(status.to_string()),
+        access_token: Set(format!("tok-{}", name)),
+        access_password: Set("pwd".to_string()),
+        mount_persistent: Set(mount_persistent),
+        resolved_volume_host_path: Set(resolved_volume_host_path.map(|s| s.to_string())),
+        ..Default::default()
+    };
+    model.insert(db).await.unwrap().id.to_string()
+}
+
+async fn instance_by_name(ctx: &MockContext, token: &str, name: &str) -> serde_json::Value {
+    let list = ctx.get_auth("/api/instances", token).await;
+    let list_body: serde_json::Value = list.json().await.unwrap();
+    list_body["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["name"].as_str() == Some(name))
+        .expect("instance must exist")
+        .clone()
+}
+
+#[tokio::test]
+async fn test_launch_volume_prep_failure_marks_error_and_keeps_record() {
+    let ctx = MockContext::new(|m| {
+        m.expect_prepare_persistent_volume()
+            .returning(|_, _| Box::pin(async { Err("helper container failed".to_string()) }));
+        m.expect_create_container_from_template()
+            .never();
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let template_id = create_persistent_template(&ctx, &token, "persist-prep-fail", Some("/mnt/ow_dir")).await;
+
+    let resp = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "persistence": "use_persistent",
+    }), &token).await;
+    assert_eq!(resp.status(), 200, "volume-prep failure must follow the existing launch error path");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["instance"]["status"], "error");
+    assert!(body["docker_error"].as_str().unwrap().contains("helper container failed"));
+
+    let inst = instance_by_name(&ctx, &token, "persist-prep-fail-1").await;
+    assert_eq!(inst["status"], "error", "the failed launch must leave a DB record in error state");
+    assert_eq!(inst["mount_persistent"], true);
+    assert!(inst["resolved_volume_host_path"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn test_reset_volume_remove_failure_marks_error() {
+    let ctx = MockContext::new(|m| {
+        m.expect_remove_persistent_volume()
+            .returning(|_, _| Box::pin(async { Err("remove helper failed".to_string()) }));
+        m.expect_prepare_persistent_volume()
+            .never();
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let template_id = create_persistent_template(&ctx, &token, "persist-remove-fail", Some("/mnt/ow_dir")).await;
+
+    let resp = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "persistence": "reset_persistent",
+    }), &token).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["instance"]["status"], "error");
+    assert!(body["docker_error"].as_str().unwrap().contains("remove helper failed"));
+}
+
+#[tokio::test]
+async fn test_reset_replaces_broken_error_instance() {
+    let log: std::sync::Arc<std::sync::Mutex<Vec<String>>> = std::sync::Arc::default();
+    let log_for_mock = log.clone();
+    let ctx = MockContext::new(move |m| {
+        m.expect_prepare_persistent_volume()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Err("first attempt failed".to_string()) }));
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+        let log = log_for_mock.clone();
+        m.expect_remove_persistent_volume()
+            .returning(move |host_path, volume_name| {
+                log.lock().unwrap().push(format!("remove|{}|{}", host_path, volume_name));
+                Box::pin(async { Ok(()) })
+            });
+        let log = log_for_mock.clone();
+        m.expect_prepare_persistent_volume()
+            .returning(move |host_path, volume_name| {
+                log.lock().unwrap().push(format!("prepare|{}|{}", host_path, volume_name));
+                Box::pin(async { Ok(()) })
+            });
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let owner_id = admin_user_id(&ctx).await;
+    let template_id = create_persistent_template(&ctx, &token, "persist-replace-broken", Some("/mnt/ow_dir")).await;
+
+    // First launch fails at volume prep → the record is kept in `error` state.
+    let first = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "persistence": "use_persistent",
+    }), &token).await;
+    assert_eq!(first.status(), 200);
+    let first_body: serde_json::Value = first.json().await.unwrap();
+    assert_eq!(first_body["instance"]["status"], "error");
+
+    // A second persistent launch is normally 409, but a broken (`error`)
+    // instance occupies no real tenant slot, so reset may wipe + re-prepare.
+    let second = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "persistence": "reset_persistent",
+    }), &token).await;
+    assert_eq!(second.status(), 200, "body: {:?}", second.text().await);
+    let second_body: serde_json::Value = second.json().await.unwrap();
+    assert_eq!(second_body["instance"]["mount_persistent"], true);
+
+    let expected_path = format!("/mnt/ow_dir/{}/{}", "persist-replace-broken", owner_id);
+    let expected_volume = openworkspace_api::persistent_volume::persistent_volume_name(&expected_path);
+    let log = log.lock().unwrap();
+    assert!(
+        log.iter().any(|e| e == &format!("remove|{}|{}", expected_path, expected_volume)),
+        "broken-record replacement must wipe the old volume, got {:?}",
+        *log
+    );
+    assert!(
+        log.iter().any(|e| e == &format!("prepare|{}|{}", expected_path, expected_volume)),
+        "broken-record replacement must re-prepare, got {:?}",
+        *log
+    );
+    let remove_at = log.iter().position(|e| e.starts_with("remove|")).unwrap();
+    let prepare_at = log.iter().position(|e| e.starts_with("prepare|")).unwrap();
+    assert!(remove_at < prepare_at, "wipe must precede re-prepare, got {:?}", *log);
+}
+
+#[tokio::test]
+async fn test_start_backfills_resolved_path_and_ensures_volume() {
+    let ensured: std::sync::Arc<std::sync::Mutex<Vec<String>>> = std::sync::Arc::default();
+    let captured: std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>> = std::sync::Arc::default();
+    let ensured_for_mock = ensured.clone();
+    let captured_for_mock = captured.clone();
+    let ctx = MockContext::new(move |m| {
+        let ensured = ensured_for_mock.clone();
+        m.expect_ensure_persistent_volume()
+            .returning(move |host_path, volume_name| {
+                ensured.lock().unwrap().push(format!("{}|{}", host_path, volume_name));
+                Box::pin(async { Ok(()) })
+            });
+        let captured = captured_for_mock.clone();
+        m.expect_create_container_from_template()
+            .returning(move |_, _, config, _, _| {
+                captured.lock().unwrap().push(config.persistent_volume_name.clone());
+                Box::pin(async { Ok("fake-container-id".to_string()) })
+            });
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let owner_id = admin_user_id(&ctx).await;
+    let template_id = create_persistent_template(&ctx, &token, "persist-legacy-start", Some("/mnt/ow_dir")).await;
+
+    // A legacy instance: mount_persistent = true but no stored host path.
+    let instance_id = insert_instance(
+        &ctx.db, &template_id, &owner_id, "legacy-start", "stopped", true, None, None,
+    ).await;
+
+    let resp = ctx.post_auth(&format!("/api/instances/{}/start", instance_id), &serde_json::json!({}), &token).await;
+    assert_eq!(resp.status(), 200, "body: {:?}", resp.text().await);
+
+    let expected_path = format!("/mnt/ow_dir/{}/{}", "persist-legacy-start", owner_id);
+    let expected_volume = openworkspace_api::persistent_volume::persistent_volume_name(&expected_path);
+
+    let ensured = ensured.lock().unwrap();
+    assert_eq!(
+        ensured.as_slice(),
+        &[format!("{}|{}", expected_path, expected_volume)],
+        "start must ensure the persistent volume for the resolved path"
+    );
+    let captured = captured.lock().unwrap();
+    assert_eq!(
+        captured.as_slice(),
+        &[Some(expected_volume.clone())],
+        "the recreated container must mount the persistent volume"
+    );
+
+    let inst = instance_by_name(&ctx, &token, "legacy-start").await;
+    assert_eq!(inst["resolved_volume_host_path"], expected_path, "restart must backfill the resolved path");
+    assert_eq!(inst["mount_persistent"], true);
+}
+
+#[tokio::test]
+async fn test_start_redeclares_missing_volume_on_restart() {
+    let ensured: std::sync::Arc<std::sync::Mutex<Vec<String>>> = std::sync::Arc::default();
+    let ensured_for_mock = ensured.clone();
+    let ctx = MockContext::new(move |m| {
+        let ensured = ensured_for_mock.clone();
+        m.expect_ensure_persistent_volume()
+            .returning(move |host_path, volume_name| {
+                ensured.lock().unwrap().push(format!("{}|{}", host_path, volume_name));
+                Box::pin(async { Ok(()) })
+            });
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let owner_id = admin_user_id(&ctx).await;
+    let template_id = create_persistent_template(&ctx, &token, "persist-restart-ensure", Some("/mnt/ow_dir")).await;
+    let expected_path = format!("/mnt/ow_dir/{}/{}", "persist-restart-ensure", owner_id);
+
+    // Persistent instance with a stored path, container was lost.
+    let instance_id = insert_instance(
+        &ctx.db, &template_id, &owner_id, "restart-ensure", "stopped", true, Some(&expected_path), None,
+    ).await;
+
+    let resp = ctx.post_auth(&format!("/api/instances/{}/start", instance_id), &serde_json::json!({}), &token).await;
+    assert_eq!(resp.status(), 200, "body: {:?}", resp.text().await);
+
+    let expected_volume = openworkspace_api::persistent_volume::persistent_volume_name(&expected_path);
+    let ensured = ensured.lock().unwrap();
+    assert_eq!(
+        ensured.as_slice(),
+        &[format!("{}|{}", expected_path, expected_volume)],
+        "restart must re-declare the lost local-bind volume (spec §補充)"
+    );
+}
+
+#[tokio::test]
+async fn test_start_ensure_volume_failure_returns_500() {
+    let ctx = MockContext::new(|m| {
+        m.expect_ensure_persistent_volume()
+            .returning(|_, _| Box::pin(async { Err("volume lost and recreate failed".to_string()) }));
+        m.expect_create_container_from_template()
+            .never();
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let owner_id = admin_user_id(&ctx).await;
+    let template_id = create_persistent_template(&ctx, &token, "persist-ensure-fail", Some("/mnt/ow_dir")).await;
+    let instance_id = insert_instance(
+        &ctx.db, &template_id, &owner_id, "ensure-fail", "stopped", true, Some("/mnt/ow_dir/whatever"), None,
+    ).await;
+
+    let resp = ctx.post_auth(&format!("/api/instances/{}/start", instance_id), &serde_json::json!({}), &token).await;
+    assert_eq!(resp.status(), 500);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "Failed to ensure persistent volume");
+}

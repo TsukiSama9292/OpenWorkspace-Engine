@@ -132,7 +132,7 @@
 {:else}
   <div class="flex flex-col items-center justify-center min-h-screen gap-2">
     <h2 class="text-xl font-semibold text-surface-100">
-      {instance?.status === 'paused' ? '已暫停' : '已停止'}
+      {instance?.status === 'paused' ? 'Paused' : 'Stopped'}
     </h2>
     <p class="text-sm text-surface-400">This instance is not running.</p>
     <a href="/" class="mt-2 text-sm text-primary-400 hover:text-primary-300">Back to Dashboard</a>

@@ -268,7 +268,7 @@ async fn test_launch_with_bad_image_returns_error_status() {
 }
 
 #[tokio::test]
-async fn test_launch_with_mount_persistent() {
+async fn test_launch_persistent_null_root_degrades_and_ignores_client_path() {
     let ctx = TestContext::new().await;
     common::ensure_network().await;
     ctx.login_admin().await;
@@ -278,6 +278,8 @@ async fn test_launch_with_mount_persistent() {
         .post("/api/templates", &serde_json::json!({
             "name": name,
             "image": "busybox:1",
+            "cores": 0,
+            "memory": 0,
             "run_config": { "command": ["sleep", "3600"] },
         }))
         .await;
@@ -287,18 +289,15 @@ async fn test_launch_with_mount_persistent() {
     let resp = ctx
         .post("/api/instances", &serde_json::json!({
             "template_id": template_id,
-            "mount_persistent": true,
+            "persistence": "use_persistent",
             "resolved_volume_host_path": "/tmp/ow_test_mount"
         }))
         .await;
-    let status = resp.status();
     let body: serde_json::Value = resp.json().await.unwrap();
     let _instance_id = body["instance"]["id"].as_str().unwrap();
 
-    if status == 200 && body["instance"]["status"].as_str() == Some("running") {
-        assert_eq!(body["instance"]["mount_persistent"], true);
-        assert_eq!(body["instance"]["resolved_volume_host_path"], "/tmp/ow_test_mount");
-    }
+    assert_eq!(body["instance"]["mount_persistent"], false, "a template without a persistent_storage_path must degrade to non-persistent");
+    assert_eq!(body["instance"]["resolved_volume_host_path"], serde_json::Value::Null, "the client-supplied path must be ignored");
 }
 
 #[tokio::test]
@@ -484,7 +483,7 @@ async fn test_list_instances_returns_all_fields() {
 }
 
 #[tokio::test]
-async fn test_launch_with_resolved_volume_path() {
+async fn test_launch_persistent_resolves_path_server_side() {
     let ctx = TestContext::new().await;
     common::ensure_network().await;
     ctx.login_admin().await;
@@ -494,25 +493,77 @@ async fn test_launch_with_resolved_volume_path() {
         .post("/api/templates", &serde_json::json!({
             "name": name,
             "image": "busybox:1",
+            "cores": 0,
+            "memory": 0,
             "run_config": { "command": ["sleep", "3600"] },
+            "persistent_storage_path": "/tmp/ow_test_root",
         }))
         .await;
     let body: serde_json::Value = resp.json().await.unwrap();
     let template_id = body["template"]["id"].as_str().unwrap().to_string();
 
+    // Compute the path the API must resolve server-side:
+    // {root}/{template_name}/{owner_user_id}.
+    let db = sea_orm::Database::connect(&common::pg_url(&ctx.db_name)).await.unwrap();
+    let admin = openworkspace_api::db::UserRepository::new(&db)
+        .find_by_username("admin")
+        .await
+        .unwrap()
+        .expect("admin user must exist");
+    drop(db);
+    let expected_path = format!("/tmp/ow_test_root/{}/{}", name, admin.0);
+
     let resp = ctx
         .post("/api/instances", &serde_json::json!({
             "template_id": template_id,
-            "mount_persistent": true,
+            "persistence": "use_persistent",
             "resolved_volume_host_path": "/tmp/ow_test_vol_path"
         }))
         .await;
     let body: serde_json::Value = resp.json().await.unwrap();
-    let _instance_id = body["instance"]["id"].as_str().unwrap().to_string();
+    let instance_id = body["instance"]["id"].as_str().unwrap().to_string();
 
     assert_eq!(body["instance"]["mount_persistent"], true);
-    assert_eq!(body["instance"]["resolved_volume_host_path"], "/tmp/ow_test_vol_path");
+    assert_eq!(
+        body["instance"]["resolved_volume_host_path"],
+        expected_path,
+        "the API must resolve the host path itself and ignore the client-supplied one"
+    );
 
+    // Clean up via the API: delete must remove the container + DB record but
+    // keep the Volume declaration and host data dir, so the data is reusable.
+    let delete_resp = ctx.delete(&format!("/api/instances/{}", instance_id)).await;
+    assert_eq!(delete_resp.status(), 204);
+
+    let volume_name = openworkspace_api::persistent_volume::persistent_volume_name(&expected_path);
+    let docker = bollard::Docker::connect_with_local_defaults().unwrap();
+    assert!(
+        docker.inspect_volume(&volume_name).await.is_ok(),
+        "delete must preserve the persistent volume declaration for reuse"
+    );
+    assert!(
+        std::fs::read_dir(&expected_path).is_ok(),
+        "delete must preserve the persistent host data dir"
+    );
+
+    // Relaunching use_persistent after delete: the slot is free (record gone)
+    // and the preserved volume is reused as-is, not re-populated or re-created.
+    let resp = ctx
+        .post("/api/instances", &serde_json::json!({
+            "template_id": template_id,
+            "persistence": "use_persistent",
+        }))
+        .await;
+    assert_eq!(resp.status(), 200, "re-launch after delete must reuse preserved data");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let relaunched_id = body["instance"]["id"].as_str().unwrap().to_string();
+    assert_eq!(body["instance"]["mount_persistent"], true);
+
+    // Clean up: delete the relaunched instance, then drop the leftover volume
+    // + host dir manually (delete intentionally keeps them).
+    assert_eq!(ctx.delete(&format!("/api/instances/{}", relaunched_id)).await.status(), 204);
+    docker.remove_volume(&volume_name, None::<bollard::volume::RemoveVolumeOptions>).await.ok();
+    std::fs::remove_dir_all(&expected_path).ok();
 }
 
 #[tokio::test]

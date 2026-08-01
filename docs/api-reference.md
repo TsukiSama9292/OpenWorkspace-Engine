@@ -194,9 +194,12 @@ POST /api/instances
 **Request:**
 ```json
 {
-  "name": "dev-1"
+  "template_id": "uuid",
+  "persistence": "use_persistent"
 }
 ```
+
+`persistence` is optional (`use_persistent` / `no_persistent` / `reset_persistent`, default `no_persistent`). A client-supplied host path is ignored. See [Persistent Storage](persistent-storage.md).
 
 **Response:**
 ```json
@@ -242,6 +245,8 @@ DELETE /api/instances/{id}
 1. Traefik route files deleted
 2. Docker container stopped and removed
 3. DB record deleted
+
+Persistent data (host dir + volume) is **preserved** for reuse; only a reset wipes it. See [Persistent Storage](persistent-storage.md).
 
 ---
 

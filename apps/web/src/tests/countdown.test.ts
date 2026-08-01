@@ -206,7 +206,7 @@ describe('CountdownOverlay', () => {
       props: { auto_sleeps_at: deadline, timeout_action: 'pause' }
     });
     expect(screen.getByText('23:45')).toBeTruthy();
-    expect(screen.getByText('到期將暫停')).toBeTruthy();
+    expect(screen.getByText('Pause on expiry')).toBeTruthy();
   });
 
   it('does not paint over the pointer', () => {
@@ -220,7 +220,7 @@ describe('CountdownOverlay', () => {
   it('shows the expired state at zero', () => {
     const deadline = new Date(Date.now() - 1_000).toISOString();
     render(CountdownOverlay, { props: { auto_sleeps_at: deadline } });
-    expect(screen.getByText('已到期')).toBeTruthy();
+    expect(screen.getByText('Expired')).toBeTruthy();
   });
 
   it('hides the badge while the tab is focused and shows it once blurred', async () => {
@@ -231,7 +231,7 @@ describe('CountdownOverlay', () => {
       props: { auto_sleeps_at: deadline, timeout_action: 'stop' }
     });
     expect(container.textContent).toContain('01:00');
-    expect(screen.getByText('到期將停止')).toBeTruthy();
+    expect(screen.getByText('Stop on expiry')).toBeTruthy();
 
     setHasFocus(true);
     window.dispatchEvent(new Event('focus'));
@@ -253,7 +253,7 @@ describe('CountdownOverlay', () => {
       props: { keep_time_deadline: deadline, keep_time_action: 'pause' }
     });
     expect(container.textContent).toContain('01:00');
-    expect(screen.getByText('到期將暫停')).toBeTruthy();
+    expect(screen.getByText('Pause on expiry')).toBeTruthy();
     unmount();
   });
 
@@ -331,7 +331,7 @@ describe('CountdownOverlay', () => {
       }
     });
     expect(container.textContent).toContain('01:00');
-    expect(screen.queryByText('已到期')).toBeNull();
+    expect(screen.queryByText('Expired')).toBeNull();
     unmount();
   });
 
@@ -424,7 +424,7 @@ describe('CountdownOverlay', () => {
       }
     });
     expect(container.textContent).toContain('01:00');
-    expect(screen.getByText('到期將暫停')).toBeTruthy();
+    expect(screen.getByText('Pause on expiry')).toBeTruthy();
     unmount();
   });
 

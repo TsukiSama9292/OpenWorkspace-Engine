@@ -161,14 +161,14 @@
   >
     <div class="text-sm font-semibold tabular-nums leading-tight">
       {#if expired}
-        已到期
+        Expired
       {:else if remaining !== null}
         {formatRemaining(remaining)}
       {/if}
     </div>
     {#if action && !expired}
       <div class="text-[10px] opacity-80 leading-tight text-center">
-        到期將{TIMEOUT_ACTION_LABELS[action]}
+        {TIMEOUT_ACTION_LABELS[action]} on expiry
       </div>
     {/if}
   </div>

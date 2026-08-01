@@ -1,8 +1,18 @@
 import type { Instance } from '$lib/types';
 import { api } from '$lib/api/client';
 
-export async function launchInstance(templateId: string): Promise<{ error?: string; instance?: Instance }> {
-  const res = await api.post<{ instance: Instance }>('/instances', { template_id: templateId });
+export type LaunchPersistence = 'use_persistent' | 'no_persistent' | 'reset_persistent';
+
+export async function launchInstance(
+  templateId: string,
+  persistence: LaunchPersistence = 'no_persistent'
+): Promise<{ error?: string; instance?: Instance }> {
+  const wantsPersistent = persistence !== 'no_persistent';
+  const res = await api.post<{ instance: Instance }>('/instances', {
+    template_id: templateId,
+    persistence,
+    mount_persistent: wantsPersistent
+  });
   if (res.error) return { error: res.error };
   if (res.data?.instance) return { instance: res.data.instance };
   return { error: 'Failed to launch instance' };

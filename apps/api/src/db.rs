@@ -653,6 +653,23 @@ impl<'a> WorkspaceInstanceRepository<'a> {
         Ok(model.map(|m| m.into()))
     }
 
+    /// Find an existing persistent (`mount_persistent = true`) instance for a
+    /// (template, owner) pair, if any. Used to enforce the one-persistent
+    /// instance per template-and-user rule at launch.
+    pub async fn find_persistent_by_template_and_owner(
+        &self,
+        template_id: Uuid,
+        owner_id: Uuid,
+    ) -> Result<Option<WorkspaceInstance>, sea_orm::DbErr> {
+        let model = workspace_instance::Entity::find()
+            .filter(workspace_instance::Column::TemplateId.eq(template_id))
+            .filter(workspace_instance::Column::OwnerId.eq(owner_id))
+            .filter(workspace_instance::Column::MountPersistent.eq(true))
+            .one(self.db)
+            .await?;
+        Ok(model.map(|m| m.into()))
+    }
+
     pub async fn list_by_owner(&self, owner_id: Uuid) -> Result<Vec<WorkspaceInstance>, sea_orm::DbErr> {
         let models = workspace_instance::Entity::find()
             .filter(workspace_instance::Column::OwnerId.eq(owner_id))
@@ -712,6 +729,29 @@ impl<'a> WorkspaceInstanceRepository<'a> {
         let result = workspace_instance::Entity::update(workspace_instance::ActiveModel {
             id: Set(id),
             container_id: Set(Some(container_id.to_string())),
+            ..Default::default()
+        })
+        .filter(workspace_instance::Column::Id.eq(id))
+        .exec(self.db)
+        .await;
+        match result {
+            Ok(_) => Ok(true),
+            Err(sea_orm::DbErr::RecordNotFound(_)) | Err(sea_orm::DbErr::RecordNotUpdated) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Persist a (re)resolved persistent host path on an Instance. Used to
+    /// backfill legacy `mount_persistent = true` records whose path was never
+    /// stored, on their first restart.
+    pub async fn update_resolved_volume_host_path(
+        &self,
+        id: Uuid,
+        host_path: Option<&str>,
+    ) -> Result<bool, sea_orm::DbErr> {
+        let result = workspace_instance::Entity::update(workspace_instance::ActiveModel {
+            id: Set(id),
+            resolved_volume_host_path: Set(host_path.map(|s| s.to_string())),
             ..Default::default()
         })
         .filter(workspace_instance::Column::Id.eq(id))
