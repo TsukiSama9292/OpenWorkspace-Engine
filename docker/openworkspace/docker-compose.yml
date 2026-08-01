@@ -21,7 +21,9 @@ services:
     volumes:
       - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./traefik/dynamic:/etc/traefik/dynamic:ro
-
+    networks:
+      - ow-network
+      - ow-service-network
   postgresql:
     image: postgres:18-alpine
     container_name: ow-postgres
@@ -41,6 +43,8 @@ services:
       timeout: 5s
       retries: 10
       start_period: 5s
+    networks:
+      - ow-service-network
 
   web:
     build:
@@ -54,6 +58,8 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
+    networks:
+      - ow-service-network
 
   api:
     build: ../../apps/api
@@ -86,13 +92,17 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
       - DOCKER_NETWORK=ow-network
       - TRAEFIK_DYNAMIC_DIR=/data/traefik/dynamic
+    networks:
+      - ow-service-network
     depends_on:
       postgresql:
         condition: service_healthy
 
 networks:
   ow-network:
-    external: true
+    driver: bridge
+  ow-service-network:
+    driver: bridge
 
 volumes:
   server-pgdata:
