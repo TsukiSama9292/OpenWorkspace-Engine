@@ -24,6 +24,50 @@ async fn create_test_template(ctx: &TestContext, suffix: &str) -> String {
     body["template"]["id"].as_str().unwrap().to_string()
 }
 
+// Waits until the instance's container is actually running, then mirrors what the
+// health worker does in production: marks the instance "running" in the DB. The
+// worker's own probe can't fire in tests because busybox containers serve nothing
+// on the VNC port, so the test simulates the post-probe transition directly.
+async fn wait_until_running(ctx: &TestContext, instance_id: &str) {
+    let docker = bollard::Docker::connect_with_local_defaults().unwrap();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let resp = ctx.get(&format!("/api/instances/{}", instance_id)).await;
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let container_id = body["instance"]["container_id"]
+            .as_str()
+            .expect("instance has no container_id")
+            .to_string();
+
+        let running = docker
+            .inspect_container(&container_id, None)
+            .await
+            .ok()
+            .and_then(|inspect| inspect.state)
+            .and_then(|state| state.running)
+            .unwrap_or(false);
+
+        if running {
+            let inst_id = uuid::Uuid::parse_str(instance_id).unwrap();
+            let db_url = common::pg_url(&ctx.db_name);
+            let db = sea_orm::Database::connect(&db_url).await.unwrap();
+            openworkspace_api::db::WorkspaceInstanceRepository::new(&db)
+                .update_status(inst_id, "running")
+                .await
+                .expect("failed to mark instance running");
+            return;
+        }
+
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "instance {} did not become running within 30s",
+            instance_id
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
 async fn launch_instance(ctx: &TestContext, template_id: &str) -> String {
     let resp = ctx
         .post("/api/instances", &serde_json::json!({
@@ -32,14 +76,31 @@ async fn launch_instance(ctx: &TestContext, template_id: &str) -> String {
         .await;
     let status = resp.status();
     let body: serde_json::Value = resp.json().await.unwrap();
-    if status != 200 || body["instance"]["status"].as_str() != Some("running") {
+    if status != 200 {
         panic!(
             "launch failed: status={}, body={}",
             status,
             serde_json::to_string_pretty(&body).unwrap()
         );
     }
-    body["instance"]["id"].as_str().unwrap().to_string()
+    let launch_status = body["instance"]["status"].as_str();
+    if launch_status != Some("starting") && launch_status != Some("running") {
+        panic!(
+            "launch returned unexpected status: {}",
+            serde_json::to_string_pretty(&body).unwrap()
+        );
+    }
+    if body["instance"]["container_id"].as_str().is_none() {
+        panic!(
+            "launch returned no container_id: {}",
+            serde_json::to_string_pretty(&body).unwrap()
+        );
+    }
+    let instance_id = body["instance"]["id"].as_str().unwrap().to_string();
+    if launch_status == Some("starting") {
+        wait_until_running(&ctx, &instance_id).await;
+    }
+    instance_id
 }
 
 #[tokio::test]
@@ -78,7 +139,9 @@ async fn test_stop_and_start_instance() {
     let resp = ctx.post(&format!("/api/instances/{}/start", instance_id), &serde_json::json!({})).await;
     assert_eq!(resp.status(), 200, "start failed: {:?}", resp.text().await);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["status"].as_str().unwrap(), "running");
+    assert_eq!(body["status"].as_str().unwrap(), "starting");
+
+    wait_until_running(&ctx, &instance_id).await;
 
     let resp = ctx.get(&format!("/api/instances/{}", instance_id)).await;
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -258,8 +321,13 @@ async fn test_start_existing_stopped_container() {
     let resp = ctx.post(&format!("/api/instances/{}/start", instance_id), &serde_json::json!({})).await;
     assert_eq!(resp.status(), 200, "start failed: {:?}", resp.text().await);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["status"].as_str(), Some("running"));
+    assert_eq!(body["status"].as_str(), Some("starting"));
 
+    wait_until_running(&ctx, &instance_id).await;
+
+    let resp = ctx.get(&format!("/api/instances/{}", instance_id)).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["instance"]["status"].as_str(), Some("running"));
 }
 
 #[tokio::test]
@@ -296,6 +364,8 @@ async fn test_start_already_running_container_just_updates_db() {
 
     let resp = ctx.post(&format!("/api/instances/{}/start", instance_id), &serde_json::json!({})).await;
     assert_eq!(resp.status(), 200);
+
+    wait_until_running(&ctx, &instance_id).await;
 
     let resp = ctx.get(&format!("/api/instances/{}", instance_id)).await;
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -362,8 +432,13 @@ async fn test_start_container_not_found_creates_new() {
     let resp = ctx.post(&format!("/api/instances/{}/start", instance_id), &serde_json::json!({})).await;
     assert_eq!(resp.status(), 200, "start with recreate failed: {:?}", resp.text().await);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["status"].as_str().unwrap(), "running");
+    assert_eq!(body["status"].as_str().unwrap(), "starting");
 
+    wait_until_running(&ctx, &instance_id).await;
+
+    let resp = ctx.get(&format!("/api/instances/{}", instance_id)).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["instance"]["status"].as_str().unwrap(), "running");
 }
 
 #[tokio::test]
@@ -476,8 +551,15 @@ async fn test_start_stopped_with_no_container_creates_new() {
     let resp = ctx.post(&format!("/api/instances/{}/start", instance_id), &serde_json::json!({})).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["status"].as_str().unwrap(), "running");
+    assert_eq!(body["status"].as_str().unwrap(), "starting");
     assert!(body["container_id"].as_str().is_some());
+
+    wait_until_running(&ctx, &instance_id).await;
+
+    let resp = ctx.get(&format!("/api/instances/{}", instance_id)).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["instance"]["status"].as_str().unwrap(), "running");
+    assert!(body["instance"]["container_id"].as_str().is_some());
 
 }
 
@@ -525,6 +607,11 @@ async fn test_start_with_container_in_unknown_state() {
     let resp = ctx.post(&format!("/api/instances/{}/start", instance_id), &serde_json::json!({})).await;
     assert_eq!(resp.status(), 200, "start after container removal failed: {:?}", resp.text().await);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["status"].as_str().unwrap(), "running");
+    assert_eq!(body["status"].as_str().unwrap(), "starting");
 
+    wait_until_running(&ctx, &instance_id).await;
+
+    let resp = ctx.get(&format!("/api/instances/{}", instance_id)).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["instance"]["status"].as_str().unwrap(), "running");
 }

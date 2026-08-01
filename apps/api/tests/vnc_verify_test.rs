@@ -1,9 +1,39 @@
 mod common;
 
 use common::TestContext;
-use sea_orm::ActiveModelTrait;
-use sea_orm::Set;
-use openworkspace_api::db::workspace_instance;
+
+// Creates an instance row directly in the DB (bypassing the launch API so the
+// VNC cache stays empty). This exercises vnc_verify's DB-hit path: the cache
+// is checked first, and a launch would have seeded it with status "starting".
+async fn create_db_instance(ctx: &TestContext, template_name: &str, status: &str) -> String {
+    let config_resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": template_name,
+        "image": "busybox:1"
+    })).await;
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
+
+    let db_url = common::pg_url(&ctx.db_name);
+    let db = sea_orm::Database::connect(&db_url).await.unwrap();
+    let admin_id = openworkspace_api::db::UserRepository::new(&db)
+        .find_by_username("admin")
+        .await
+        .unwrap()
+        .expect("admin user missing")
+        .0;
+    let repo = openworkspace_api::db::WorkspaceInstanceRepository::new(&db);
+    let instance = repo
+        .launch(
+            uuid::Uuid::parse_str(&template_id).unwrap(),
+            admin_id,
+            template_name,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+    repo.update_status(instance.id, status).await.unwrap();
+    instance.access_token
+}
 
 #[tokio::test]
 async fn test_vnc_verify_no_cookie() {
@@ -72,7 +102,7 @@ async fn test_vnc_verify_unknown_token_not_in_db() {
         .client
         .get(format!("{}/api/vnc/verify", ctx.base_url))
         .header("Cookie", format!("ow_token={}", token))
-        .header("X-Forwarded-Uri", "/vnc/nonexistent-token/websockify")
+        .header("X-Forwarded-Uri", "/kasmvnc/nonexistent-token/websockify")
         .send()
         .await
         .unwrap();
@@ -94,36 +124,14 @@ async fn test_vnc_verify_db_hit_running() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let config_resp = ctx.post("/api/templates", &serde_json::json!({
-        "name": "vnc-verify-test",
-        "image": "busybox:1"
-    })).await;
-    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
-
-    let launch_resp = ctx.post("/api/instances", &serde_json::json!({
-        "template_id": template_id
-    })).await;
-    let launch_body: serde_json::Value = launch_resp.json().await.unwrap();
-    let instance_id = launch_body["instance"]["id"].as_str().unwrap();
-    let access_token = launch_body["instance"]["access_token"].as_str().unwrap().to_string();
-
-    // Update instance status to "running" via DB
-    let inst_id = uuid::Uuid::parse_str(instance_id).unwrap();
-    let db_url = common::pg_url(&ctx.db_name);
-    let db = sea_orm::Database::connect(&db_url).await.unwrap();
-    let model = workspace_instance::ActiveModel {
-        id: Set(inst_id),
-        status: Set("running".to_string()),
-        ..Default::default()
-    };
-    model.update(&db).await.unwrap();
+    let access_token = create_db_instance(&ctx, "vnc-verify-test", "running").await;
 
     let token = ctx.login_token().await;
     let resp = ctx
         .client
         .get(format!("{}/api/vnc/verify", ctx.base_url))
         .header("Cookie", format!("ow_token={}", token))
-        .header("X-Forwarded-Uri", format!("/vnc/{}/websockify", access_token))
+        .header("X-Forwarded-Uri", format!("/kasmvnc/{}/websockify", access_token))
         .send()
         .await
         .unwrap();
@@ -137,36 +145,14 @@ async fn test_vnc_verify_db_hit_not_running() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let config_resp = ctx.post("/api/templates", &serde_json::json!({
-        "name": "vnc-verify-stopped",
-        "image": "busybox:1"
-    })).await;
-    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
-
-    let launch_resp = ctx.post("/api/instances", &serde_json::json!({
-        "template_id": template_id
-    })).await;
-    let launch_body: serde_json::Value = launch_resp.json().await.unwrap();
-    let instance_id = launch_body["instance"]["id"].as_str().unwrap();
-    let access_token = launch_body["instance"]["access_token"].as_str().unwrap().to_string();
-
-    // Force status to "stopped" — launch_instance may have set it to "running" if Docker succeeded
-    let inst_id = uuid::Uuid::parse_str(instance_id).unwrap();
-    let db_url = common::pg_url(&ctx.db_name);
-    let db = sea_orm::Database::connect(&db_url).await.unwrap();
-    let model = workspace_instance::ActiveModel {
-        id: Set(inst_id),
-        status: Set("stopped".to_string()),
-        ..Default::default()
-    };
-    model.update(&db).await.unwrap();
+    let access_token = create_db_instance(&ctx, "vnc-verify-stopped", "stopped").await;
 
     let token = ctx.login_token().await;
     let resp = ctx
         .client
         .get(format!("{}/api/vnc/verify", ctx.base_url))
         .header("Cookie", format!("ow_token={}", token))
-        .header("X-Forwarded-Uri", format!("/vnc/{}/websockify", access_token))
+        .header("X-Forwarded-Uri", format!("/kasmvnc/{}/websockify", access_token))
         .send()
         .await
         .unwrap();

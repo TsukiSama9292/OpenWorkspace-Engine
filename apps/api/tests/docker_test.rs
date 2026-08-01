@@ -52,6 +52,8 @@ async fn test_pause_unpause() {
         persistent_volume: None,
         command: Some(vec!["sleep".to_string(), "3600".to_string()]),
         runtime: None,
+        network_bandwidth_up_mbps: 0,
+        network_bandwidth_down_mbps: 0,
     };
 
     let id = client
@@ -104,6 +106,8 @@ async fn test_create_container_from_template() {
         persistent_volume: None,
         command: Some(vec!["sleep".to_string(), "3600".to_string()]),
         runtime: None,
+        network_bandwidth_up_mbps: 0,
+        network_bandwidth_down_mbps: 0,
     };
 
     let id = client
@@ -138,6 +142,8 @@ async fn test_create_container_from_template_with_env_and_dns() {
         persistent_volume: None,
         command: Some(vec!["sleep".to_string(), "3600".to_string()]),
         runtime: None,
+        network_bandwidth_up_mbps: 0,
+        network_bandwidth_down_mbps: 0,
     };
 
     let id = client
@@ -174,6 +180,8 @@ async fn test_create_container_from_template_with_volume() {
         persistent_volume: Some(tmp_dir.to_str().unwrap().to_string()),
         command: Some(vec!["sleep".to_string(), "3600".to_string()]),
         runtime: None,
+        network_bandwidth_up_mbps: 0,
+        network_bandwidth_down_mbps: 0,
     };
 
     let id = client
@@ -220,6 +228,8 @@ async fn test_create_container_from_template_with_exec() {
         persistent_volume: None,
         command: Some(vec!["sleep".to_string(), "3600".to_string()]),
         runtime: None,
+        network_bandwidth_up_mbps: 0,
+        network_bandwidth_down_mbps: 0,
     };
 
     let id = client
@@ -253,6 +263,8 @@ async fn test_create_container_from_template_with_hostname() {
         persistent_volume: None,
         command: Some(vec!["sleep".to_string(), "3600".to_string()]),
         runtime: None,
+        network_bandwidth_up_mbps: 0,
+        network_bandwidth_down_mbps: 0,
     };
 
     let id = client
@@ -283,6 +295,8 @@ async fn test_create_container_from_template_command_from_run_config() {
         persistent_volume: None,
         command: None,
         runtime: None,
+        network_bandwidth_up_mbps: 0,
+        network_bandwidth_down_mbps: 0,
     };
 
     let id = client
@@ -314,6 +328,8 @@ async fn test_create_container_from_template_no_command() {
         persistent_volume: None,
         command: None,
         runtime: None,
+        network_bandwidth_up_mbps: 0,
+        network_bandwidth_down_mbps: 0,
     };
 
     let _result = client.create_container_from_template(&name, 1, &config, "test_password", "").await;
@@ -340,6 +356,8 @@ async fn test_create_container_from_template_with_shm_size_and_network_mode() {
         persistent_volume: None,
         command: Some(vec!["sleep".to_string(), "3600".to_string()]),
         runtime: None,
+        network_bandwidth_up_mbps: 0,
+        network_bandwidth_down_mbps: 0,
     };
 
     let id = client
@@ -398,6 +416,8 @@ async fn test_create_container_from_template_with_gpu() {
         persistent_volume: None,
         command: Some(vec!["sleep".to_string(), "3600".to_string()]),
         runtime: None,
+        network_bandwidth_up_mbps: 0,
+        network_bandwidth_down_mbps: 0,
     };
 
     let result = client
@@ -433,6 +453,8 @@ async fn test_create_container_from_template_image_already_cached() {
         persistent_volume: None,
         command: Some(vec!["sleep".to_string(), "3600".to_string()]),
         runtime: None,
+        network_bandwidth_up_mbps: 0,
+        network_bandwidth_down_mbps: 0,
     };
 
     let _id1 = client
@@ -468,6 +490,8 @@ async fn test_create_container_from_template_cores_and_memory() {
         persistent_volume: None,
         command: Some(vec!["sleep".to_string(), "3600".to_string()]),
         runtime: None,
+        network_bandwidth_up_mbps: 0,
+        network_bandwidth_down_mbps: 0,
     };
 
     let id = client
@@ -523,6 +547,8 @@ async fn test_inspect_container_state_running() {
         persistent_volume: None,
         command: Some(vec!["sleep".to_string(), "3600".to_string()]),
         runtime: None,
+        network_bandwidth_up_mbps: 0,
+        network_bandwidth_down_mbps: 0,
     };
 
     let id = client

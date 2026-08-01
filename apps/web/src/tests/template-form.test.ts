@@ -30,6 +30,8 @@ const template: Template = {
   container_runtime: 'docker',
   max_run_seconds: 7200,
   timeout_action: 'stop',
+  network_bandwidth_up_mbps: 100,
+  network_bandwidth_down_mbps: 50,
   run_config: {
     hostname: 'devbox',
     dns: ['8.8.8.8', '1.1.1.1'],
@@ -60,6 +62,8 @@ const populatedState: TemplateFormState = {
   containerRuntime: 'docker',
   maxRunSeconds: 3600,
   timeoutAction: 'stop',
+  bandwidthUpMbps: 50,
+  bandwidthDownMbps: 25,
   envVars: [{ key: 'FOO', value: 'bar' }],
   execCommand: 'bash',
   volumeMappings: [{ host: '/h', container: '/c' }],
@@ -120,7 +124,9 @@ describe('template-form', () => {
           volume_mappings: { '/h': '/c' },
           persistent_storage_path: '/data',
           max_run_seconds: 3600,
-          timeout_action: 'stop'
+          timeout_action: 'stop',
+          network_bandwidth_up_mbps: 50,
+          network_bandwidth_down_mbps: 25
         })
       }));
     });
@@ -147,7 +153,9 @@ describe('template-form', () => {
           volume_mappings: {},
           persistent_storage_path: null,
           max_run_seconds: null,
-          timeout_action: 'remove'
+          timeout_action: 'remove',
+          network_bandwidth_up_mbps: 0,
+          network_bandwidth_down_mbps: 0
         })
       }));
     });
@@ -172,6 +180,24 @@ describe('template-form', () => {
       const result = await submitTemplate({ ...createInitialFormState(), name: 'X' });
       expect(result).toEqual({ error: 'Bad image' });
     });
+
+    it('rejects a negative upload bandwidth without calling the API', async () => {
+      const mockFetch = vi.fn();
+      vi.stubGlobal('fetch', mockFetch);
+
+      const result = await submitTemplate({ ...createInitialFormState(), name: 'X', bandwidthUpMbps: -1 });
+      expect(result).toEqual({ error: 'Upload bandwidth must be >= 0 (0 = unlimited)' });
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('rejects a negative download bandwidth without calling the API', async () => {
+      const mockFetch = vi.fn();
+      vi.stubGlobal('fetch', mockFetch);
+
+      const result = await submitTemplate({ ...createInitialFormState(), name: 'X', bandwidthDownMbps: -5 });
+      expect(result).toEqual({ error: 'Download bandwidth must be >= 0 (0 = unlimited)' });
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
   });
 
   describe('formStateFromTemplate', () => {
@@ -194,6 +220,8 @@ describe('template-form', () => {
         containerRuntime: 'docker',
         maxRunSeconds: 7200,
         timeoutAction: 'stop',
+        bandwidthUpMbps: 100,
+        bandwidthDownMbps: 50,
         envVars: [
           { key: 'FOO', value: 'bar' },
           { key: 'EMPTY', value: '' }
@@ -221,6 +249,13 @@ describe('template-form', () => {
       const state = formStateFromTemplate({ ...template, max_run_seconds: null, timeout_action: 'remove' });
       expect(state.maxRunSeconds).toBeNull();
       expect(state.timeoutAction).toBe('remove');
+    });
+
+    it('defaults missing bandwidth fields to zero', () => {
+      const { network_bandwidth_up_mbps, network_bandwidth_down_mbps, ...rest } = template;
+      const state = formStateFromTemplate(rest as Template);
+      expect(state.bandwidthUpMbps).toBe(0);
+      expect(state.bandwidthDownMbps).toBe(0);
     });
   });
 
@@ -286,7 +321,9 @@ describe('template-form', () => {
           volume_mappings: { '/h': '/c' },
           persistent_storage_path: '/data',
           max_run_seconds: 3600,
-          timeout_action: 'stop'
+          timeout_action: 'stop',
+          network_bandwidth_up_mbps: 50,
+          network_bandwidth_down_mbps: 25
         })
       }));
     });
@@ -297,6 +334,15 @@ describe('template-form', () => {
 
       const result = await updateTemplate('tpl-1', createInitialFormState());
       expect(result).toEqual({ error: 'Name is required' });
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('rejects a negative upload bandwidth without calling the API', async () => {
+      const mockFetch = vi.fn();
+      vi.stubGlobal('fetch', mockFetch);
+
+      const result = await updateTemplate('tpl-1', { ...createInitialFormState(), name: 'X', bandwidthUpMbps: -3 });
+      expect(result).toEqual({ error: 'Upload bandwidth must be >= 0 (0 = unlimited)' });
       expect(mockFetch).not.toHaveBeenCalled();
     });
   });

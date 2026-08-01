@@ -10,13 +10,30 @@ pub fn generate_access_password() -> String {
     use rand::Rng;
     let mut rng = rand::thread_rng();
     let len = 127;
-    let pool: Vec<u8> = (b'!'..=b'~').collect();
+    let pool: Vec<u8> = (b'a'..=b'z')
+        .chain(b'A'..=b'Z')
+        .chain(b'0'..=b'9')
+        .collect();
     (0..len)
         .map(|_| {
             let idx = rng.gen_range(0..pool.len());
             pool[idx] as char
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::generate_access_password;
+
+    #[test]
+    fn access_password_uses_only_alphanumeric_chars() {
+        for _ in 0..50 {
+            let pw = generate_access_password();
+            assert_eq!(pw.len(), 127);
+            assert!(pw.chars().all(|c| c.is_ascii_alphanumeric()));
+        }
+    }
 }
 
 // ── Entity Models ─────────────────────────────────────────────
@@ -77,6 +94,8 @@ pub mod workspace_template {
         pub persistent_storage_path: Option<String>,
         pub max_run_seconds: Option<i64>,
         pub timeout_action: String,
+        pub network_bandwidth_up_mbps: i32,
+        pub network_bandwidth_down_mbps: i32,
         pub created_at: DateTimeUtc,
         pub updated_at: DateTimeUtc,
     }
@@ -222,6 +241,8 @@ pub struct WorkspaceTemplate {
     pub persistent_storage_path: Option<String>,
     pub max_run_seconds: Option<i64>,
     pub timeout_action: String,
+    pub network_bandwidth_up_mbps: i32,
+    pub network_bandwidth_down_mbps: i32,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -246,6 +267,8 @@ impl From<workspace_template::Model> for WorkspaceTemplate {
             persistent_storage_path: m.persistent_storage_path,
             max_run_seconds: m.max_run_seconds,
             timeout_action: m.timeout_action,
+            network_bandwidth_up_mbps: m.network_bandwidth_up_mbps,
+            network_bandwidth_down_mbps: m.network_bandwidth_down_mbps,
             created_at: m.created_at,
             updated_at: m.updated_at,
         }
@@ -430,6 +453,8 @@ impl<'a> WorkspaceTemplateRepository<'a> {
         persistent_storage_path: Option<&str>,
         max_run_seconds: Option<i64>,
         timeout_action: &str,
+        network_bandwidth_up_mbps: i32,
+        network_bandwidth_down_mbps: i32,
     ) -> Result<WorkspaceTemplate, sea_orm::DbErr> {
         let id = Uuid::new_v4();
         let model = workspace_template::ActiveModel {
@@ -450,6 +475,8 @@ impl<'a> WorkspaceTemplateRepository<'a> {
             persistent_storage_path: Set(persistent_storage_path.map(|s| s.to_string())),
             max_run_seconds: Set(max_run_seconds),
             timeout_action: Set(timeout_action.to_string()),
+            network_bandwidth_up_mbps: Set(network_bandwidth_up_mbps),
+            network_bandwidth_down_mbps: Set(network_bandwidth_down_mbps),
             ..Default::default()
         };
         let inserted = model.insert(self.db).await?;
@@ -504,6 +531,8 @@ impl<'a> WorkspaceTemplateRepository<'a> {
         persistent_storage_path: Option<&str>,
         max_run_seconds: Option<i64>,
         timeout_action: &str,
+        network_bandwidth_up_mbps: i32,
+        network_bandwidth_down_mbps: i32,
     ) -> Result<bool, sea_orm::DbErr> {
         let result = workspace_template::Entity::update(workspace_template::ActiveModel {
             id: Set(id),
@@ -522,6 +551,8 @@ impl<'a> WorkspaceTemplateRepository<'a> {
             persistent_storage_path: Set(persistent_storage_path.map(|s| s.to_string())),
             max_run_seconds: Set(max_run_seconds),
             timeout_action: Set(timeout_action.to_string()),
+            network_bandwidth_up_mbps: Set(network_bandwidth_up_mbps),
+            network_bandwidth_down_mbps: Set(network_bandwidth_down_mbps),
             ..Default::default()
         })
         .filter(workspace_template::Column::Id.eq(id))

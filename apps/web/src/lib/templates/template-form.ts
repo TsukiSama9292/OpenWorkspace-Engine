@@ -28,6 +28,8 @@ export interface TemplateFormState {
   containerRuntime: string;
   maxRunSeconds: number | null;
   timeoutAction: TimeoutAction;
+  bandwidthUpMbps: number;
+  bandwidthDownMbps: number;
   envVars: EnvVar[];
   execCommand: string;
   volumeMappings: VolumeMapping[];
@@ -54,6 +56,8 @@ export function createInitialFormState(): TemplateFormState {
     containerRuntime: '',
     maxRunSeconds: null,
     timeoutAction: 'remove',
+    bandwidthUpMbps: 0,
+    bandwidthDownMbps: 0,
     envVars: [createEmptyEnvVar()],
     execCommand: '',
     volumeMappings: [createEmptyVolume()],
@@ -86,11 +90,21 @@ function buildTemplateBody(state: TemplateFormState): Record<string, unknown> {
     persistent_storage_path: state.persistentStoragePath || null,
     max_run_seconds: state.maxRunSeconds,
     timeout_action: state.timeoutAction,
+    network_bandwidth_up_mbps: state.bandwidthUpMbps,
+    network_bandwidth_down_mbps: state.bandwidthDownMbps,
   };
+}
+
+function validateBandwidth(state: TemplateFormState): string | undefined {
+  if (state.bandwidthUpMbps < 0) return 'Upload bandwidth must be >= 0 (0 = unlimited)';
+  if (state.bandwidthDownMbps < 0) return 'Download bandwidth must be >= 0 (0 = unlimited)';
+  return undefined;
 }
 
 export async function submitTemplate(state: TemplateFormState): Promise<{ error?: string; id?: string }> {
   if (!state.name.trim()) return { error: 'Name is required' };
+  const bandwidthError = validateBandwidth(state);
+  if (bandwidthError) return { error: bandwidthError };
 
   const res = await api.post<{ template: { id: string } }>('/templates', buildTemplateBody(state));
   if (res.error) return { error: res.error };
@@ -145,6 +159,8 @@ export function formStateFromTemplate(t: Template): TemplateFormState {
     containerRuntime: t.container_runtime,
     maxRunSeconds: t.max_run_seconds ?? null,
     timeoutAction: t.timeout_action ?? 'remove',
+    bandwidthUpMbps: t.network_bandwidth_up_mbps ?? 0,
+    bandwidthDownMbps: t.network_bandwidth_down_mbps ?? 0,
     envVars: rc.envVars,
     execCommand: parseExecConfig(t.exec_config as Record<string, unknown>),
     volumeMappings: parseVolumeMappings(t.volume_mappings as Record<string, string>),
@@ -163,6 +179,8 @@ export async function loadTemplate(id: string): Promise<{ state?: TemplateFormSt
 
 export async function updateTemplate(id: string, state: TemplateFormState): Promise<{ error?: string }> {
   if (!state.name.trim()) return { error: 'Name is required' };
+  const bandwidthError = validateBandwidth(state);
+  if (bandwidthError) return { error: bandwidthError };
 
   const res = await api.put<{ template: { id: string } }>('/templates/' + id, buildTemplateBody(state));
   if (res.error) return { error: res.error };

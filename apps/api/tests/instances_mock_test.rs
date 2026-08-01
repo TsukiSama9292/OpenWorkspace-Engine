@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use common::ensure_pg;
+use mockall::predicate::eq;
 use openworkspace_api::docker::MockDockerService;
 use openworkspace_api::routes::{AppState, api_routes};
 use openworkspace_api::db::WorkspaceInstanceRepository;
@@ -543,10 +544,54 @@ async fn test_start_stopped_container_success() {
             .returning(|_| Box::pin(async { Ok(Some("exited".to_string())) }));
         m.expect_start_container_by_id()
             .returning(|_| Box::pin(async { Ok(()) }));
+        m.expect_apply_bandwidth_limit()
+            .never();
     }).await;
 
     let token = ctx.login_admin().await;
     let (_, instance_id) = create_config_and_instance(&ctx, &token, "start-stopped-ok").await;
+    set_instance_status(&ctx.db, &instance_id, "stopped", Some("abc123def456")).await;
+
+    let resp = ctx.post_auth(&format!("/api/instances/{}/start", instance_id), &serde_json::json!({}), &token).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "starting");
+}
+
+// ── Bandwidth limit: applied on restart of an existing stopped container ──
+
+async fn create_bw_template(ctx: &MockContext, token: &str, name: &str, up_mbps: i32, down_mbps: i32) -> String {
+    let resp = ctx.post_auth("/api/templates", &serde_json::json!({
+        "name": name,
+        "image": "busybox:1",
+        "network_bandwidth_up_mbps": up_mbps,
+        "network_bandwidth_down_mbps": down_mbps
+    }), token).await;
+    resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn test_start_stopped_container_applies_bandwidth() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+        m.expect_inspect_container_state()
+            .returning(|_| Box::pin(async { Ok(Some("exited".to_string())) }));
+        m.expect_start_container_by_id()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        m.expect_apply_bandwidth_limit()
+            .with(eq("abc123def456"), eq(10), eq(20))
+            .returning(|_, _, _| Box::pin(async { Ok(()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let template_id = create_bw_template(&ctx, &token, "start-bw-ok", 10, 20).await;
+    let launch_resp = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id
+    }), &token).await;
+    let body = launch_resp.json::<serde_json::Value>().await.unwrap();
+    let instance_id = body["instance"]["id"].as_str().unwrap().to_string();
     set_instance_status(&ctx.db, &instance_id, "stopped", Some("abc123def456")).await;
 
     let resp = ctx.post_auth(&format!("/api/instances/{}/start", instance_id), &serde_json::json!({}), &token).await;
@@ -576,7 +621,7 @@ async fn test_start_recreate_success() {
 
     let resp = ctx.post_auth(&format!("/api/instances/{}/start", instance_id), &serde_json::json!({}), &token).await;
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["status"], "running");
+    assert_eq!(body["status"], "starting");
 }
 
 // ── Test 17: launch_instance — get_container_ip fails, still returns running (line 180) ──
@@ -781,7 +826,7 @@ async fn test_start_no_container_id_success() {
 
     let resp = ctx.post_auth(&format!("/api/instances/{}/start", instance_id), &serde_json::json!({}), &token).await;
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["status"], "running");
+    assert_eq!(body["status"], "starting");
 }
 
 // ── Test 27: delete_instance — container present, success (lines 255-267) ──

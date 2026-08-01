@@ -2,11 +2,11 @@
 
 ## Project nature
 
-Experimental. A Docker Compose stack that runs KasmVNC containers behind nginx, with a custom SvelteKit browser UI. Goal: share one Linux box's resources among multiple devs via browser-based virtual desktops.
+Experimental. A Docker Compose stack that runs KasmVNC containers behind a Traefik reverse proxy, with a custom SvelteKit browser UI. Goal: share one Linux box's resources among multiple devs via browser-based virtual desktops.
 
 ## Monorepo layout
 
-Two active apps: `apps/vnc-ui/` (SvelteKit frontend) and `apps/api/` (Rust API). pnpm workspaces + Turborepo.
+Two active apps: `apps/web/` (SvelteKit frontend) and `apps/api/` (Rust API). pnpm workspaces + Turborepo.
 
 ## Key commands
 
@@ -27,13 +27,34 @@ cd apps/api && apps/api/scripts/run_tests.sh   # Rust tests via cargo nextest
 
 No lint script exists in vnc-ui. Root `turbo lint` runs if configured per-package.
 
-## Build/deploy flow
+## Build/deploy flow (production: `docker/openworkspace/`)
 
-1. `pnpm build` in `apps/vnc-ui/` produces static files in `build/`
-2. Docker Compose bind-mounts `build/` into nginx container at `/usr/share/nginx/html`
-3. After rebuilding frontend: `docker compose restart nginx` to pick up changes
-4. KasmVNC containers (`kasm`, `kasm2`) serve desktops on internal port 6901
-5. nginx proxies WebSocket at `/kasm1/websockify` → `https://kasm:6901/websockify` (SSL verify off)
+1. `apps/web/Dockerfile` builds the SvelteKit static site (pnpm workspace, repo-root build context) and serves it from nginx.
+2. `apps/api/Dockerfile` builds the Rust API (runs as root; needs `pid: host`, `cap_add: [SYS_ADMIN, NET_ADMIN]`, `apparmor=unconfined`, rw Docker socket — see compose).
+3. Traefik is the single reverse proxy (file-provider only, no Docker socket): `/` → web, `/api` → api, and `/kasmvnc/<token>/websockify` + `/ttyd/<token>/` + `/jupyter/<token>/` → per-instance containers.
+4. The API writes per-instance route files into `./traefik/dynamic` (its `TRAEFIK_DYNAMIC_DIR`, mounted rw into the api container, ro into traefik at `/etc/traefik/dynamic`; traefik watches it). Instance route files (`*-ws.yml`) are gitignored there.
+5. Deploy: `docker compose -f docker/openworkspace/docker-compose.yml up -d --build`. Postgres data lives in the `server-pgdata` volume; `ow-network` is created by `scripts/docker-network.sh` (`pnpm run init`).
+6. Dev flow differs: `docker/openworkspace_dev/` traefik proxies to host-run dev servers (`host.docker.internal:5173` / `:3000`); the API writes routes to `docker/openworkspace_dev/traefik/dynamic` (compile-time default when `TRAEFIK_DYNAMIC_DIR` is unset).
+
+## Network bandwidth limiting (tc/HTB)
+
+- Per-template `network_bandwidth_up_mbps` / `network_bandwidth_down_mbps` (0 = unlimited).
+- Enforced with `tc`/HTB at the kernel on the instance veth pair: upload shapes egress on
+  `eth0` inside the container netns; download shapes egress on the host-side veth. To find
+  that veth, read the container's `eth0@ifN` via `nsenter` — `N` is the peer veth's ifindex
+  in the *host* netns (unique); do NOT match the container-side ifindex against host `@ifN`
+  values, since every container numbers its `eth0` as `2`.
+- `DockerService::apply_bandwidth_limit` (mockable) is the seam; the real `DockerClient`
+  runs `nsenter -t <pid> -n tc ...` (container netns for upload, pid 1 / host netns for
+  download). Apply points: inside `create_container_from_template` after start, and in the
+  start-instance route after restarting a stopped container (Docker recreates the veth pair
+  on every start, destroying prior qdiscs). Failures are fail-open (`tracing::error!`).
+- The API image runs as root with `iproute2`/`util-linux`; the prod compose gives the API
+  `pid: host`, `cap_add: [SYS_ADMIN, NET_ADMIN]`, and rw Docker socket.
+- Pure logic lives in `apps/api/src/network_qos.rs` (tc arg builders + veth matcher), unit
+  tested without Docker.
+- Verify a live host actually shapes: `sudo apps/api/scripts/apply_bw_smoke.sh` (needs
+  host `iproute2`, `iperf3` not required — uses python3; busybox:1 image).
 
 ## SvelteKit specifics
 

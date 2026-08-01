@@ -1,0 +1,21 @@
+http:
+  routers:
+    api-router:
+      entryPoints:
+        - web
+      rule: "PathPrefix(`/api`)"
+      service: "api-service"
+
+    web-router:
+      entryPoints:
+        - web
+      rule: "PathPrefix(`/`)"
+      service: "web-service"
+
+  middlewares:
+    vnc-auth:
+      forwardAuth:
+        address: "http://ow-api:3000/api/vnc/verify"
+        trustForwardHeader: true
+        authResponseHeaders:
+          - "X-Forwarded-User"

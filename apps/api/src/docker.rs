@@ -75,6 +75,8 @@ pub struct ContainerConfig {
     pub persistent_volume: Option<String>,
     pub command: Option<Vec<String>>,
     pub runtime: Option<String>,
+    pub network_bandwidth_up_mbps: i32,
+    pub network_bandwidth_down_mbps: i32,
 }
 
 pub fn runtime_to_host_config(value: &str) -> Option<String> {
@@ -145,6 +147,17 @@ pub trait DockerService: Send + Sync {
         container_id: &str,
         network_name: &str,
     ) -> Result<String, String>;
+
+    /// Apply per-instance network bandwidth limits (Mbps, `0` = unlimited).
+    /// Egress on the container's `eth0` is shaped for upload; egress on the
+    /// host-side veth (the container's ingress) is shaped for download.
+    /// A fully unlimited request is a no-op.
+    async fn apply_bandwidth_limit(
+        &self,
+        container_id: &str,
+        up_mbps: i32,
+        down_mbps: i32,
+    ) -> Result<(), String>;
 }
 
 pub fn is_container_not_found(err: &bollard::errors::Error) -> bool {
@@ -370,10 +383,16 @@ impl DockerService for DockerClient {
             });
 
         // ── SHM size ──
-        let shm_size: Option<i64> = config
-            .run_config
-            .get("shm_size")
-            .and_then(|v| v.as_i64());
+        // KasmVNC/Chrome exhausts Docker's default 64MB /dev/shm, which crashes
+        // the desktop browser with "No space left on device". Default to 512MB
+        // (Kasm's documented minimum) when the template does not override it.
+        let shm_size: Option<i64> = Some(
+            config
+                .run_config
+                .get("shm_size")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(512 * 1024 * 1024),
+        );
 
         // ── Hostname ──
         let hostname: Option<&str> = config
@@ -486,6 +505,29 @@ impl DockerService for DockerClient {
             .start_container(&container.id, None::<StartContainerOptions<String>>)
             .await
             .map_err(|e| e.to_string())?;
+
+        // ── Apply per-instance bandwidth limit (fail-open) ──
+        if config.network_bandwidth_up_mbps > 0 || config.network_bandwidth_down_mbps > 0 {
+            match self
+                .apply_bandwidth_limit(
+                    &container.id,
+                    config.network_bandwidth_up_mbps,
+                    config.network_bandwidth_down_mbps,
+                )
+                .await
+            {
+                Ok(()) => tracing::info!(
+                    "Applied bandwidth limit for '{}' (up={} Mbps, down={} Mbps)",
+                    container_name,
+                    config.network_bandwidth_up_mbps,
+                    config.network_bandwidth_down_mbps
+                ),
+                Err(e) => tracing::error!(
+                    "Failed to apply bandwidth limit for '{}': {} (container keeps running without limit) — TODO: notify admin",
+                    container_name, e
+                ),
+            }
+        }
 
         // ── Exec post-start commands ──
         if let Some(commands) = config.exec_config.as_object() {
@@ -620,6 +662,92 @@ impl DockerService for DockerClient {
             .and_then(|net| net.ip_address)
             .filter(|ip| !ip.is_empty())
             .ok_or_else(|| format!("no IP on network '{}' for container {}", network_name, &container_id[..12]))
+    }
+
+    async fn apply_bandwidth_limit(
+        &self,
+        container_id: &str,
+        up_mbps: i32,
+        down_mbps: i32,
+    ) -> Result<(), String> {
+        if up_mbps <= 0 && down_mbps <= 0 {
+            return Ok(());
+        }
+
+        let info = self
+            .docker
+            .inspect_container(container_id, None)
+            .await
+            .map_err(|e| format!("inspect failed: {}", e))?;
+        let pid = info.state.and_then(|s| s.pid).unwrap_or(0) as u32;
+        if pid == 0 {
+            let short_id: String = container_id.chars().take(12).collect();
+            return Err(format!("container {} is not running (pid 0)", short_id));
+        }
+
+        // Upload: shape egress on eth0 inside the container's netns.
+        if up_mbps > 0 {
+            crate::network_qos::apply_htb(&run_nsenter_ns, pid, "eth0", up_mbps as u64)?;
+        }
+
+        // Download: shape egress on the host-side veth (container ingress).
+        if down_mbps > 0 {
+            let eth0_output = run_nsenter_ns(
+                pid,
+                &["/usr/sbin/ip", "-o", "link", "show", "eth0"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect::<Vec<_>>(),
+            )?;
+            // From inside the container netns, `eth0@ifN` names the peer veth's
+            // ifindex in the *host* netns (unique). The container-side ifindex
+            // (before `@`) is the same in every container netns and cannot be
+            // used to find the right host-side veth.
+            let host_ifindex = crate::network_qos::parse_peer_ifindex(&eth0_output)
+                .ok_or_else(|| format!("could not parse eth0 peer ifindex from '{}'", eth0_output.trim()))?;
+
+            let host_links = run_nsenter_ns(
+                1,
+                &["/usr/sbin/ip", "-o", "link", "show", "type", "veth"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect::<Vec<_>>(),
+            )?;
+            let veths = crate::network_qos::parse_host_veths(&host_links);
+            let host_veth = crate::network_qos::find_host_veth(&veths, host_ifindex)
+                .ok_or_else(|| {
+                    let short_id: String = container_id.chars().take(12).collect();
+                    format!(
+                        "no host-side veth matches eth0 peer ifindex {} for container {}",
+                        host_ifindex, short_id
+                    )
+                })?;
+
+            crate::network_qos::apply_htb(&run_nsenter_ns, 1, &host_veth, down_mbps as u64)?;
+        }
+
+        Ok(())
+    }
+}
+
+/// Run `nsenter -t <pid> -n <args>` and return stdout on success.
+fn run_nsenter_ns(pid: u32, args: &[String]) -> Result<String, String> {
+    let output = std::process::Command::new("nsenter")
+        .arg("-t")
+        .arg(pid.to_string())
+        .arg("-n")
+        .args(args)
+        .output()
+        .map_err(|e| format!("failed to spawn nsenter for pid {}: {}", pid, e))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        Err(format!(
+            "nsenter pid {} {:?} failed: {}",
+            pid,
+            args,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
     }
 }
 

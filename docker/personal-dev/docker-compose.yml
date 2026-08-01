@@ -23,7 +23,7 @@ services:
 #   usb_macvlan:
 #     driver: macvlan
 #     driver_opts:
-#       parent: enx1a4d793aeca5
+#       parent: enx9edb4b07d4e8
 #     ipam:
 #       config:
 #         - subnet: 10.122.78.0/24

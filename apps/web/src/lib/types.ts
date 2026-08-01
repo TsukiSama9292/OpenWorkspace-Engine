@@ -24,6 +24,8 @@ export interface Template {
   container_runtime: string;
   max_run_seconds: number | null;
   timeout_action: TimeoutAction;
+  network_bandwidth_up_mbps: number;
+  network_bandwidth_down_mbps: number;
   run_config: Record<string, unknown>;
   exec_config: Record<string, unknown>;
   volume_mappings: Record<string, string>;

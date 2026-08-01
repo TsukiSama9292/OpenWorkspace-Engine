@@ -24,7 +24,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dotenvy = "0.15"
 tar = "0.4"
 dashmap = "6"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 migration = { path = "migration" }
 sea-orm = { version = "1", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
 async-trait = "0.1"
@@ -33,7 +33,7 @@ base64 = "0.22"
 rand = "0.8"
 
 [dev-dependencies]
-reqwest = { version = "0.12", features = ["json", "cookies"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "rustls-tls"] }
 tower = { version = "0.5", features = ["util"] }
 postgres = "0.19"
 tokio-postgres = "0.7.18"

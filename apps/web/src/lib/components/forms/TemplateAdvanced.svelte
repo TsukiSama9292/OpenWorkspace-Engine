@@ -9,6 +9,8 @@
     shmSize: string;
     networkMode: string;
     containerRuntime: string;
+    bandwidthUpMbps: number;
+    bandwidthDownMbps: number;
     envVars: EnvVar[];
     execCommand: string;
     volumeMappings: VolumeMapping[];
@@ -20,6 +22,8 @@
     shmSize = $bindable(),
     networkMode = $bindable(),
     containerRuntime = $bindable(),
+    bandwidthUpMbps = $bindable(),
+    bandwidthDownMbps = $bindable(),
     envVars = $bindable(),
     execCommand = $bindable(),
     volumeMappings = $bindable()
@@ -55,6 +59,19 @@
         <option value="">Default</option>
         <option value="runsc">runsc (gVisor)</option>
       </select>
+    </label>
+  </div>
+
+  <h2 class="text-base font-semibold text-surface-200">Network Bandwidth (Mbps)</h2>
+  <p class="text-sm text-zinc-500 -mt-2">0 = unlimited. Applied per container via kernel traffic shaping (tc/HTB) on the host.</p>
+  <div class="grid grid-cols-2 gap-3">
+    <label class={labelClass}>
+      <span class={spanClass}>Upload Limit (Mbps)</span>
+      <input type="number" min="0" step="1" bind:value={bandwidthUpMbps} placeholder="0" class={inputClass} />
+    </label>
+    <label class={labelClass}>
+      <span class={spanClass}>Download Limit (Mbps)</span>
+      <input type="number" min="0" step="1" bind:value={bandwidthDownMbps} placeholder="0" class={inputClass} />
     </label>
   </div>
 

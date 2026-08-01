@@ -200,6 +200,159 @@ async fn test_create_template_with_all_fields() {
 }
 
 #[tokio::test]
+async fn test_create_template_with_network_bandwidth() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "bw-config",
+        "image": "busybox:1",
+        "network_bandwidth_up_mbps": 100,
+        "network_bandwidth_down_mbps": 50
+    })).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["template"]["network_bandwidth_up_mbps"], 100);
+    assert_eq!(body["template"]["network_bandwidth_down_mbps"], 50);
+
+    let template_id = body["template"]["id"].as_str().unwrap();
+    let resp = ctx.get(&format!("/api/templates/{}", template_id)).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["template"]["network_bandwidth_up_mbps"], 100);
+    assert_eq!(body["template"]["network_bandwidth_down_mbps"], 50);
+}
+
+#[tokio::test]
+async fn test_create_template_default_network_bandwidth() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "no-bw-config",
+        "image": "busybox:1"
+    })).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["template"]["network_bandwidth_up_mbps"], 0);
+    assert_eq!(body["template"]["network_bandwidth_down_mbps"], 0);
+}
+
+#[tokio::test]
+async fn test_create_template_rejects_negative_network_bandwidth() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "bad-up-config",
+        "image": "busybox:1",
+        "network_bandwidth_up_mbps": -1
+    })).await;
+    assert_eq!(resp.status(), 400);
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "bad-down-config",
+        "image": "busybox:1",
+        "network_bandwidth_down_mbps": -5
+    })).await;
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_update_template_network_bandwidth() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "bw-update",
+        "image": "busybox:1"
+    })).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let template_id = body["template"]["id"].as_str().unwrap();
+
+    let resp = ctx.put(&format!("/api/templates/{}", template_id), &serde_json::json!({
+        "name": "bw-update",
+        "image": "busybox:1",
+        "cores": 2,
+        "memory": 4294967296_i64,
+        "gpu_count": 0,
+        "run_config": {},
+        "exec_config": {},
+        "volume_mappings": {},
+        "network_bandwidth_up_mbps": 250,
+        "network_bandwidth_down_mbps": 120
+    })).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["template"]["network_bandwidth_up_mbps"], 250);
+    assert_eq!(body["template"]["network_bandwidth_down_mbps"], 120);
+
+    let resp = ctx.get(&format!("/api/templates/{}", template_id)).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["template"]["network_bandwidth_up_mbps"], 250);
+    assert_eq!(body["template"]["network_bandwidth_down_mbps"], 120);
+}
+
+#[tokio::test]
+async fn test_update_template_rejects_negative_network_bandwidth() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "bw-bad-update",
+        "image": "busybox:1"
+    })).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let template_id = body["template"]["id"].as_str().unwrap();
+
+    let resp = ctx.put(&format!("/api/templates/{}", template_id), &serde_json::json!({
+        "name": "bw-bad-update",
+        "image": "busybox:1",
+        "cores": 2,
+        "memory": 4294967296_i64,
+        "gpu_count": 0,
+        "run_config": {},
+        "exec_config": {},
+        "volume_mappings": {},
+        "network_bandwidth_down_mbps": -10
+    })).await;
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_update_template_bandwidth_resets_to_zero_when_omitted() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "bw-reset",
+        "image": "busybox:1",
+        "network_bandwidth_up_mbps": 80,
+        "network_bandwidth_down_mbps": 40
+    })).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let template_id = body["template"]["id"].as_str().unwrap();
+
+    let resp = ctx.put(&format!("/api/templates/{}", template_id), &serde_json::json!({
+        "name": "bw-reset",
+        "image": "busybox:1",
+        "cores": 2,
+        "memory": 4294967296_i64,
+        "gpu_count": 0,
+        "run_config": {},
+        "exec_config": {},
+        "volume_mappings": {}
+    })).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["template"]["network_bandwidth_up_mbps"], 0);
+    assert_eq!(body["template"]["network_bandwidth_down_mbps"], 0);
+}
+
+#[tokio::test]
 async fn test_context_helpers() {
     let ctx = TestContext::new().await;
     let _ = ctx.login_user("admin", "admin").await;
@@ -305,6 +458,8 @@ async fn test_template_to_json_fields_in_response() {
     assert_eq!(cfg["persistent_storage_path"], "/data");
     assert!(cfg["max_run_seconds"].is_null());
     assert_eq!(cfg["timeout_action"], "remove");
+    assert_eq!(cfg["network_bandwidth_up_mbps"], 0);
+    assert_eq!(cfg["network_bandwidth_down_mbps"], 0);
     assert_eq!(cfg["instance_count"], 0);
     assert!(cfg["owner_id"].is_string());
     assert!(cfg["created_at"].is_string());

@@ -92,6 +92,8 @@ impl WorkerTestContext {
                 None,
                 None,
                 "remove",
+                0,
+                0,
             )
             .await
             .unwrap();
@@ -136,6 +138,8 @@ impl WorkerTestContext {
                 None,
                 max_run_seconds,
                 timeout_action,
+                0,
+                0,
             )
             .await
             .unwrap();

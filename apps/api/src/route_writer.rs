@@ -2,6 +2,11 @@ use crate::docker::RemoteType;
 use std::path::PathBuf;
 
 fn default_dynamic_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("TRAEFIK_DYNAMIC_DIR") {
+        if !dir.is_empty() {
+            return PathBuf::from(dir);
+        }
+    }
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     PathBuf::from(manifest_dir)
         .join("../../docker/openworkspace_dev/traefik/dynamic")

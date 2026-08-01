@@ -11,6 +11,7 @@ mod m20260723_000007_expand_vnc_password;
 mod m20260723_000008_add_remote_type;
 mod m20260723_000009_add_container_runtime;
 mod m20260731_000010_add_auto_sleep;
+mod m20260731_000011_add_network_bandwidth;
 
 pub struct Migrator;
 
@@ -28,6 +29,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260723_000008_add_remote_type::Migration),
             Box::new(m20260723_000009_add_container_runtime::Migration),
             Box::new(m20260731_000010_add_auto_sleep::Migration),
+            Box::new(m20260731_000011_add_network_bandwidth::Migration),
         ]
     }
 }

@@ -229,6 +229,8 @@ async fn launch_instance(
         persistent_volume: resolved_path.map(|s| s.to_string()),
         command: None,
         runtime: Some(resolve_runtime(&template.container_runtime, &state.settings.container_runtime)),
+        network_bandwidth_up_mbps: template.network_bandwidth_up_mbps,
+        network_bandwidth_down_mbps: template.network_bandwidth_down_mbps,
     };
 
     match state.docker
@@ -407,6 +409,22 @@ async fn start_instance(
                                 Json(serde_json::json!({"error": "Failed to start container"})),
                             )
                         })?;
+
+                        // Docker recreates the veth pair on start, destroying any
+                        // prior qdisc — re-apply the template's bandwidth limit.
+                        if let Some(t) = template.as_ref() {
+                            if t.network_bandwidth_up_mbps > 0 || t.network_bandwidth_down_mbps > 0 {
+                                if let Err(e) = state.docker
+                                    .apply_bandwidth_limit(cid, t.network_bandwidth_up_mbps, t.network_bandwidth_down_mbps)
+                                    .await
+                                {
+                                    tracing::error!(
+                                        "Failed to apply bandwidth limit for '{}': {} (container keeps running without limit) — TODO: notify admin",
+                                        instance.name, e
+                                    );
+                                }
+                            }
+                        }
                     }
                     Some(cid.clone())
                 }
@@ -426,6 +444,8 @@ async fn start_instance(
                             persistent_volume: instance.resolved_volume_host_path.clone(),
                             command: None,
                             runtime: Some(resolve_runtime(&template.container_runtime, &state.settings.container_runtime)),
+                            network_bandwidth_up_mbps: template.network_bandwidth_up_mbps,
+                            network_bandwidth_down_mbps: template.network_bandwidth_down_mbps,
                         };
                         let new_id = state.docker.create_container_from_template(&instance.name, instance.instance_number, &container_config, &instance.access_password, &instance.access_token).await.map_err(|e| {
                             tracing::error!("Failed to create container for '{}': {}", instance.name, e);
@@ -460,6 +480,8 @@ async fn start_instance(
                     persistent_volume: instance.resolved_volume_host_path.clone(),
                     command: None,
                     runtime: Some(resolve_runtime(&template.container_runtime, &state.settings.container_runtime)),
+                    network_bandwidth_up_mbps: template.network_bandwidth_up_mbps,
+                    network_bandwidth_down_mbps: template.network_bandwidth_down_mbps,
                 };
                 let new_id = state.docker.create_container_from_template(&instance.name, instance.instance_number, &container_config, &instance.access_password, &instance.access_token).await.map_err(|e| {
                     tracing::error!("Failed to create container for '{}': {}", instance.name, e);

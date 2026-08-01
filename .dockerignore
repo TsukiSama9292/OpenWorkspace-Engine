@@ -1,0 +1,11 @@
+**/node_modules
+**/.svelte-kit
+**/build
+**/.turbo
+.git
+.opencode
+.scratch
+references_repo
+apps/api/target
+docker/openworkspace/traefik/dynamic/*-ws.yml
+**/*.log
