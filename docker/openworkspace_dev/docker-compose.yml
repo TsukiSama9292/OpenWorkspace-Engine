@@ -10,7 +10,7 @@ x-default-opts: &default-opts
 services:
   traefik:
     image: traefik:v3.7.4
-    container_name: ow-traefik
+    container_name: ow-dev-traefik
     <<: *default-opts
     command:
       - "--providers.docker=true"
@@ -33,7 +33,7 @@ services:
 
   postgresql:
     image: postgres:18-alpine
-    container_name: ow-postgres
+    container_name: ow-dev-postgres
     <<: *default-opts
     ports:
       - "55432:5432"

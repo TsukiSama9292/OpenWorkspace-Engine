@@ -63,12 +63,16 @@ services:
     # Host PID sharing + NET_ADMIN/SYS_ADMIN let the API reach the host and
     # instance network namespaces to apply tc/HTB bandwidth limits. It needs
     # rw access to the Docker socket to create/manage instance containers.
-    # apparmor=unconfined: Docker's default profile denies setns(), which
-    # nsenter needs to join the instance network namespace.
+    # SYS_PTRACE: opening /proc/<pid>/ns/net (e.g. pid 1 = host systemd) is a
+    # ptrace access check; without it the download-side veth shaping fails.
+    # apparmor=unconfined: Docker's default profile only allows ptrace of other
+    # docker-default peers, so it blocks reaching host processes like systemd;
+    # it also denies setns()/namespace joins the API needs.
     pid: host
     cap_add:
       - SYS_ADMIN
       - NET_ADMIN
+      - SYS_PTRACE
     security_opt:
       - apparmor=unconfined
     volumes:
