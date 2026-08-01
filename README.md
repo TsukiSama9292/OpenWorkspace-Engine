@@ -165,8 +165,9 @@ See [docs/development.md](docs/development.md) for environment variables, debugg
 - **Terminal (ttyd)** — Lightweight browser-based terminal for quick CLI access
 
 ### Security & Isolation
-- **Cross-tenant isolation** — Every instance protected by a per-instance access token (94<sup>127</sup> combinations). Prevents tenants from directly accessing another tenant's instance via the container network — every request must go through the proxy with a valid token
+- **Cross-tenant isolation** — Every instance protected by a per-instance access token (62<sup>127</sup> combinations, 127 chars from `a-z A-Z 0-9`). Prevents tenants from directly accessing another tenant's instance via the container network — every request must go through the proxy with a valid token
 - **gVisor sandboxing** — Template-level `Container Runtime` option to select `runsc(gVisor)`, intercepting high-risk syscalls for host protection
+- **GPU passthrough (NVProxy)** — gVisor's `--nvproxy` proxies NVIDIA ioctls from the sandbox to the host driver. Officially supported GPUs are on **Turing / Ampere / Ada Lovelace / Hopper** (T4, A100/A10G, L4, H100); same-microarchitecture consumer cards (e.g. RTX 3090, RTX 4090) likely work — verified on Turing (GTX 1650) and Ampere (RTX 3060), Maxwell (GTX 970) fails. See [docs/gvison.md](docs/gvison.md)
 - **JWT Cookie Auth** — `ow_token` cookie + Traefik ForwardAuth for WebSocket upgrade validation
 - **Headless Instance Auth** — Proxy injects credentials server-side for KasmVNC, Jupyter Lab, and ttyd; browser never sees secrets, users never manually auth to instances
 - **Per-Instance RBAC** — Admin / Manager / User tiers with ownership verification on mutation endpoints
@@ -209,6 +210,7 @@ See [docs/persistent-storage.md](docs/persistent-storage.md) for the full design
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | System architecture, routing, lifecycle, DB schema |
 | [docs/persistent-storage.md](docs/persistent-storage.md) | Persistent user data: paths, volume lifecycle, launch modes |
+| [docs/gvison.md](docs/gvison.md) | gVisor/runsc sandboxing, NVProxy GPU passthrough, driver setup |
 | [docs/frontend.md](docs/frontend.md) | SvelteKit structure, components, CSS strategy |
 | [docs/rbac.md](docs/rbac.md) | Role permissions matrix, implementation |
 | [docs/vnc-auth.md](docs/vnc-auth.md) | VNC password flow, Traefik header injection, security model |

@@ -30,18 +30,29 @@ Each instance has a `vnc_password` column in PostgreSQL (`workspace_instances.vn
 ### Generation
 
 ```rust
-pub fn generate_vnc_password() -> String {
-    const PASSWORD_LEN: usize = 127;
-    const CHARSET: &[u8] = b"!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ\
-        [\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
-    // 94 printable ASCII characters (space excluded)
-    // 127 chars / 94^127 ≈ 256 bits of entropy
+// apps/api/src/db.rs::generate_access_password
+pub fn generate_access_password() -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    let len = 127;
+    let pool: Vec<u8> = (b'a'..=b'z')
+        .chain(b'A'..=b'Z')
+        .chain(b'0'..=b'9')
+        .collect();
+    // 62 alphanumeric characters (a-z, A-Z, 0-9)
+    // 127 chars / 62^127 ≈ 756 bits of entropy
+    (0..len)
+        .map(|_| {
+            let idx = rng.gen_range(0..pool.len());
+            pool[idx] as char
+        })
+        .collect()
 }
 ```
 
 - Fixed length: **127 characters** (KasmVNC struct limit: 128)
-- Charset: 94 printable ASCII chars (`!` through `~`)
-- Entropy: ~256 bits (equivalent to a strong random key)
+- Charset: 62 alphanumeric chars (`a-z`, `A-Z`, `0-9`)
+- Entropy: `127 × log₂(62)` ≈ **756 bits** (equivalent to a strong random key)
 
 ### Injection into KasmVNC
 
