@@ -1,34 +1,55 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { formatRemaining, remainingMs, severity } from './countdown';
+  import { formatRemaining, remainingMs, selectDeadline, severity } from './countdown';
   import { TIMEOUT_ACTION_LABELS } from './countdown';
+  import { tabHasFocus } from '$lib/keepalive/keepalive';
   import type { TimeoutAction } from '$lib/types';
 
   interface ResyncResult {
-    deadline: string | null;
-    action: TimeoutAction | null;
+    auto_sleeps_at: string | null;
+    timeout_action: TimeoutAction | null;
+    keep_time_deadline: string | null;
+    keep_time_action: TimeoutAction | null;
   }
 
   interface Props {
-    deadline?: string | null;
-    action?: TimeoutAction | null;
+    auto_sleeps_at?: string | null;
+    timeout_action?: TimeoutAction | null;
+    keep_time_deadline?: string | null;
+    keep_time_action?: TimeoutAction | null;
+    keep_time_seconds?: number | null;
+    last_heartbeat_at?: number | null;
     onResync?: (() => Promise<ResyncResult | null>) | null;
   }
 
-  let { deadline = null, action = null, onResync = null }: Props = $props();
+  let {
+    auto_sleeps_at = null,
+    timeout_action = null,
+    keep_time_deadline = null,
+    keep_time_action = null,
+    keep_time_seconds = null,
+    last_heartbeat_at = null,
+    onResync = null
+  }: Props = $props();
 
   const RESYNC_MS = 30_000;
 
   let now = $state(Date.now());
   let tickTimer: ReturnType<typeof setInterval> | undefined;
   let resyncTimer: ReturnType<typeof setInterval> | undefined;
+  let visible = $state(
+    typeof document === 'undefined' ? false : document.visibilityState === 'visible'
+  );
+  let focused = $state(typeof document === 'undefined' ? false : tabHasFocus());
 
   async function resync() {
     if (!onResync) return;
     const next = await onResync();
     if (next) {
-      deadline = next.deadline;
-      action = next.action;
+      auto_sleeps_at = next.auto_sleeps_at;
+      timeout_action = next.timeout_action;
+      keep_time_deadline = next.keep_time_deadline;
+      keep_time_action = next.keep_time_action;
     }
   }
 
@@ -48,7 +69,19 @@
   }
 
   function onVisibilityChange() {
-    if (document.visibilityState === 'visible') {
+    const visibleNow = document.visibilityState === 'visible';
+    if (visibleNow) {
+      now = Date.now();
+      resync();
+    }
+    visible = visibleNow;
+    focused = tabHasFocus();
+  }
+
+  function recomputeFocus() {
+    const wasFocused = focused;
+    focused = tabHasFocus();
+    if (wasFocused !== focused) {
       now = Date.now();
       resync();
     }
@@ -57,16 +90,45 @@
   onMount(() => {
     startTimers();
     document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('focus', recomputeFocus);
+    window.addEventListener('blur', recomputeFocus);
+    document.addEventListener('focusin', recomputeFocus);
+    document.addEventListener('focusout', recomputeFocus);
   });
 
   onDestroy(() => {
     stopTimers();
     document.removeEventListener('visibilitychange', onVisibilityChange);
+    window.removeEventListener('focus', recomputeFocus);
+    window.removeEventListener('blur', recomputeFocus);
+    document.removeEventListener('focusin', recomputeFocus);
+    document.removeEventListener('focusout', recomputeFocus);
   });
 
-  const remaining = $derived(remainingMs(deadline, now));
+  const keepDeadline = $derived(
+    (() => {
+      const serverMs = keep_time_deadline ? Date.parse(keep_time_deadline) : Number.NaN;
+      const localMs =
+        keep_time_seconds && last_heartbeat_at
+          ? last_heartbeat_at + keep_time_seconds * 1000
+          : Number.NaN;
+      if (Number.isNaN(serverMs) && Number.isNaN(localMs)) return null;
+      if (Number.isNaN(serverMs)) return new Date(localMs).toISOString();
+      if (Number.isNaN(localMs)) return keep_time_deadline;
+      return new Date(Math.max(serverMs, localMs)).toISOString();
+    })()
+  );
+
+  const selected = $derived(
+    selectDeadline(auto_sleeps_at, timeout_action, keepDeadline, keep_time_action)
+  );
+  const remaining = $derived(selected === null ? null : remainingMs(selected.deadline, now));
+  const action = $derived(selected?.action ?? null);
   const level = $derived(remaining === null ? null : severity(remaining));
   const expired = $derived(remaining !== null && remaining <= 0);
+  const show = $derived(
+    selected !== null && remaining !== null && visible && !focused
+  );
 
   let zeroResynced = $state(false);
 
@@ -89,7 +151,7 @@
   };
 </script>
 
-{#if remaining !== null}
+{#if show}
   <div
     class="fixed top-4 right-4 z-[9999] pointer-events-none select-none rounded-lg px-3 py-1.5 shadow-lg {level === 'normal'
       ? levelClasses.normal
@@ -100,7 +162,7 @@
     <div class="text-sm font-semibold tabular-nums leading-tight">
       {#if expired}
         已到期
-      {:else}
+      {:else if remaining !== null}
         {formatRemaining(remaining)}
       {/if}
     </div>

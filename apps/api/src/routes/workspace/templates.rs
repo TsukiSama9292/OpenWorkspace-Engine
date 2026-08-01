@@ -42,6 +42,8 @@ fn template_to_json(template: &WorkspaceTemplate, instance_count: i64) -> serde_
         "persistent_storage_path": template.persistent_storage_path,
         "max_run_seconds": template.max_run_seconds,
         "timeout_action": template.timeout_action,
+        "keep_time_seconds": template.keep_time_seconds,
+        "keep_time_action": template.keep_time_action,
         "network_bandwidth_up_mbps": template.network_bandwidth_up_mbps,
         "network_bandwidth_down_mbps": template.network_bandwidth_down_mbps,
         "instance_count": instance_count,
@@ -79,6 +81,10 @@ struct CreateTemplateRequest {
     #[serde(default = "default_timeout_action")]
     timeout_action: String,
     #[serde(default)]
+    keep_time_seconds: Option<i64>,
+    #[serde(default = "default_keep_time_action")]
+    keep_time_action: String,
+    #[serde(default)]
     network_bandwidth_up_mbps: i32,
     #[serde(default)]
     network_bandwidth_down_mbps: i32,
@@ -106,6 +112,10 @@ struct UpdateTemplateRequest {
     #[serde(default = "default_timeout_action")]
     timeout_action: String,
     #[serde(default)]
+    keep_time_seconds: Option<i64>,
+    #[serde(default = "default_keep_time_action")]
+    keep_time_action: String,
+    #[serde(default)]
     network_bandwidth_up_mbps: i32,
     #[serde(default)]
     network_bandwidth_down_mbps: i32,
@@ -130,6 +140,10 @@ fn default_timeout_action() -> String {
     "remove".to_string()
 }
 
+fn default_keep_time_action() -> String {
+    "pause".to_string()
+}
+
 fn validate_auto_sleep(
     max_run_seconds: Option<i64>,
     timeout_action: &str,
@@ -146,6 +160,27 @@ fn validate_auto_sleep(
         return Err((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "timeout_action must be one of: remove, stop, pause"})),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_keep_time(
+    keep_time_seconds: Option<i64>,
+    keep_time_action: &str,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if let Some(seconds) = keep_time_seconds {
+        if seconds < 60 {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "keep_time_seconds must be at least 60"})),
+            ));
+        }
+    }
+    if !matches!(keep_time_action, "remove" | "stop" | "pause") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "keep_time_action must be one of: remove, stop, pause"})),
         ));
     }
     Ok(())
@@ -220,6 +255,7 @@ async fn create_template(
     };
 
     validate_auto_sleep(input.max_run_seconds, &input.timeout_action)?;
+    validate_keep_time(input.keep_time_seconds, &input.keep_time_action)?;
     validate_bandwidth(input.network_bandwidth_up_mbps, input.network_bandwidth_down_mbps)?;
 
     let template = repo
@@ -242,6 +278,8 @@ async fn create_template(
             &input.timeout_action,
             input.network_bandwidth_up_mbps,
             input.network_bandwidth_down_mbps,
+            input.keep_time_seconds,
+            &input.keep_time_action,
         )
         .await
         .map_err(|e| {
@@ -300,6 +338,8 @@ async fn update_template(
 
     validate_auto_sleep(input.max_run_seconds, &input.timeout_action)
         .map_err(|(status, _)| status)?;
+    validate_keep_time(input.keep_time_seconds, &input.keep_time_action)
+        .map_err(|(status, _)| status)?;
     validate_bandwidth(input.network_bandwidth_up_mbps, input.network_bandwidth_down_mbps)
         .map_err(|(status, _)| status)?;
 
@@ -323,6 +363,8 @@ async fn update_template(
             &input.timeout_action,
             input.network_bandwidth_up_mbps,
             input.network_bandwidth_down_mbps,
+            input.keep_time_seconds,
+            &input.keep_time_action,
         )
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

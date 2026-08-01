@@ -11,6 +11,7 @@ use openworkspace_api::db::WorkspaceInstanceRepository;
 use openworkspace_api::vnc_cache::VncCache;
 use openworkspace_api::core::Settings;
 use sea_orm::DatabaseConnection;
+use chrono::TimeZone;
 
 static MOCK_COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -115,6 +116,17 @@ impl MockContext {
         let resp = self.client
             .post(format!("{}/api/auth/login", self.base_url))
             .json(&serde_json::json!({"username": "admin", "password": "admin"}))
+            .send()
+            .await
+            .unwrap();
+        let cookie = resp.headers().get("set-cookie").unwrap().to_str().unwrap();
+        cookie.split(';').next().unwrap().strip_prefix("ow_token=").unwrap().to_string()
+    }
+
+    async fn login_user(&self, username: &str, password: &str) -> String {
+        let resp = self.client
+            .post(format!("{}/api/auth/login", self.base_url))
+            .json(&serde_json::json!({"username": username, "password": password}))
             .send()
             .await
             .unwrap();
@@ -962,4 +974,343 @@ async fn test_launch_instance_defaults_to_settings_runtime() {
         "template_id": template_id
     }), &token).await;
     assert_eq!(resp.status(), 200);
+}
+
+// ── Keep Time: heartbeat endpoint ──
+
+#[tokio::test]
+async fn test_heartbeat_sets_last_seen_at() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let (_, instance_id) = create_config_and_instance(&ctx, &token, "heartbeat-ok").await;
+    set_instance_status(&ctx.db, &instance_id, "running", Some("abc123def456")).await;
+
+    let resp = ctx.post_auth(&format!("/api/instances/{}/heartbeat", instance_id), &serde_json::json!({}), &token).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "ok");
+
+    let id: uuid::Uuid = instance_id.parse().unwrap();
+    let found = WorkspaceInstanceRepository::new(&ctx.db).find_by_id(id).await.unwrap().unwrap();
+    assert!(found.last_seen_at.is_some());
+
+    let resp = ctx.post_auth(&format!("/api/instances/{}/heartbeat", instance_id), &serde_json::json!({}), &token).await;
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn test_heartbeat_requires_auth() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let (_, instance_id) = create_config_and_instance(&ctx, &token, "heartbeat-unauth").await;
+
+    let unauth = reqwest::Client::new();
+    let resp = unauth
+        .post(format!("{}/api/instances/{}/heartbeat", ctx.base_url, instance_id))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401);
+}
+
+#[tokio::test]
+async fn test_heartbeat_forbidden_for_non_owner() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+    }).await;
+
+    let admin_token = ctx.login_admin().await;
+    ctx.post_auth("/api/users", &serde_json::json!({
+        "username": "hb-owner", "password": "pass123"
+    }), &admin_token).await;
+    ctx.post_auth("/api/users", &serde_json::json!({
+        "username": "hb-intruder", "password": "pass123"
+    }), &admin_token).await;
+
+    let owner_token = ctx.login_user("hb-owner", "pass123").await;
+    let intruder_token = ctx.login_user("hb-intruder", "pass123").await;
+
+    let config_resp = ctx.post_auth("/api/templates", &serde_json::json!({
+        "name": "heartbeat-owner", "image": "busybox:1"
+    }), &admin_token).await;
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
+
+    let launch_resp = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id
+    }), &owner_token).await;
+    let instance_id = launch_resp.json::<serde_json::Value>().await.unwrap()["instance"]["id"].as_str().unwrap().to_string();
+
+    let resp = ctx.post_auth(&format!("/api/instances/{}/heartbeat", instance_id), &serde_json::json!({}), &intruder_token).await;
+    assert_eq!(resp.status(), 403);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "Forbidden");
+
+    let resp = ctx.post_auth(&format!("/api/instances/{}/heartbeat", instance_id), &serde_json::json!({}), &owner_token).await;
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn test_heartbeat_unknown_instance() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let unknown_id = uuid::Uuid::new_v4();
+
+    let resp = ctx.post_auth(&format!("/api/instances/{}/heartbeat", unknown_id), &serde_json::json!({}), &token).await;
+    assert_eq!(resp.status(), 404);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "Instance not found");
+}
+
+// ── Keep Time: lifecycle keeps last_seen_at in lockstep with started_at ──
+
+#[tokio::test]
+async fn test_unpause_sets_last_seen_at() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+        m.expect_unpause_container_by_id()
+            .returning(|_| Box::pin(async { Ok(()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let (_, instance_id) = create_config_and_instance(&ctx, &token, "unpause-sets-last-seen").await;
+    set_instance_status(&ctx.db, &instance_id, "paused", Some("abc123def456")).await;
+    let id: uuid::Uuid = instance_id.parse().unwrap();
+    let repo = WorkspaceInstanceRepository::new(&ctx.db);
+    repo.update_started_at(id, None).await.unwrap();
+    repo.update_last_seen_at(id, None).await.unwrap();
+
+    let resp = ctx.post_auth(&format!("/api/instances/{}/unpause", instance_id), &serde_json::json!({}), &token).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "running");
+
+    let found = repo.find_by_id(id).await.unwrap().unwrap();
+    assert!(found.started_at.is_some());
+    assert!(found.last_seen_at.is_some());
+}
+
+#[tokio::test]
+async fn test_pause_clears_last_seen_at() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+        m.expect_pause_container_by_id()
+            .returning(|_| Box::pin(async { Ok(()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let (_, instance_id) = create_config_and_instance(&ctx, &token, "pause-clears-last-seen").await;
+    set_instance_status(&ctx.db, &instance_id, "running", Some("abc123def456")).await;
+    let id: uuid::Uuid = instance_id.parse().unwrap();
+    let repo = WorkspaceInstanceRepository::new(&ctx.db);
+    repo.update_started_at(id, Some(chrono::Utc::now())).await.unwrap();
+    repo.update_last_seen_at(id, Some(chrono::Utc::now())).await.unwrap();
+
+    let resp = ctx.post_auth(&format!("/api/instances/{}/pause", instance_id), &serde_json::json!({}), &token).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "paused");
+
+    let found = repo.find_by_id(id).await.unwrap().unwrap();
+    assert!(found.started_at.is_none());
+    assert!(found.last_seen_at.is_none());
+}
+
+#[tokio::test]
+async fn test_stop_clears_last_seen_at() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+        m.expect_stop_container_by_id()
+            .returning(|_| Box::pin(async { Ok(()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let (_, instance_id) = create_config_and_instance(&ctx, &token, "stop-clears-last-seen").await;
+    set_instance_status(&ctx.db, &instance_id, "running", Some("abc123def456")).await;
+    let id: uuid::Uuid = instance_id.parse().unwrap();
+    let repo = WorkspaceInstanceRepository::new(&ctx.db);
+    repo.update_started_at(id, Some(chrono::Utc::now())).await.unwrap();
+    repo.update_last_seen_at(id, Some(chrono::Utc::now())).await.unwrap();
+
+    let resp = ctx.post_auth(&format!("/api/instances/{}/stop", instance_id), &serde_json::json!({}), &token).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "stopped");
+
+    let found = repo.find_by_id(id).await.unwrap().unwrap();
+    assert!(found.started_at.is_none());
+    assert!(found.last_seen_at.is_none());
+}
+
+// ── Keep Time: deadline & action in instance JSON ──
+
+async fn create_keep_time_config_and_instance(ctx: &MockContext, token: &str, name: &str, keep_time_seconds: i64, keep_time_action: &str) -> (String, String) {
+    let config_resp = ctx.post_auth("/api/templates", &serde_json::json!({
+        "name": name, "image": "busybox:1",
+        "keep_time_seconds": keep_time_seconds,
+        "keep_time_action": keep_time_action
+    }), token).await;
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
+
+    let launch_resp = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id
+    }), token).await;
+    let body = launch_resp.json::<serde_json::Value>().await.unwrap();
+    let instance_id = body["instance"]["id"].as_str().unwrap().to_string();
+    (template_id, instance_id)
+}
+
+#[tokio::test]
+async fn test_keep_time_deadline_running_instance() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let (_, instance_id) = create_keep_time_config_and_instance(&ctx, &token, "keep-deadline", 3600, "pause").await;
+    set_instance_status(&ctx.db, &instance_id, "running", Some("abc123def456")).await;
+    let id: uuid::Uuid = instance_id.parse().unwrap();
+    let repo = WorkspaceInstanceRepository::new(&ctx.db);
+    let last_seen = chrono::Utc.with_ymd_and_hms(2026, 2, 3, 4, 5, 6).unwrap();
+    repo.update_last_seen_at(id, Some(last_seen)).await.unwrap();
+
+    let resp = ctx.get_auth(&format!("/api/instances/{}", instance_id), &token).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let expected = last_seen + chrono::Duration::seconds(3600);
+    let expected_str = serde_json::Value::String(expected.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true));
+    assert_eq!(body["instance"]["keep_time_deadline"], expected_str);
+    assert_eq!(body["instance"]["keep_time_action"], "pause");
+
+    let resp = ctx.get_auth("/api/instances", &token).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let found = body["instances"].as_array().unwrap().iter()
+        .find(|i| i["id"] == instance_id)
+        .unwrap();
+    assert_eq!(found["keep_time_deadline"], expected_str);
+    assert_eq!(found["keep_time_action"], "pause");
+}
+
+#[tokio::test]
+async fn test_keep_time_deadline_null_when_not_running() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let (_, instance_id) = create_keep_time_config_and_instance(&ctx, &token, "keep-not-running", 3600, "stop").await;
+    set_instance_status(&ctx.db, &instance_id, "stopped", Some("abc123def456")).await;
+
+    let resp = ctx.get_auth(&format!("/api/instances/{}", instance_id), &token).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["instance"]["keep_time_deadline"], serde_json::Value::Null);
+    assert_eq!(body["instance"]["keep_time_action"], "stop");
+}
+
+#[tokio::test]
+async fn test_keep_time_null_when_template_unconfigured() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let (_, instance_id) = create_config_and_instance(&ctx, &token, "keep-unconfigured").await;
+    set_instance_status(&ctx.db, &instance_id, "running", Some("abc123def456")).await;
+
+    let resp = ctx.get_auth(&format!("/api/instances/{}", instance_id), &token).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["instance"]["keep_time_deadline"], serde_json::Value::Null);
+    assert_eq!(body["instance"]["keep_time_action"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn test_keep_time_seconds_in_instance_json() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let (_, instance_id) = create_keep_time_config_and_instance(&ctx, &token, "keep-seconds-set", 600, "stop").await;
+
+    let resp = ctx.get_auth(&format!("/api/instances/{}", instance_id), &token).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["instance"]["keep_time_seconds"], 600, "keep_time_seconds should echo the template value even when not running");
+    assert_eq!(body["instance"]["keep_time_action"], "stop");
+
+    let (_, instance_id) = create_config_and_instance(&ctx, &token, "keep-seconds-off").await;
+    let resp = ctx.get_auth(&format!("/api/instances/{}", instance_id), &token).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["instance"]["keep_time_seconds"], serde_json::Value::Null, "keep_time_seconds should be null when the template has no keep-time");
+    assert_eq!(body["instance"]["keep_time_action"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn test_heartbeat_refreshes_keep_time_deadline() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let (_, instance_id) = create_keep_time_config_and_instance(&ctx, &token, "hb-deadline", 3600, "stop").await;
+    set_instance_status(&ctx.db, &instance_id, "running", Some("abc123def456")).await;
+
+    let before = chrono::Utc::now();
+    let resp = ctx.post_auth(&format!("/api/instances/{}/heartbeat", instance_id), &serde_json::json!({}), &token).await;
+    assert_eq!(resp.status(), 200);
+    let after = chrono::Utc::now();
+
+    let resp = ctx.get_auth(&format!("/api/instances/{}", instance_id), &token).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let deadline_str = body["instance"]["keep_time_deadline"].as_str().unwrap();
+    let deadline = chrono::DateTime::parse_from_rfc3339(deadline_str).unwrap().with_timezone(&chrono::Utc);
+
+    let lo = (before + chrono::Duration::seconds(3600) - chrono::Duration::seconds(5)).timestamp_millis();
+    let hi = (after + chrono::Duration::seconds(3600) + chrono::Duration::seconds(5)).timestamp_millis();
+    assert!(deadline.timestamp_millis() >= lo && deadline.timestamp_millis() <= hi);
 }

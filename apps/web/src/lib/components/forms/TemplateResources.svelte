@@ -9,6 +9,8 @@
     persistentStoragePath: string;
     maxRunSeconds: number | null;
     timeoutAction: TimeoutAction;
+    keepTimeSeconds: number | null;
+    keepTimeAction: TimeoutAction;
   }
 
   let {
@@ -18,7 +20,9 @@
     dockerRegistry = $bindable(),
     persistentStoragePath = $bindable(),
     maxRunSeconds = $bindable(),
-    timeoutAction = $bindable()
+    timeoutAction = $bindable(),
+    keepTimeSeconds = $bindable(),
+    keepTimeAction = $bindable()
   }: Props = $props();
 
   const STORAGE_HINT = '/data/persistent/{template_name}/{user_id}';
@@ -26,19 +30,57 @@
   const labelClass = 'flex flex-col gap-1';
   const spanClass = 'text-sm text-zinc-400';
 
-  let maxRunSecondsInput = $state(maxRunSeconds ?? 3600);
+  const DEFAULT_SECONDS = 3600;
+
+  let usageEnabled = $state(maxRunSeconds !== null);
+  let keepTimeEnabled = $state(keepTimeSeconds !== null);
+  let maxRunSecondsInput = $state(String(maxRunSeconds ?? DEFAULT_SECONDS));
+  let keepTimeSecondsInput = $state(String(keepTimeSeconds ?? DEFAULT_SECONDS));
+
+  function parseSeconds(raw: string | null): number | null {
+    if (raw === null || raw.trim() === '') return null;
+    const n = Number.parseInt(raw, 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
 
   $effect(() => {
-    if (maxRunSeconds !== null) maxRunSecondsInput = maxRunSeconds;
+    if (maxRunSeconds !== null) {
+      usageEnabled = true;
+      maxRunSecondsInput = String(maxRunSeconds);
+    } else {
+      usageEnabled = false;
+    }
+  });
+
+  $effect(() => {
+    if (keepTimeSeconds !== null) {
+      keepTimeEnabled = true;
+      keepTimeSecondsInput = String(keepTimeSeconds);
+    } else {
+      keepTimeEnabled = false;
+    }
   });
 
   function onUsageLimitEnabledChange(event: Event) {
     const enabled = (event.currentTarget as HTMLInputElement).checked;
-    maxRunSeconds = enabled ? maxRunSecondsInput : null;
+    maxRunSeconds = enabled ? parseSeconds(maxRunSecondsInput) ?? DEFAULT_SECONDS : null;
   }
 
   function onMaxRunSecondsInput() {
-    if (maxRunSeconds !== null) maxRunSeconds = maxRunSecondsInput;
+    if (!usageEnabled) return;
+    const n = parseSeconds(maxRunSecondsInput);
+    if (n !== null) maxRunSeconds = n;
+  }
+
+  function onKeepTimeEnabledChange(event: Event) {
+    const enabled = (event.currentTarget as HTMLInputElement).checked;
+    keepTimeSeconds = enabled ? parseSeconds(keepTimeSecondsInput) ?? DEFAULT_SECONDS : null;
+  }
+
+  function onKeepTimeSecondsInput() {
+    if (!keepTimeEnabled) return;
+    const n = parseSeconds(keepTimeSecondsInput);
+    if (n !== null) keepTimeSeconds = n;
   }
 </script>
 
@@ -74,28 +116,70 @@
     <div class="flex items-center gap-2">
       <input
         type="checkbox"
-        checked={maxRunSeconds !== null}
+        checked={usageEnabled}
         onchange={onUsageLimitEnabledChange}
         class="accent-indigo-500 shrink-0"
       />
       <span class="text-sm text-zinc-400">Enabled</span>
-      {#if maxRunSeconds !== null}
+      {#if usageEnabled}
         <input
           type="number"
-          bind:value={maxRunSecondsInput}
+          value={maxRunSecondsInput}
           min="60"
           step="60"
-          oninput={onMaxRunSecondsInput}
+          oninput={(e) => {
+            maxRunSecondsInput = (e.currentTarget as HTMLInputElement).value;
+            onMaxRunSecondsInput();
+          }}
           class={inputClass}
           placeholder="e.g. 3600 (1 hour)"
         />
       {/if}
     </div>
   </label>
-  {#if maxRunSeconds !== null}
+  {#if usageEnabled}
     <label class={labelClass}>
       <span class={spanClass}>Timeout Action</span>
       <select class={inputClass} bind:value={timeoutAction}>
+        <option value="remove">remove</option>
+        <option value="stop">stop</option>
+        <option value="pause">pause</option>
+      </select>
+    </label>
+  {/if}
+</div>
+
+<div class="grid grid-cols-2 gap-3">
+  <label class={labelClass}>
+    <span class={spanClass}>Idle Keep Time (seconds)</span>
+    <div class="flex items-center gap-2">
+      <input
+        type="checkbox"
+        checked={keepTimeEnabled}
+        onchange={onKeepTimeEnabledChange}
+        class="accent-indigo-500 shrink-0"
+      />
+      <span class="text-sm text-zinc-400">Enabled</span>
+      {#if keepTimeEnabled}
+        <input
+          type="number"
+          value={keepTimeSecondsInput}
+          min="60"
+          step="60"
+          oninput={(e) => {
+            keepTimeSecondsInput = (e.currentTarget as HTMLInputElement).value;
+            onKeepTimeSecondsInput();
+          }}
+          class={inputClass}
+          placeholder="e.g. 3600 (1 hour)"
+        />
+      {/if}
+    </div>
+  </label>
+  {#if keepTimeEnabled}
+    <label class={labelClass}>
+      <span class={spanClass}>Keep Time Action</span>
+      <select class={inputClass} bind:value={keepTimeAction}>
         <option value="remove">remove</option>
         <option value="stop">stop</option>
         <option value="pause">pause</option>

@@ -30,6 +30,8 @@ const template: Template = {
   container_runtime: 'docker',
   max_run_seconds: 7200,
   timeout_action: 'stop',
+  keep_time_seconds: 3600,
+  keep_time_action: 'pause',
   network_bandwidth_up_mbps: 100,
   network_bandwidth_down_mbps: 50,
   run_config: {
@@ -62,6 +64,8 @@ const populatedState: TemplateFormState = {
   containerRuntime: 'docker',
   maxRunSeconds: 3600,
   timeoutAction: 'stop',
+  keepTimeSeconds: 3600,
+  keepTimeAction: 'stop',
   bandwidthUpMbps: 50,
   bandwidthDownMbps: 25,
   envVars: [{ key: 'FOO', value: 'bar' }],
@@ -88,6 +92,8 @@ describe('template-form', () => {
       expect(state.remoteType).toBe('kasmvnc');
       expect(state.maxRunSeconds).toBeNull();
       expect(state.timeoutAction).toBe('remove');
+      expect(state.keepTimeSeconds).toBeNull();
+      expect(state.keepTimeAction).toBe('pause');
       expect(state.envVars).toEqual([{ key: '', value: '' }]);
       expect(state.volumeMappings).toEqual([{ host: '', container: '' }]);
     });
@@ -125,6 +131,8 @@ describe('template-form', () => {
           persistent_storage_path: '/data',
           max_run_seconds: 3600,
           timeout_action: 'stop',
+          keep_time_seconds: 3600,
+          keep_time_action: 'stop',
           network_bandwidth_up_mbps: 50,
           network_bandwidth_down_mbps: 25
         })
@@ -154,6 +162,8 @@ describe('template-form', () => {
           persistent_storage_path: null,
           max_run_seconds: null,
           timeout_action: 'remove',
+          keep_time_seconds: null,
+          keep_time_action: 'pause',
           network_bandwidth_up_mbps: 0,
           network_bandwidth_down_mbps: 0
         })
@@ -198,6 +208,33 @@ describe('template-form', () => {
       expect(result).toEqual({ error: 'Download bandwidth must be >= 0 (0 = unlimited)' });
       expect(mockFetch).not.toHaveBeenCalled();
     });
+
+    it('sends null keep-time and the pause action when keep-time is disabled', async () => {
+      const mockFetch = vi.fn().mockResolvedValue(jsonResponse({ template: { id: 'tpl-new' } }));
+      vi.stubGlobal('fetch', mockFetch);
+
+      await submitTemplate({ ...createInitialFormState(), name: 'X' });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+      expect(body.keep_time_seconds).toBeNull();
+      expect(body.keep_time_action).toBe('pause');
+    });
+
+    it('sends keep-time duration and action when enabled', async () => {
+      const mockFetch = vi.fn().mockResolvedValue(jsonResponse({ template: { id: 'tpl-new' } }));
+      vi.stubGlobal('fetch', mockFetch);
+
+      await submitTemplate({
+        ...createInitialFormState(),
+        name: 'X',
+        keepTimeSeconds: 600,
+        keepTimeAction: 'stop'
+      });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+      expect(body.keep_time_seconds).toBe(600);
+      expect(body.keep_time_action).toBe('stop');
+    });
   });
 
   describe('formStateFromTemplate', () => {
@@ -220,6 +257,8 @@ describe('template-form', () => {
         containerRuntime: 'docker',
         maxRunSeconds: 7200,
         timeoutAction: 'stop',
+        keepTimeSeconds: 3600,
+        keepTimeAction: 'pause',
         bandwidthUpMbps: 100,
         bandwidthDownMbps: 50,
         envVars: [
@@ -256,6 +295,18 @@ describe('template-form', () => {
       const state = formStateFromTemplate(rest as Template);
       expect(state.bandwidthUpMbps).toBe(0);
       expect(state.bandwidthDownMbps).toBe(0);
+    });
+
+    it('prefills keep-time fields from a template', () => {
+      const state = formStateFromTemplate({ ...template, keep_time_seconds: 600, keep_time_action: 'stop' });
+      expect(state.keepTimeSeconds).toBe(600);
+      expect(state.keepTimeAction).toBe('stop');
+    });
+
+    it('maps a missing keep-time duration to off with the pause default', () => {
+      const state = formStateFromTemplate({ ...template, keep_time_seconds: null, keep_time_action: 'pause' });
+      expect(state.keepTimeSeconds).toBeNull();
+      expect(state.keepTimeAction).toBe('pause');
     });
   });
 
@@ -322,6 +373,8 @@ describe('template-form', () => {
           persistent_storage_path: '/data',
           max_run_seconds: 3600,
           timeout_action: 'stop',
+          keep_time_seconds: 3600,
+          keep_time_action: 'stop',
           network_bandwidth_up_mbps: 50,
           network_bandwidth_down_mbps: 25
         })

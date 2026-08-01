@@ -85,9 +85,7 @@ No lint script exists in vnc-ui. Root `turbo lint` runs if configured per-packag
 ### Check command
 
 ```bash
-cd /home/user/workspace/OpenWorkspace-Engine/apps/api \
-  && cargo test --no-run 2>&1 | grep -i warning; \
-  cargo test --no-run --features docker 2>&1 | grep -i warning
+cd /home/user/workspace/OpenWorkspace-Engine/apps/api && bash scripts/check.sh
 ```
 
 Both invocations must produce **no output**. The first checks default features; the second checks the `docker` feature gate.
@@ -95,9 +93,8 @@ Both invocations must produce **no output**. The first checks default features; 
 The actual test runner is `apps/api/scripts/run_tests.sh`, which starts a Postgres test container via Docker and runs `cargo nextest run --features docker`. Run both warning checks before the test script:
 
 ```bash
-cd apps/api && cargo test --no-run 2>&1 | grep -i warning
-cd apps/api && cargo test --no-run --features docker 2>&1 | grep -i warning
-cd apps/api && apps/api/scripts/run_tests.sh
+cd apps/api && bash scripts/check.sh
+cd apps/api && bash scripts/run_tests.sh
 ```
 
 ### How to fix warnings

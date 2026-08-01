@@ -96,6 +96,8 @@ pub mod workspace_template {
         pub timeout_action: String,
         pub network_bandwidth_up_mbps: i32,
         pub network_bandwidth_down_mbps: i32,
+        pub keep_time_seconds: Option<i64>,
+        pub keep_time_action: String,
         pub created_at: DateTimeUtc,
         pub updated_at: DateTimeUtc,
     }
@@ -147,6 +149,7 @@ pub mod workspace_instance {
         pub mount_persistent: bool,
         pub resolved_volume_host_path: Option<String>,
         pub started_at: Option<DateTimeUtc>,
+        pub last_seen_at: Option<DateTimeUtc>,
         pub created_at: DateTimeUtc,
         pub updated_at: DateTimeUtc,
     }
@@ -243,6 +246,8 @@ pub struct WorkspaceTemplate {
     pub timeout_action: String,
     pub network_bandwidth_up_mbps: i32,
     pub network_bandwidth_down_mbps: i32,
+    pub keep_time_seconds: Option<i64>,
+    pub keep_time_action: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -269,6 +274,8 @@ impl From<workspace_template::Model> for WorkspaceTemplate {
             timeout_action: m.timeout_action,
             network_bandwidth_up_mbps: m.network_bandwidth_up_mbps,
             network_bandwidth_down_mbps: m.network_bandwidth_down_mbps,
+            keep_time_seconds: m.keep_time_seconds,
+            keep_time_action: m.keep_time_action,
             created_at: m.created_at,
             updated_at: m.updated_at,
         }
@@ -289,6 +296,7 @@ pub struct WorkspaceInstance {
     pub mount_persistent: bool,
     pub resolved_volume_host_path: Option<String>,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -308,6 +316,7 @@ impl From<workspace_instance::Model> for WorkspaceInstance {
             mount_persistent: m.mount_persistent,
             resolved_volume_host_path: m.resolved_volume_host_path,
             started_at: m.started_at,
+            last_seen_at: m.last_seen_at,
             created_at: m.created_at,
             updated_at: m.updated_at,
         }
@@ -455,6 +464,8 @@ impl<'a> WorkspaceTemplateRepository<'a> {
         timeout_action: &str,
         network_bandwidth_up_mbps: i32,
         network_bandwidth_down_mbps: i32,
+        keep_time_seconds: Option<i64>,
+        keep_time_action: &str,
     ) -> Result<WorkspaceTemplate, sea_orm::DbErr> {
         let id = Uuid::new_v4();
         let model = workspace_template::ActiveModel {
@@ -477,6 +488,8 @@ impl<'a> WorkspaceTemplateRepository<'a> {
             timeout_action: Set(timeout_action.to_string()),
             network_bandwidth_up_mbps: Set(network_bandwidth_up_mbps),
             network_bandwidth_down_mbps: Set(network_bandwidth_down_mbps),
+            keep_time_seconds: Set(keep_time_seconds),
+            keep_time_action: Set(keep_time_action.to_string()),
             ..Default::default()
         };
         let inserted = model.insert(self.db).await?;
@@ -533,6 +546,8 @@ impl<'a> WorkspaceTemplateRepository<'a> {
         timeout_action: &str,
         network_bandwidth_up_mbps: i32,
         network_bandwidth_down_mbps: i32,
+        keep_time_seconds: Option<i64>,
+        keep_time_action: &str,
     ) -> Result<bool, sea_orm::DbErr> {
         let result = workspace_template::Entity::update(workspace_template::ActiveModel {
             id: Set(id),
@@ -553,6 +568,8 @@ impl<'a> WorkspaceTemplateRepository<'a> {
             timeout_action: Set(timeout_action.to_string()),
             network_bandwidth_up_mbps: Set(network_bandwidth_up_mbps),
             network_bandwidth_down_mbps: Set(network_bandwidth_down_mbps),
+            keep_time_seconds: Set(keep_time_seconds),
+            keep_time_action: Set(keep_time_action.to_string()),
             ..Default::default()
         })
         .filter(workspace_template::Column::Id.eq(id))
@@ -727,12 +744,44 @@ impl<'a> WorkspaceInstanceRepository<'a> {
         }
     }
 
+    pub async fn update_last_seen_at(
+        &self,
+        id: Uuid,
+        last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<bool, sea_orm::DbErr> {
+        let result = workspace_instance::Entity::update(workspace_instance::ActiveModel {
+            id: Set(id),
+            last_seen_at: Set(last_seen_at),
+            ..Default::default()
+        })
+        .filter(workspace_instance::Column::Id.eq(id))
+        .exec(self.db)
+        .await;
+        match result {
+            Ok(_) => Ok(true),
+            Err(sea_orm::DbErr::RecordNotFound(_)) | Err(sea_orm::DbErr::RecordNotUpdated) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
     pub async fn list_running_with_started_at(
         &self,
     ) -> Result<Vec<WorkspaceInstance>, sea_orm::DbErr> {
         let models = workspace_instance::Entity::find()
             .filter(workspace_instance::Column::Status.eq("running"))
             .filter(Expr::col(workspace_instance::Column::StartedAt).is_not_null())
+            .order_by_asc(workspace_instance::Column::CreatedAt)
+            .all(self.db)
+            .await?;
+        Ok(models.into_iter().map(|m| m.into()).collect())
+    }
+
+    pub async fn list_running_with_last_seen_at(
+        &self,
+    ) -> Result<Vec<WorkspaceInstance>, sea_orm::DbErr> {
+        let models = workspace_instance::Entity::find()
+            .filter(workspace_instance::Column::Status.eq("running"))
+            .filter(Expr::col(workspace_instance::Column::LastSeenAt).is_not_null())
             .order_by_asc(workspace_instance::Column::CreatedAt)
             .all(self.db)
             .await?;

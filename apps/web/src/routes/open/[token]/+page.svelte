@@ -3,6 +3,7 @@
   import { onMount, onDestroy } from 'svelte';
   import CountdownOverlay from '$lib/countdown/CountdownOverlay.svelte';
   import { iframeSrc } from '$lib/countdown/countdown';
+  import { startKeepalive } from '$lib/keepalive/keepalive';
   import { api } from '$lib/api/client';
   import type { Instance, TimeoutAction } from '$lib/types';
 
@@ -11,11 +12,24 @@
   let loading = $state(true);
   let missing = $state(false);
   let hadDeadline = $state(false);
+  let keepTimeSeconds = $state<number | null>(null);
+  let lastHeartbeatAt = $state<number | null>(null);
   let pollTimer: ReturnType<typeof setInterval> | undefined;
+  let stopKeepalive: (() => void) | undefined;
 
   async function findInstance(): Promise<Instance | undefined> {
     const res = await api.get<{ instances: Instance[] }>('/instances');
     return res.data?.instances?.find(i => i.access_token === token);
+  }
+
+  function startKeepaliveIfRunning(inst?: Instance | null) {
+    if (inst?.status === 'running' && !stopKeepalive) {
+      stopKeepalive = startKeepalive(inst.id, {
+        onHeartbeat: at => {
+          lastHeartbeatAt = at;
+        }
+      });
+    }
   }
 
   async function refreshInstance(): Promise<Instance | null> {
@@ -26,8 +40,9 @@
       return null;
     }
     instance = inst;
+    keepTimeSeconds = inst.keep_time_seconds ?? null;
     missing = false;
-    if (inst.auto_sleeps_at) hadDeadline = true;
+    if (inst.auto_sleeps_at || inst.keep_time_deadline) hadDeadline = true;
     return inst;
   }
 
@@ -42,8 +57,10 @@
       return null;
     }
     return {
-      deadline: inst.auto_sleeps_at ?? null,
-      action: (inst.timeout_action as TimeoutAction | null) ?? null
+      auto_sleeps_at: inst.auto_sleeps_at ?? null,
+      timeout_action: (inst.timeout_action as TimeoutAction | null) ?? null,
+      keep_time_deadline: inst.keep_time_deadline ?? null,
+      keep_time_action: inst.keep_time_action ?? null
     };
   }
 
@@ -51,6 +68,7 @@
     const inst = await refreshInstance();
     loading = false;
     if (!inst) return;
+    startKeepaliveIfRunning(inst);
     if (inst.status === 'running' && inst.remote_type === 'kasmvnc') {
       window.location.href = `/kasmvnc/${token}/`;
       return;
@@ -59,6 +77,7 @@
       pollTimer = setInterval(async () => {
         const updated = await refreshInstance();
         if (!updated) return;
+        startKeepaliveIfRunning(updated);
         if (updated.status === 'running' || updated.status === 'error') {
           clearInterval(pollTimer);
           pollTimer = undefined;
@@ -69,6 +88,7 @@
 
   onDestroy(() => {
     if (pollTimer) clearInterval(pollTimer);
+    if (stopKeepalive) stopKeepalive();
   });
 </script>
 
@@ -84,8 +104,12 @@
   </div>
 {:else if instance?.status === 'running'}
   <CountdownOverlay
-    deadline={instance.auto_sleeps_at ?? null}
-    action={instance.timeout_action ?? null}
+    auto_sleeps_at={instance.auto_sleeps_at ?? null}
+    timeout_action={instance.timeout_action ?? null}
+    keep_time_deadline={instance.keep_time_deadline ?? null}
+    keep_time_action={instance.keep_time_action ?? null}
+    keep_time_seconds={keepTimeSeconds}
+    last_heartbeat_at={lastHeartbeatAt}
     onResync={resyncDeadline}
   />
   {#if instance.remote_type === 'kasmvnc'}

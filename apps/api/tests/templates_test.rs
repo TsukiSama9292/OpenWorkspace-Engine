@@ -718,3 +718,119 @@ async fn test_update_template_rejects_invalid_auto_sleep() {
     assert_eq!(resp.status(), 400);
 }
 
+#[tokio::test]
+async fn test_create_template_with_keep_time() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "keep-time-config",
+        "image": "busybox:1",
+        "keep_time_seconds": 3600,
+        "keep_time_action": "stop"
+    })).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["template"]["keep_time_seconds"], 3600);
+    assert_eq!(body["template"]["keep_time_action"], "stop");
+
+    let template_id = body["template"]["id"].as_str().unwrap();
+    let resp = ctx.get(&format!("/api/templates/{}", template_id)).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["template"]["keep_time_seconds"], 3600);
+    assert_eq!(body["template"]["keep_time_action"], "stop");
+}
+
+#[tokio::test]
+async fn test_create_template_default_keep_time_disabled() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "no-keep-time-config",
+        "image": "busybox:1"
+    })).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["template"]["keep_time_seconds"].is_null());
+    assert_eq!(body["template"]["keep_time_action"], "pause");
+}
+
+#[tokio::test]
+async fn test_update_template_keep_time() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "keep-time-update",
+        "image": "busybox:1"
+    })).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let template_id = body["template"]["id"].as_str().unwrap();
+
+    let resp = ctx.put(&format!("/api/templates/{}", template_id), &serde_json::json!({
+        "name": "keep-time-update",
+        "image": "busybox:1",
+        "cores": 2,
+        "memory": 4294967296_i64,
+        "gpu_count": 0,
+        "run_config": {},
+        "exec_config": {},
+        "volume_mappings": {},
+        "keep_time_seconds": 7200,
+        "keep_time_action": "pause"
+    })).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["template"]["keep_time_seconds"], 7200);
+    assert_eq!(body["template"]["keep_time_action"], "pause");
+
+    let resp = ctx.put(&format!("/api/templates/{}", template_id), &serde_json::json!({
+        "name": "keep-time-update",
+        "image": "busybox:1",
+        "cores": 2,
+        "memory": 4294967296_i64,
+        "gpu_count": 0,
+        "run_config": {},
+        "exec_config": {},
+        "volume_mappings": {},
+        "keep_time_seconds": null,
+        "keep_time_action": "remove"
+    })).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["template"]["keep_time_seconds"].is_null());
+    assert_eq!(body["template"]["keep_time_action"], "remove");
+}
+
+#[tokio::test]
+async fn test_create_template_rejects_keep_time_below_minimum() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "keep-time-short-config",
+        "image": "busybox:1",
+        "keep_time_seconds": 30
+    })).await;
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_create_template_rejects_invalid_keep_time_action() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "keep-time-bad-action-config",
+        "image": "busybox:1",
+        "keep_time_seconds": 3600,
+        "keep_time_action": "bogus"
+    })).await;
+    assert_eq!(resp.status(), 400);
+}
+

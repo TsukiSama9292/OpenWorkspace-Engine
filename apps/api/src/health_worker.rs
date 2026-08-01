@@ -48,6 +48,15 @@ pub async fn run(
             }
             Err(e) => tracing::error!("Auto-sleep worker error: {}", e),
         }
+
+        match check_keep_time(&instance_repo, &template_repo, &*docker, &vnc_cache, Utc::now()).await {
+            Ok(count) => {
+                if count > 0 {
+                    tracing::debug!("Keep-time worker acted on {} instances", count);
+                }
+            }
+            Err(e) => tracing::error!("Keep-time worker error: {}", e),
+        }
     }
 }
 
@@ -91,9 +100,9 @@ pub async fn check_auto_sleep(
         }
 
         let result = match template.timeout_action.as_str() {
-            "remove" => auto_sleep_remove(instance_repo, docker, vnc_cache, instance).await,
-            "stop" => auto_sleep_stop(instance_repo, docker, vnc_cache, instance).await,
-            "pause" => auto_sleep_pause(instance_repo, docker, instance).await,
+            "remove" => crate::timeout_action::remove(instance_repo, docker, vnc_cache, instance, "Auto-sleep").await,
+            "stop" => crate::timeout_action::stop(instance_repo, docker, vnc_cache, instance, "Auto-sleep").await,
+            "pause" => crate::timeout_action::pause(instance_repo, docker, instance, "Auto-sleep").await,
             other => {
                 tracing::warn!(
                     "Auto-sleep: invalid timeout_action '{}' for template '{}'",
@@ -113,87 +122,121 @@ pub async fn check_auto_sleep(
     Ok(triggered)
 }
 
-async fn auto_sleep_remove(
+pub async fn check_keep_time(
     instance_repo: &WorkspaceInstanceRepository<'_>,
+    template_repo: &WorkspaceTemplateRepository<'_>,
     docker: &dyn DockerService,
     vnc_cache: &VncCache,
-    instance: &crate::db::WorkspaceInstance,
-) -> Result<(), String> {
-    if let Err(e) = crate::route_writer::delete_route(&instance.access_token) {
-        tracing::error!("Failed to delete Traefik VNC route: {}", e);
-    }
-    vnc_cache.remove(&instance.access_token);
+    now: chrono::DateTime<Utc>,
+) -> Result<usize, String> {
+    let instances = instance_repo
+        .list_running_with_last_seen_at()
+        .await
+        .map_err(|e| format!("DB query failed: {}", e))?;
 
-    if let Some(ref cid) = instance.container_id {
-        crate::docker::stop_and_remove_container(docker, cid, &instance.name).await;
-    }
+    let mut triggered = 0;
 
-    match instance_repo.delete(instance.id).await {
-        Ok(true) => {
-            tracing::info!("Auto-sleep removed instance '{}'", instance.name);
-            Ok(())
-        }
-        Ok(false) => Err("instance row already gone".to_string()),
-        Err(e) => Err(format!("delete failed: {}", e)),
-    }
-}
-
-async fn auto_sleep_stop(
-    instance_repo: &WorkspaceInstanceRepository<'_>,
-    docker: &dyn DockerService,
-    vnc_cache: &VncCache,
-    instance: &crate::db::WorkspaceInstance,
-) -> Result<(), String> {
-    if let Some(ref cid) = instance.container_id {
-        match docker.stop_container_by_id(cid).await {
-            Ok(()) => {
-                tracing::info!("Container for '{}' stopped (id: {})", instance.name, &cid[..12]);
+    for instance in &instances {
+        let template = match template_repo.find_by_id(instance.template_id).await {
+            Ok(Some(template)) => template,
+            Ok(None) => {
+                tracing::warn!("Keep-time: template not found for instance '{}'", instance.name);
+                continue;
             }
             Err(e) => {
-                tracing::warn!("Failed to stop container for '{}': {} (updating DB anyway)", instance.name, e);
+                tracing::warn!("Keep-time: template lookup failed for instance '{}': {}", instance.name, e);
+                continue;
             }
-        }
-    }
+        };
 
-    if let Err(e) = crate::route_writer::delete_route(&instance.access_token) {
-        tracing::error!("Failed to delete Traefik VNC route: {}", e);
-    }
-    vnc_cache.remove(&instance.access_token);
+        let Some(keep_time_seconds) = template.keep_time_seconds else {
+            continue;
+        };
+        let Some(last_seen_at) = instance.last_seen_at else {
+            continue;
+        };
 
-    instance_repo
-        .update_status(instance.id, "stopped")
-        .await
-        .map_err(|e| format!("status update failed: {}", e))?;
-    instance_repo.update_started_at(instance.id, None).await.ok();
+        let elapsed = (now - last_seen_at).num_seconds();
 
-    tracing::info!("Auto-sleep stopped instance '{}'", instance.name);
-    Ok(())
-}
-
-async fn auto_sleep_pause(
-    instance_repo: &WorkspaceInstanceRepository<'_>,
-    docker: &dyn DockerService,
-    instance: &crate::db::WorkspaceInstance,
-) -> Result<(), String> {
-    if let Some(ref cid) = instance.container_id {
-        match docker.pause_container_by_id(cid).await {
-            Ok(()) => {
-                tracing::info!("Container for '{}' paused (id: {})", instance.name, &cid[..12]);
+        // A live client connection to the session means the user still has the
+        // remote desktop / terminal open — reset the timer instead of
+        // reclaiming. The browser-focus heartbeat is a secondary signal, so
+        // this keeps in-use sessions alive even when focus detection fails
+        // (e.g. interaction inside an embedded iframe). Connection checks are
+        // fail-open: if we cannot inspect the container, we skip enforcement.
+        let container_id = match instance.container_id.as_ref() {
+            Some(id) => id,
+            None => {
+                tracing::warn!(
+                    "Keep-time: instance '{}' has no container_id; skipping",
+                    instance.name
+                );
+                continue;
             }
+        };
+        let port = match template.remote_type.parse::<RemoteType>() {
+            Ok(remote_type) => remote_type.port(),
             Err(e) => {
-                tracing::warn!("Failed to pause container for '{}': {} (updating DB anyway)", instance.name, e);
+                tracing::warn!(
+                    "Keep-time: invalid remote_type '{}' for instance '{}': {}",
+                    template.remote_type,
+                    instance.name,
+                    e
+                );
+                continue;
             }
+        };
+        match docker.has_session_connection(container_id, port).await {
+            Ok(true) => {
+                if let Err(e) = instance_repo.update_last_seen_at(instance.id, Some(now)).await {
+                    tracing::error!(
+                        "Keep-time: failed to refresh last_seen_at for instance '{}': {}",
+                        instance.name,
+                        e
+                    );
+                }
+                tracing::info!(
+                    "Keep-time: instance '{}' has an active session; resetting timer",
+                    instance.name
+                );
+                continue;
+            }
+            Ok(false) => {}
+            Err(e) => {
+                tracing::warn!(
+                    "Keep-time: connection check failed for instance '{}': {} (skipping)",
+                    instance.name,
+                    e
+                );
+                continue;
+            }
+        }
+
+        if elapsed < keep_time_seconds {
+            continue;
+        }
+
+        let result = match template.keep_time_action.as_str() {
+            "remove" => crate::timeout_action::remove(instance_repo, docker, vnc_cache, instance, "Keep-time").await,
+            "stop" => crate::timeout_action::stop(instance_repo, docker, vnc_cache, instance, "Keep-time").await,
+            "pause" => crate::timeout_action::pause(instance_repo, docker, instance, "Keep-time").await,
+            other => {
+                tracing::warn!(
+                    "Keep-time: invalid keep_time_action '{}' for template '{}'",
+                    other,
+                    template.name
+                );
+                continue;
+            }
+        };
+
+        match result {
+            Ok(()) => triggered += 1,
+            Err(e) => tracing::error!("Keep-time failed for instance '{}': {}", instance.name, e),
         }
     }
 
-    instance_repo
-        .update_status(instance.id, "paused")
-        .await
-        .map_err(|e| format!("status update failed: {}", e))?;
-    instance_repo.update_started_at(instance.id, None).await.ok();
-
-    tracing::info!("Auto-sleep paused instance '{}'", instance.name);
-    Ok(())
+    Ok(triggered)
 }
 
 pub async fn check_instances(
@@ -266,6 +309,10 @@ async fn check_single_instance(
                 .update_started_at(instance.id, Some(Utc::now()))
                 .await
                 .map_err(|e| format!("started_at update failed: {}", e))?;
+            instance_repo
+                .update_last_seen_at(instance.id, Some(Utc::now()))
+                .await
+                .map_err(|e| format!("last_seen_at update failed: {}", e))?;
             vnc_cache.insert(&instance.access_token, "running");
             tracing::info!(
                 "Health check passed for instance '{}' ({}:{})",

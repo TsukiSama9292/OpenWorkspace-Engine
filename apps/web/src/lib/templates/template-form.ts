@@ -28,6 +28,8 @@ export interface TemplateFormState {
   containerRuntime: string;
   maxRunSeconds: number | null;
   timeoutAction: TimeoutAction;
+  keepTimeSeconds: number | null;
+  keepTimeAction: TimeoutAction;
   bandwidthUpMbps: number;
   bandwidthDownMbps: number;
   envVars: EnvVar[];
@@ -56,6 +58,8 @@ export function createInitialFormState(): TemplateFormState {
     containerRuntime: '',
     maxRunSeconds: null,
     timeoutAction: 'remove',
+    keepTimeSeconds: null,
+    keepTimeAction: 'pause',
     bandwidthUpMbps: 0,
     bandwidthDownMbps: 0,
     envVars: [createEmptyEnvVar()],
@@ -90,6 +94,8 @@ function buildTemplateBody(state: TemplateFormState): Record<string, unknown> {
     persistent_storage_path: state.persistentStoragePath || null,
     max_run_seconds: state.maxRunSeconds,
     timeout_action: state.timeoutAction,
+    keep_time_seconds: state.keepTimeSeconds,
+    keep_time_action: state.keepTimeAction,
     network_bandwidth_up_mbps: state.bandwidthUpMbps,
     network_bandwidth_down_mbps: state.bandwidthDownMbps,
   };
@@ -159,6 +165,8 @@ export function formStateFromTemplate(t: Template): TemplateFormState {
     containerRuntime: t.container_runtime,
     maxRunSeconds: t.max_run_seconds ?? null,
     timeoutAction: t.timeout_action ?? 'remove',
+    keepTimeSeconds: t.keep_time_seconds ?? null,
+    keepTimeAction: (t.keep_time_action ?? 'pause') as TimeoutAction,
     bandwidthUpMbps: t.network_bandwidth_up_mbps ?? 0,
     bandwidthDownMbps: t.network_bandwidth_down_mbps ?? 0,
     envVars: rc.envVars,

@@ -24,6 +24,8 @@ export interface Template {
   container_runtime: string;
   max_run_seconds: number | null;
   timeout_action: TimeoutAction;
+  keep_time_seconds: number | null;
+  keep_time_action: TimeoutAction;
   network_bandwidth_up_mbps: number;
   network_bandwidth_down_mbps: number;
   run_config: Record<string, unknown>;
@@ -52,6 +54,9 @@ export interface Instance {
   access_password?: string;
   auto_sleeps_at?: string | null;
   timeout_action?: TimeoutAction | null;
+  keep_time_deadline?: string | null;
+  keep_time_seconds?: number | null;
+  keep_time_action?: TimeoutAction | null;
   created_at: string;
   updated_at: string;
 }

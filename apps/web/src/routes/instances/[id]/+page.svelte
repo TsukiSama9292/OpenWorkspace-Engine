@@ -4,6 +4,7 @@
   import { api } from '$lib/api/client';
   import { performAction, deleteInstance } from '$lib/api/instance-actions';
   import { wrapperUrl } from '$lib/countdown/countdown';
+  import KeepTimeLine from '$lib/components/instances/KeepTimeLine.svelte';
   import type { Instance } from '$lib/types';
 
   let instance = $state<Instance | null>(null);
@@ -127,6 +128,10 @@
             <span class="info-label">Container</span>
             <span class="info-value">{instance.container_id ? instance.container_id.slice(0, 12) : '---'}</span>
           </div>
+          <KeepTimeLine
+            keepTimeSeconds={instance.keep_time_seconds}
+            keepTimeAction={instance.keep_time_action}
+          />
         </div>
 
         {#if instance.status === 'starting'}

@@ -50,4 +50,58 @@ describe('TemplatePanel', () => {
     await fireEvent.click(screen.getByText('Cancel'));
     expect(confirmSpy).toHaveBeenCalled();
   });
+
+  function checkboxes(container: HTMLElement) {
+    return Array.from(container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'));
+  }
+  function secondsInputs(container: HTMLElement) {
+    return Array.from(container.querySelectorAll<HTMLInputElement>('input[placeholder="e.g. 3600 (1 hour)"]'));
+  }
+
+  it.each(['usage', 'keep-time'])(
+    'clearing the %s seconds input keeps the field enabled and visible',
+    async (kind) => {
+      const { container } = render(TemplatePanel, { props: panelProps() });
+
+      const index = kind === 'usage' ? 0 : 1;
+      const checkbox = checkboxes(container)[index];
+      expect(checkbox.checked).toBe(false);
+      expect(secondsInputs(container).length).toBe(0);
+
+      await fireEvent.click(checkbox);
+      await tick();
+      expect(checkbox.checked).toBe(true);
+      expect(secondsInputs(container).length).toBe(1);
+
+      const input = secondsInputs(container)[0];
+      await fireEvent.input(input, { target: { value: '' } });
+      await tick();
+
+      expect(secondsInputs(container).length).toBe(1);
+      expect(checkboxes(container)[index].checked).toBe(true);
+    }
+  );
+
+  it('re-enabling after clearing the field shows the input again', async () => {
+    const { container } = render(TemplatePanel, { props: panelProps() });
+
+    const checkbox = checkboxes(container)[0];
+    await fireEvent.click(checkbox);
+    await tick();
+
+    const input = secondsInputs(container)[0];
+    await fireEvent.input(input, { target: { value: '' } });
+    await tick();
+
+    await fireEvent.click(checkbox);
+    await tick();
+    expect(checkboxes(container)[0].checked).toBe(false);
+    expect(secondsInputs(container).length).toBe(0);
+
+    await fireEvent.click(checkboxes(container)[0]);
+    await tick();
+    expect(checkboxes(container)[0].checked).toBe(true);
+    expect(secondsInputs(container).length).toBe(1);
+    expect((secondsInputs(container)[0] as HTMLInputElement).value).toBe('3600');
+  });
 });

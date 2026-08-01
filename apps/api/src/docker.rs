@@ -158,6 +158,15 @@ pub trait DockerService: Send + Sync {
         up_mbps: i32,
         down_mbps: i32,
     ) -> Result<(), String>;
+
+    /// Whether a client is currently connected to the instance's session port
+    /// (e.g. the user's browser has the remote desktop / terminal / notebook
+    /// open). Used by keep-time to avoid reclaiming an in-use session.
+    async fn has_session_connection(
+        &self,
+        container_id: &str,
+        port: u16,
+    ) -> Result<bool, String>;
 }
 
 pub fn is_container_not_found(err: &bollard::errors::Error) -> bool {
@@ -728,6 +737,58 @@ impl DockerService for DockerClient {
 
         Ok(())
     }
+
+    async fn has_session_connection(
+        &self,
+        container_id: &str,
+        port: u16,
+    ) -> Result<bool, String> {
+        let info = self
+            .docker
+            .inspect_container(container_id, None)
+            .await
+            .map_err(|e| format!("inspect failed: {}", e))?;
+        let pid = info.state.and_then(|s| s.pid).unwrap_or(0) as u32;
+        if pid == 0 {
+            let short_id: String = container_id.chars().take(12).collect();
+            return Err(format!("container {} is not running (pid 0)", short_id));
+        }
+
+        let output = run_nsenter_ns(
+            pid,
+            &[ss_binary_path(), "-t", "-n", "state", "established"]
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>(),
+        )?;
+
+        Ok(ss_output_has_connection(&output, port))
+    }
+}
+
+/// Resolve the `ss` binary path at runtime. Debian's iproute2 ships `ss` at
+/// `/bin/ss` (usr-merged bookworm resolves that to `/usr/bin/ss`) — there is
+/// no `/usr/sbin/ss`, unlike `ip`/`tc`. Probe a few candidates so the session
+/// connection check does not silently fail-open on a different layout.
+fn ss_binary_path() -> &'static str {
+    const CANDIDATES: [&str; 3] = ["/bin/ss", "/usr/sbin/ss", "/usr/bin/ss"];
+    for path in CANDIDATES {
+        if std::path::Path::new(path).exists() {
+            return path;
+        }
+    }
+    "/bin/ss"
+}
+
+/// True when `ss -t -n state established` output contains an established
+/// connection whose local endpoint is the given port. The local address is
+/// the 4th whitespace-delimited field (State, Recv-Q, Send-Q, Local, Peer).
+fn ss_output_has_connection(output: &str, port: u16) -> bool {
+    let needle = format!(":{}", port);
+    output.lines().any(|line| {
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        fields.len() >= 5 && fields[3].ends_with(&needle)
+    })
 }
 
 /// Run `nsenter -t <pid> -n <args>` and return stdout on success.
@@ -800,5 +861,31 @@ mod tests {
     #[test]
     fn test_runtime_to_host_config_nvidia_returns_some() {
         assert_eq!(runtime_to_host_config("nvidia"), Some("nvidia".to_string()));
+    }
+
+    #[test]
+    fn test_ss_output_detects_local_session_port() {
+        let output = "ESTAB 0 0 172.20.0.2:6901 172.20.0.1:54321\n";
+        assert!(ss_output_has_connection(output, 6901));
+    }
+
+    #[test]
+    fn test_ss_output_ignores_peer_port() {
+        // A peer ending in the session port must not count as a connection.
+        let output = "ESTAB 0 0 172.20.0.2:50000 172.20.0.1:6901\n";
+        assert!(!ss_output_has_connection(output, 6901));
+    }
+
+    #[test]
+    fn test_ss_output_ignores_other_local_ports() {
+        let output = "ESTAB 0 0 172.20.0.2:50000 172.20.0.1:54321\n";
+        assert!(!ss_output_has_connection(output, 6901));
+    }
+
+    #[test]
+    fn test_ss_output_ignores_header_and_empty() {
+        let header = "State  Recv-Q  Send-Q  Local Address:Port  Peer Address:Port  Process\n";
+        assert!(!ss_output_has_connection(header, 6901));
+        assert!(!ss_output_has_connection("", 6901));
     }
 }
