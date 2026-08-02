@@ -70,6 +70,13 @@ but CUDA compute fails — so the card can't be used under NVProxy.
 
 ## 1. Install runsc
 
+There is an automated script that does steps 1–2 for you
+(`scripts/docker-runtime-gvisor.sh`): it downloads the `runsc` binary to
+`/usr/local/bin`, merges the runtime entry into `/etc/docker/daemon.json`
+(JSON merge, `.bak` backup, idempotent), and reloads the daemon. Env overrides:
+`DOCKER_DAEMON_JSON`, `RUNSC_INSTALL_DIR`, `RUNSC_VERSION`, `SKIP_RUNSC_INSTALL`,
+`SKIP_DAEMON_RELOAD`, `NO_SUDO`. The manual steps below document what it does.
+
 ```bash
 sudo apt-get update && \
 sudo apt-get install -y \
@@ -232,7 +239,13 @@ likely not supported by this driver/CUDA stack (see the compatibility table).
 ## 4. Using it in OpenWorkspace
 
 Once the runtime works with `docker run --runtime runsc`, set the Template's
-**Container Runtime** to `gVisor` in the dashboard. The API launches that
-template's instances with the `runsc` runtime. CPU-only templates work the same
-way; GPU templates additionally need a CUDA-compatible image (e.g. a `cuda`
-base image) and a supported host driver.
+**Container Runtime** to `runsc` in the dashboard (the field defaults to
+`docker`). A Template with an empty runtime falls back to the server-wide
+`OW_CONTAINER_RUNTIME` setting (`resolve_runtime` in `instances.rs`); the API
+launches that template's instances with the `--runtime runsc` flag. CPU-only
+templates work the same way; GPU templates additionally need a CUDA-compatible
+image (e.g. a `cuda` base image) and a supported host driver.
+
+> gVisor (`runsc`) is the planned **default** container runtime for instances;
+> wiring it up as the default in compose/instance creation is tracked in the
+> reference clone at `references_repo/gvisor/` (sparse-checked-out docs).

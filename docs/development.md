@@ -1,255 +1,211 @@
-# Development Guide
+# Development
 
 ## Prerequisites
 
-- **Node.js** ≥ 18 + **pnpm** 9
-- **Rust** (stable) + **cargo**
-- **Docker** + **Docker Compose** v2
-- **PostgreSQL** (via Docker — no local install needed)
+| Tool | Version | Purpose |
+|------|---------|---------|
+| Docker Engine | ≥ 24 | Containers, networks, Traefik |
+| Docker Compose | ≥ 2.20 | Stack orchestration |
+| pnpm | 9.x | Workspace/package manager |
+| Node.js | ≥ 18 | SvelteKit/Vite toolchain |
+| Rust toolchain | stable | API (Axum), migrations, nextest |
 
 ## Quick Start
 
 ```bash
-# 1. Create Docker network for KasmVNC containers
-pnpm run init
-
-# 2. Start infrastructure (Traefik + PostgreSQL)
-pnpm run docker:dev:up
-
-# 3. Start API (Rust) + Frontend (Vite) concurrently
-pnpm run dev
+pnpm install                  # install workspace deps
+pnpm run init                 # create ow-network + register gVisor runsc runtime
+pnpm run dev                  # full dev stack (API + web + Traefik + Postgres)
 ```
 
-Or simply:
+`pnpm run dev` is the one-shot entry point. It:
 
-```bash
-pnpm run dev
-```
+1. `kill-dev.sh` — free ports 3000/5173 from stale dev servers
+2. `init` — ensure `ow-network` exists (auto-selects a free `172.16-31.0.0/16` subnet) and gVisor `runsc` runtime is registered in `/etc/docker/daemon.json`
+3. `docker:dev:up` — start dev Traefik + Postgres containers (`docker/openworkspace_dev/docker-compose.yml`)
+4. `network:allow` — grant `cap_sys_ptrace,cap_sys_admin+ep` to `/usr/bin/nsenter` and `cap_net_admin+ep` to `/usr/sbin/tc` so the host-run API can shape bandwidth
+5. run the Rust API (`:3000`) and Vite dev server (`:5173`) with `concurrently`
 
-This runs `kill-dev.sh` → `init` → `docker:dev:up` → `concurrently api + web`.
+Stop with `pnpm run dev:stop` (compose down + revoke caps) or `pnpm run dev:remove` (full wipe incl. volumes).
 
-## Project Structure
+> **Dev routing note:** the dev Traefik proxies to the **host-run** servers via `host.docker.internal` (`:5173` / `:3000`), and the host-run API writes route YAMLs to `docker/openworkspace_dev/traefik/dynamic` (its compile-time default when `TRAEFIK_DYNAMIC_DIR` is unset). Instances are still created by the host-run API via the Docker socket, and Traefik reaches them through host-published ports.
+
+### Dev Compose Stack
+
+`docker/openworkspace_dev/docker-compose.yml` (Traefik v3.7.4 + Postgres 18-alpine only — the API and web run on the host):
+
+| Service | Container name | Ports | Notes |
+|---------|---------------|-------|-------|
+| `traefik` | `ow-dev-traefik` | `80`, `8080` | Docker provider (instances) + file provider (`/etc/traefik/dynamic`, watch); `host.docker.internal:host-gateway` |
+| `postgresql` | `ow-dev-postgres` | `55432:5432` | Volume `server-dev-pgdata`; `TZ=Asia/Taipei` |
+
+`ow-network` is **external** (created by `scripts/docker-network.sh`, not by compose).
+
+## Monorepo Layout
 
 ```
 OpenWorkspace-Engine/
 ├── apps/
-│   ├── api/                        # Rust/Axum REST API
-│   │   ├── migrations/             # SQLx auto-migrations
-│   │   └── src/
-│   │       ├── main.rs             # Server entrypoint
-│   │       ├── routes.rs           # All HTTP handlers
-│   │       ├── auth.rs             # JWT auth + cookie handling
-│   │       ├── db.rs               # PostgreSQL repositories
-│   │       ├── docker.rs           # Bollard Docker client
-│   │       └── vnc_trafik.rs       # Traefik YAML generation
-│   └── web/                        # SvelteKit frontend
-│       └── src/
-│           ├── lib/
-│           │   ├── api.ts          # API client
-│           │   ├── stores/         # Svelte stores (auth, theme)
-│           │   ├── vnc-components/ # VNC viewer UI components
-│           │   └── vnc/            # noVNC core (JS)
-│           └── routes/             # Page routes
+│   ├── web/              # SvelteKit frontend (Svelte 5, Tailwind v4, Skeleton)
+│   ├── api/              # Rust Axum API (bollard → Docker, sqlx → Postgres)
+│   └── vnc-ui/           # LEGACY noVNC UI (not used by current frontend)
+├── scripts/              # host tooling (docker-network, gvisor runtime, cleanup, ...)
 ├── docker/
-│   └── openworkspace_dev/          # Dev infrastructure
-│       ├── docker-compose.yml      # Traefik + PostgreSQL
-│       └── traefik/
-│           ├── traefik.yml         # Static config
-│           └── dynamic/            # Hot-loaded route configs
-│               ├── static-routers.yml
-│               ├── static-services.yml
-│               └── static-transports.yml
-├── scripts/
-│   ├── kill-dev.sh                 # Kill stale dev processes
-│   └── docker-network.sh           # Create Docker network
-└── docs/                           # This documentation
+│   ├── openworkspace/        # production compose + Dockerfiles
+│   ├── openworkspace_dev/    # dev compose (Traefik + Postgres)
+│   ├── template_images/      # build.sh + instance image variants
+│   └── base_images/          # shared base images
+├── docs/                 # architecture, API reference, dev guide, ...
+├── references_repo/      # upstream sources (KasmVNC, gVisor, Docker docs)
+├── apps/api/migration/   # sqlx migrations (000001–000014)
+└── package.json          # turbo orchestration + dev scripts
 ```
 
-## Commands
+The API (see `apps/api/`):
 
-### Root Level
+```
+apps/api/
+├── src/
+│   ├── main.rs               # bootstrap: settings, DB + migrations, seed admin, VNC cache, CORS
+│   ├── core/                 # settings, jwt, errors, hash, config
+│   ├── routes/               # auth, users, templates, instances, proxy, registry, health
+│   ├── services/             # docker_service (container/network/traefik ops), registry_service
+│   ├── host_port.rs          # host-port pool allocator
+│   ├── instance_net.rs       # per-instance /30 subnet allocation
+│   ├── route_writer.rs       # per-instance Traefik YAML generation
+│   ├── network_qos.rs        # tc/HTB arg builders + veth matcher (pure, unit-tested)
+│   ├── health_worker.rs      # probe / auto-sleep / keep-time worker (3s tick)
+│   └── vnc_cache.rs          # DashMap access_token → {status}
+├── migration/src/            # sqlx migrations (000001–000014)
+├── scripts/                  # check.sh, run_tests.sh, create_test_pg.sh
+└── tests/                    # integration tests (nextest, --features docker)
+```
 
-| Command | Description |
-|---------|-------------|
-| `pnpm run dev` | Full dev restart (kill → network → compose → concurrently) |
-| `pnpm run dev:api` | Start API only (`cargo run`) |
-| `pnpm run dev:web` | Start Vite dev server only |
-| `pnpm run dev:stop` | Stop Docker infrastructure |
-| `pnpm run docker:dev:up` | Start Traefik + PostgreSQL |
-| `pnpm run docker:dev:down` | Stop Traefik + PostgreSQL |
-| `pnpm run init` | Create `ow-network` Docker network |
-| `pnpm run build` | Build SvelteKit for production |
-| `pnpm run check` | Type-check SvelteKit |
-| `pnpm run lint` | Lint SvelteKit |
+## API Environment Variables
 
-### API (Rust)
+All variables are read via `core/settings.rs` (`Settings::from_env`). Only `DATABASE_URL` and `JWT_SECRET` are **required**; the rest have defaults.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATABASE_URL` | *(required)* | Postgres connection string |
+| `JWT_SECRET` | *(required)* | Signing secret for the `ow_token` JWT |
+| `ADMIN_PASSWORD` | `admin` | Bootstrap password for the seeded admin user |
+| `SERVER_HOST` / `SERVER_PORT` | `0.0.0.0` / `3000` | API bind address |
+| `DB_MAX_CONNECTIONS` | `5` | sqlx connection pool size |
+| `OW_CONTAINER_RUNTIME` | `docker` | Default runtime for new instances (`runsc`, `runc`, …) |
+| `OW_HOST_GATEWAY_IP` | `172.17.0.1` | Host IP instances publish their ports on |
+| `OW_HOST_PORT_START` / `OW_HOST_PORT_END` | `10000` / `20000` | Host-port pool for instance services |
+| `OW_INSTANCE_NET_BASE` | `10.200.0.0/16` | CIDR base for per-instance `/30` nets (must be net-aligned; `NetBase::parse` validates) |
+| `OW_INSTANCE_DNS` | `8.8.8.8,1.1.1.1` | DNS resolvers injected as `OW_DNS` (container entrypoint rewrites `/etc/resolv.conf`) |
+| `TRAEFIK_DYNAMIC_DIR` | dev default | Where per-instance route YAMLs are written (defaults to `docker/openworkspace_dev/traefik/dynamic` when unset) |
+
+In dev, the API process reads a `.env` file next to the workspace root (loaded via `dotenvy`); the dev compose file forwards `${POSTGRES_USER:-postgres}` / `${POSTGRES_PASSWORD:-postgres}` / `${POSTGRES_DB:-postgres}` to Postgres.
+
+## Scripts
+
+### `scripts/`
+
+| Script | Purpose |
+|--------|---------|
+| `docker-network.sh` | Create `ow-network` bridge on a free `172.16-31.0.0/16` subnet (idempotent) |
+| `docker-runtime-gvisor.sh` | Download `runsc` (gVisor) + merge the runtime into `/etc/docker/daemon.json` (JSON merge, `.bak` backup, idempotent) |
+| `test-docker-runtime-gvisor.sh` | Test that the gVisor runtime registration works |
+| `cleanup.sh` | Clean up dev artifacts: `tests` \| `instances` \| `network` \| `traefik` \| `all` (see below) |
+| `kill-dev.sh` | Free ports 3000/5173 from stale dev servers |
+| `apply_bw_smoke.sh` (in `apps/api/scripts/`) | Verify a live host actually shapes bandwidth (uses `python3`, `busybox:1` image) |
+| `network_isolation_smoke_test.sh` | Smoke test that instance networks are isolated from the control plane |
+| `dini_smoke_test.sh` | Smoke test for the `_dini` (Docker-in-instance) images |
+
+### `scripts/cleanup.sh`
+
+Subcommands (`--verbose` supported):
+
+- `tests` — remove test Postgres + instance containers/networks created by the test suite (net pattern `^ow-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`); the test dynamic dir is `apps/api/target/traefik-dynamic`
+- `instances` — stop/remove leftover dev instances and their `ow-*` networks
+- `network` — remove `ow-network`
+- `traefik` — clean the dev dynamic dir
+- `all` — everything above
+
+### `apps/api/scripts/`
+
+| Script | Purpose |
+|--------|---------|
+| `check.sh` | **Zero-warning gate.** Runs `cargo test --no-run` (default + `--features docker`) and `cargo check --lib`, greps for `warning`/`error`. Both must produce **no output**. |
+| `create_test_pg.sh` | Start/stop a throwaway Postgres container for the test suite |
+| `run_tests.sh` | Full suite: starts test Postgres, points `TRAEFIK_DYNAMIC_DIR` at `apps/api/target/traefik-dynamic`, runs `cargo nextest run --features docker`, cleans up via trap |
+| `apply_bw_smoke.sh` | End-to-end bandwidth-shaping smoke test |
+
+## Testing
+
+### Rust API (`apps/api`)
 
 ```bash
 cd apps/api
-
-cargo run                   # Start API server (:3000)
-cargo build                 # Compile check
-cargo build --release       # Release build
-RUST_LOG=debug cargo run    # Verbose logging
+bash scripts/check.sh                # warning gate (must be silent)
+bash scripts/run_tests.sh            # cargo nextest run --features docker
 ```
 
-### Frontend (SvelteKit)
+Coverage today: **158 unit tests** in `src/` and **324 integration tests** in `tests/` (auth, db, docker lifecycle, instances, registry, templates, users, vnc-verify, health). Integration tests require Docker (they create real containers/networks) and run in parallel via `cargo nextest`.
+
+### Web (`apps/web`)
 
 ```bash
 cd apps/web
-
-pnpm dev        # Start Vite dev server (:5173)
-pnpm build      # Build to static files
-pnpm check      # Type-check
+pnpm check        # svelte-check typecheck
+pnpm test         # vitest run — 10 files, 154 tests
 ```
 
-## Environment Variables
+Vitest uses `happy-dom` (unit + component tests). Playwright E2E is configured but not run in CI (requires live VNC containers).
 
-### API (`.env` in `apps/api/`)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DATABASE_URL` | `postgres://postgres:postgres@localhost:55432/postgres` | PostgreSQL connection string |
-| `JWT_SECRET` | — | Secret for JWT signing |
-| `ADMIN_PASSWORD` | `admin` | Default admin user password |
-| `RUST_LOG` | `info` | Log level filter |
-
-### Docker Compose (`docker/openworkspace_dev/.env`)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `POSTGRES_USER` | `postgres` | PostgreSQL username |
-| `POSTGRES_PASSWORD` | `postgres` | PostgreSQL password |
-| `POSTGRES_DB` | `postgres` | Database name |
-| `JWT_SECRET` | `change-me-in-production` | JWT secret (must match API) |
-
-## Dev Process Flow
-
-```mermaid
-flowchart TD
-    A["pnpm run dev"] --> B["kill-dev.sh<br/>Kill stale processes"]
-    B --> C["docker-network.sh<br/>Create ow-network"]
-    C --> D["docker compose up -d<br/>Start Traefik + PostgreSQL"]
-    D --> E["concurrently"]
-    E --> F["cargo run<br/>API :3000"]
-    E --> G["vite dev<br/>SvelteKit :5173"]
-
-    F --> H["Run migrations"]
-    H --> I["Seed admin user"]
-    I --> J["Listen on :3000"]
-
-    G --> J2["HMR enabled"]
-```
-
-## Traefik Dynamic Config Workflow
-
-When a VNC instance is created, the API writes route files to `traefik/dynamic/`. Traefik watches this directory and hot-reloads new routes within seconds.
-
-```mermaid
-flowchart LR
-    A["API: create_instance()"] --> B["Write vnc-{token}-ws.yml"]
-    A --> C["Write vnc-{token}-page.yml"]
-    B --> D["traefik/dynamic/"]
-    C --> D
-    D -->|"inotify watch"| E["Traefik detects change"]
-    E --> F["Routes active"]
-
-    G["API: delete_instance()"] --> H["Remove vnc-{token}-*.yml"]
-    H --> D
-```
-
-**Files in `traefik/dynamic/`:**
-
-- `static-routers.yml` — Committed to git (core routing rules)
-- `static-services.yml` — Committed to git (backend services)
-- `static-transports.yml` — Committed to git (TLS settings)
-- `vnc-*-ws.yml` — **Generated by API** (gitignored)
-- `vnc-*-page.yml` — **Generated by API** (gitignored)
-
-## Debugging
-
-### Check Traefik Routes
+### Legacy `apps/vnc-ui`
 
 ```bash
-# Traefik dashboard (API)
-curl -s http://localhost:8080/api/http/routers | python3 -m json.tool
-
-# List VNC routes specifically
-curl -s http://localhost:8080/api/http/routers?search=vnc | python3 -m json.tool
+cd apps/vnc-ui
+pnpm test         # vitest run (21 tests)
+pnpm check        # svelte-check
 ```
 
-### Check Container Status
+## Zero-Warning Policy
+
+`apps/api/` must compile with **zero warnings** (default features **and** the `docker` feature gate). Suppression attributes (`#[allow(dead_code)]`, `#[allow(unused)]`, …) are forbidden — fix the root cause.
+
+The test harness (`tests/common/mod.rs`) is compiled independently by each integration-test binary, so items unused by any *single* binary trigger `dead_code`. Fix patterns:
+
+1. Split shared code into focused submodules (e.g. `common/pg.rs`) so binaries that only need `ensure_pg` don't compile `TestContext`.
+2. Use `#[path]` when a test file needs one submodule without its parent.
+3. Move single-use helpers into the test file that uses them.
+4. Convert `ctx.client.get(…)` to `ctx.get(…)` so helper methods are exercised across files.
+5. Add a `test_context_helpers` test in each binary that calls every `TestContext` method at least once.
+
+## Allowing Users to `apt` Install Packages
+
+To let instance users install packages interactively (e.g. inside the ttyd/Jupyter/desktop session), the instance OS user needs passwordless `sudo` for the apt binaries. The documented sudoers entry is:
 
 ```bash
-# List KasmVNC containers
-docker ps --filter "name=ow-kasm"
-
-# Check container IP
-docker inspect ow-kasm-1 --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'
-
-# View container logs
-docker logs ow-kasm-1
+# /etc/sudoers.d/ow-apt (or appended to the image's sudoers)
+ow_user ALL=(ALL) NOPASSWD: /usr/bin/apt, /usr/bin/apt-get
 ```
 
-### Check Traefik Logs
+This is image-level configuration — see `docker/template_images/` for where the base images bake it in.
+
+## Production Deploy
 
 ```bash
-docker logs ow-traefik -f
+pnpm run init                                   # ow-network + runsc runtime
+pnpm run docker:up                              # build template images + compose up -d --build
+pnpm run docker:down                            # stop
+pnpm run docker:remove                          # down -v + cleanup.sh
 ```
 
-### Common Issues
+The production stack (`docker/openworkspace/docker-compose.yml`) adds `api` and `web` containers:
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| 404 on `/vnc/{token}/websockify` | Traefik route file not loaded | Check files exist in `traefik/dynamic/`, verify `watch: true` |
-| WebSocket 1006 | TLS verification failed | Ensure `kasm-insecure` transport exists in `static-transports.yml` |
-| ForwardAuth 401 | JWT expired or invalid | Re-login to get fresh `ow_token` cookie |
-| Container not starting | Image pull failed | Check `docker logs ow-kasm-{n}` |
-| Vite HMR showing instead of VNC | Route priority conflict | The `vnc-page` route should have higher priority than `web-router` |
+| Service | Image | Ports | Notes |
+|---------|-------|-------|-------|
+| `traefik` | traefik:v3.7.4 | `80`, `127.0.0.1:8080` | **File provider only** (no Docker socket); dynamic dir mounted read-only |
+| `api` | `ow-api` (built) | — | Runs as **root**, `pid: host`, `cap_add: [SYS_ADMIN, NET_ADMIN]`, `apparmor=unconfined`, rw Docker socket |
+| `web` | `ow-web` (built) | — | SvelteKit static build served by nginx |
+| `postgresql` | postgres:18-alpine | — | Volume `server-pgdata` |
 
-## HTTP (Dev) vs HTTPS (Production)
+Production Traefik routes to services by compose network name (`ow-api:3000`, `ow-web:80`) instead of `host.docker.internal`. The API container writes routes into `./traefik/dynamic` (its `TRAEFIK_DYNAMIC_DIR`, mounted rw into the api container, ro into traefik at `/etc/traefik/dynamic`). Per-instance route files (`*-ws.yml`) are gitignored.
 
-The dev stack runs on **plain HTTP** — open `http://localhost` (Traefik `web` entrypoint on `:80`). No certificates are needed or generated; browsers treat `http://localhost` as a secure context, so auth cookies, WebSocket, and the VNC viewer all work without TLS warnings.
-
-```bash
-# Dev URLs
-http://localhost/          # SvelteKit UI
-http://localhost/api/      # Rust API (same origin, no CORS)
-http://localhost:8080/     # Traefik dashboard
-```
-
-For **HTTPS**, do NOT enable TLS inside this project's Traefik. Instead, put a TLS-terminating proxy in front of it — the recommended options are:
-
-- **Cloudflare** — enable "Proxied" on your DNS record; Cloudflare terminates TLS at its edge and forwards to this stack's `:80`. Zero cert management on your side, plus DDoS/bot protection.
-- **Let's Encrypt** — run a TLS-terminating reverse proxy (Traefik ACME, Caddy, or nginx) that obtains certificates via HTTP-01/DNS-01 and proxies to this stack's `:80`.
-
-Both work because all routes (frontend, `/api`, and per-instance `/kasmvnc`, `/ttyd`, `/jupyter` WebSocket paths) are served from the same Traefik origin — the upstream stays plain HTTP and the TLS is fully handled in front.
-
-### If you really want TLS inside Traefik
-
-1. Re-add a `websecure` entrypoint on `:443` in `traefik/traefik.yml`.
-2. Re-add `websecure` + `tls: {}` to the routers (currently `web` only).
-3. Terminate TLS with `certificatesResolvers` (Let's Encrypt DNS-01 for a domain you control) or static certs.
-
-Prefer the front-proxy approach above — the browser only trusts public CAs, and self-signed/local CA certs make every `/api` fetch fail with `ERR_CERT_AUTHORITY_INVALID` (Chromium never bypasses certificate errors for subresource fetches).
-
-## Production Build
-
-```bash
-# Build SvelteKit
-pnpm run build
-
-# Build API release
-cd apps/api && cargo build --release
-
-# Start production stack
-pnpm run docker:up
-```
-
-Production uses `docker/openworkspace/docker-compose.yml` which includes:
-- **nginx** serving `apps/web/build/` (static files)
-- **api** running the compiled Rust binary
-- **Traefik** with the same file-based routing
-- **PostgreSQL**
-
-No Vite dev server; nginx replaces it as the web-service backend.
+Deploy flow: `docker compose -f docker/openworkspace/docker-compose.yml up -d --build`. Postgres data lives in `server-pgdata`; `ow-network` is created by `scripts/docker-network.sh`.

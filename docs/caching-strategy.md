@@ -7,7 +7,7 @@
 │  API 進程 (Axum + Tokio)                     │
 │                                             │
 │  VNC 快取 (DashMap)     ──> O(1) 同步查詢    │
-│  ├─ vnc_token → { status, owner_id }       │
+│  ├─ access_token → { status }               │
 │  └─ 啟動時載入，create/start/stop/delete 同步  │
 │                                             │
 │  PostgreSQL (PgPool)    ──> 備用降級路徑      │
@@ -146,15 +146,15 @@ flowchart TD
 ```rust
 // 目前 (DashMap)
 impl VncCache {
-    pub fn get(&self, token: &str) -> Option<CacheEntry> { ... }
-    pub fn insert(&self, token: &str, status: &str, owner_id: Uuid) { ... }
+    pub fn get(&self, token: &str) -> Option<CacheEntry> { ... }   // CacheEntry { status: String }
+    pub fn insert(&self, token: &str, status: &str) { ... }
     pub fn remove(&self, token: &str) { ... }
 }
 
 // 未來 (Redis)
 impl VncCache {
     pub async fn get(&self, token: &str) -> Option<CacheEntry> { ... }
-    pub async fn insert(&self, token: &str, status: &str, owner_id: Uuid) { ... }
+    pub async fn insert(&self, token: &str, status: &str) { ... }
     pub async fn remove(&self, token: &str) { ... }
 }
 ```

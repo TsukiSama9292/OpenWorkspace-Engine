@@ -34,7 +34,7 @@
 | **Instance** | A running VNC container launched from a template |
 | **User** | Person with an account (admin / manager / user roles) |
 
-See [docs/terminology.md](docs/terminology.md) for the full mapping from old names.
+See [docs/architecture.md](docs/architecture.md) for the canonical naming and lifecycle details.
 
 ---
 
@@ -222,7 +222,6 @@ See [docs/persistent-storage.md](docs/persistent-storage.md) for the full design
 | [docs/caching-strategy.md](docs/caching-strategy.md) | DashMap vs Redis/Valkey decision guide |
 | [docs/api-reference.md](docs/api-reference.md) | Complete REST API reference |
 | [docs/development.md](docs/development.md) | Setup, commands, debugging, production |
-| [docs/terminology.md](docs/terminology.md) | Canonical naming (Template / Instance / User) |
 
 ---
 

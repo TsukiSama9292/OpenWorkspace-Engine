@@ -211,7 +211,7 @@ The dashboard UI is English. Persistence-related behaviour:
 
 ## Testing
 
-- **API (387 tests):** pure-function unit tests (`persistent_volume.rs`), mock
+- **API (482 tests: 158 unit + 324 integration):** pure-function unit tests (`persistent_volume.rs`), mock
   route tests (`instances_mock_test.rs`) covering the 409 rule, reset ordering,
   delete-preserves-volume (`.never()`), error-state launch, restart backfill +
   volume ensure, broken-record replacement; real-Docker integration tests
@@ -219,7 +219,7 @@ The dashboard UI is English. Persistence-related behaviour:
   data survival across container recreation, idempotent re-prepare reuse,
   volume re-declaration after loss, and end-to-end server-side path resolution.
   Run via `apps/api/scripts/run_tests.sh` (nextest + Postgres container).
-- **Frontend (151 vitest tests)** covering the launch payload contract
+- **Frontend (154 vitest tests, 10 files)** covering the launch payload contract
   (`template-actions.test.ts`), template form, dashboard view, and countdown.
 - **Zero-warning policy:** `apps/api/scripts/check.sh` must pass under both the
   default and `docker` feature gates.

@@ -2,9 +2,23 @@
 
 ## Overview
 
-OpenWorkspace Engine is a multi-tenant virtual desktop platform. It provisions isolated KasmVNC Docker containers on demand and exposes them as browser-accessible VNC sessions through Traefik reverse proxy.
+OpenWorkspace Engine is a multi-tenant virtual desktop platform. It provisions isolated containers (KasmVNC desktop, ttyd terminal, Jupyter Lab) on demand and exposes them as browser-accessible sessions through a Traefik reverse proxy.
 
-**Core design principle:** Traefik's file-based provider with directory watching enables hot-reloadable routing. The API dynamically generates per-instance Traefik route YAML files, making new VNC instances immediately accessible without proxy restart.
+**Core design principle:** Traefik's file-based provider with directory watching enables hot-reloadable routing. The API dynamically generates per-instance Traefik route YAML files, making new instances immediately accessible without proxy restart.
+
+## Terminology
+
+This project uses three canonical domain concepts:
+
+| Concept | Canonical Name | Description |
+|---------|---------------|-------------|
+| Template | **Template** | A pre-configured settings bundle (image, resources, env vars) that users launch instances from |
+| Instance | **Instance** | A running container (KasmVNC / ttyd / Jupyter) launched from a template |
+| User | **User** | A person with an account (admin/manager/user roles) |
+
+Sidebar tabs: **Instances** (own instance cards, everyone), **Templates** (template cards with launch, Admin + Manager), **Sessions** (full instance table for all users, Admin + Manager), **Users** (user table with CRUD, Admin + Manager).
+
+These names replaced legacy terminology (`WorkspaceConfig`→**Template**, `configs`/`config_id`/`config_name`→**templates**/`template_id`/`template_name`, `workspace_configs`→`workspace_templates`, `Workspaces` tab→**Instances**, old admin "Instances" tab→**Sessions**). New templates use the `_dini` images so the in-instance Docker switch works out of the box.
 
 ## High-Level Architecture
 
@@ -12,20 +26,22 @@ OpenWorkspace Engine is a multi-tenant virtual desktop platform. It provisions i
 graph TB
     subgraph Browser
         UI[Dashboard UI<br/>SvelteKit SPA]
-        VNC[VNC Viewer<br/>noVNC in browser]
+        SESSION[Session Viewer<br/>noVNC / iframe in browser]
     end
 
     subgraph "Host Machine"
-        subgraph Docker Network: ow-network
+        subgraph "Control Network: ow-network"
             TRAEFIK[Traefik<br/>:80]
-            KASM1["KasmVNC Instance #1<br/>:6901"]
-            KASM2["KasmVNC Instance #2<br/>:6901"]
-            KASMN["KasmVNC Instance #N<br/>:6901"]
+            API[Rust API<br/>Axum :3000]
+            WEB[Web (dev: Vite :5173<br/>prod: nginx :80)]
+            PG[(PostgreSQL)]
         end
 
-        API[Rust API<br/>Axum :3000]
-        VITE[SvelteKit Dev<br/>Vite :5173]
-        PG[(PostgreSQL)]
+        subgraph "Per-instance /30 networks: ow-{instance-id}"
+            INST1["Instance #1<br/>KasmVNC :6901"]
+            INST2["Instance #2<br/>ttyd :7681"]
+            INSTN["Instance #N<br/>Jupyter :8888"]
+        end
 
         subgraph "Filesystem"
             DYNAMIC["traefik/dynamic/<br/>Hot-loaded YAML"]
@@ -34,49 +50,54 @@ graph TB
 
     UI -->|"GET /"| TRAEFIK
     UI -->|"POST /api/*"| TRAEFIK
-    VNC -->|"wss /vnc/{token}/websockify"| TRAEFIK
+    SESSION -->|"wss /kasmvnc/{token}/websockify"| TRAEFIK
 
     TRAEFIK -->|"api-router"| API
-    TRAEFIK -->|"web-router"| VITE
-    TRAEFIK -->|"vnc-auth middleware"| API
-    TRAEFIK -->|"vnc-ws-router"| KASM1
-    TRAEFIK -->|"vnc-ws-router"| KASM2
-    TRAEFIK -->|"vnc-ws-router"| KASMN
+    TRAEFIK -->|"web-router"| WEB
+    TRAEFIK -->|"kasmvnc-{token}-ws"| INST1
+    TRAEFIK -->|"ttyd-{token}-ws"| INST2
+    TRAEFIK -->|"jupyter-{token}-ws"| INSTN
 
     API --> PG
-    API -->|"bollard (Docker API)"| KASM1
-    API -->|"bollard"| KASM2
-    API -->|"bollard"| KASMN
+    API -->|"bollard (Docker API)"| INST1
+    API -->|"bollard"| INST2
+    API -->|"bollard"| INSTN
     API -->|"write YAML"| DYNAMIC
 
     TRAEFIK -.->|"watch: true"| DYNAMIC
 ```
 
+Traefik, the API, the web app, and Postgres share the `ow-network` control plane. **Instance containers do not join `ow-network`** — each instance gets its own dedicated `/30` bridge network (`ow-<instance_id>`), and Traefik reaches it through a host-published port on the Docker bridge gateway.
+
 ## Request Routing
 
-Traefik routes all incoming traffic on port 80. Four route types are evaluated by rule specificity (longer PathPrefix = higher priority):
+Traefik routes all incoming traffic on port 80. The three static routers plus per-instance routes are evaluated by rule specificity (longer PathPrefix = higher priority):
 
 ```mermaid
 flowchart LR
     REQ["Request:80"] --> CHECK{Rule Match}
 
     CHECK -->|"PathPrefix(/api)"| API["api-service<br/>→ host.docker.internal:3000"]
-    CHECK -->|"PathPrefix(/vnc/{token}/websockify)"| VNCWS["vnc-{token}<br/>→ https://172.x.x.x:6901<br/>🔒 ForwardAuth"]
-    CHECK -->|"PathPrefix(/vnc/{token})"| VNCPAGE["web-service<br/>→ SvelteKit :5173"]
-    CHECK -->|"PathPrefix(/)"| WEB["web-service<br/>→ SvelteKit :5173"]
+    CHECK -->|"PathPrefix(/kasmvnc/{token}/websockify)"| VNCWS["kasmvnc-{token}<br/>→ https://host.docker.internal:{host_port}<br/>🔒 Basic header injection"]
+    CHECK -->|"PathPrefix(/ttyd/{token}/)"| TTYDWS["ttyd-{token}<br/>→ https://host.docker.internal:{host_port}<br/>🔒 Basic header injection"]
+    CHECK -->|"PathPrefix(/jupyter/{token}/)"| JUPWS["jupyter-{token}<br/>→ https://host.docker.internal:{host_port}"]
+    CHECK -->|"PathPrefix(/)"| WEB["web-service<br/>→ SvelteKit"]
 
     style VNCWS fill:#1a3a2a,stroke:#4ecca3
+    style TTYDWS fill:#1a3a2a,stroke:#4ecca3
     style API fill:#1a2a3a,stroke:#4ecca3
 ```
 
 | Route | Service | Auth | Purpose |
 |-------|---------|------|---------|
 | `/api/*` | Rust API (3000) | JWT cookie | REST API |
-| `/vnc/{token}/websockify` | KasmVNC container | ForwardAuth → `/api/vnc/verify` | WebSocket proxy |
-| `/vnc/{token}` | SvelteKit (5173) | None | VNC viewer HTML |
-| `/` | SvelteKit (5173) | None | Dashboard SPA |
+| `/kasmvnc/{token}/websockify` | KasmVNC container | Basic header injection | WebSocket proxy |
+| `/ttyd/{token}/` | ttyd container | Basic header injection | Terminal proxy |
+| `/jupyter/{token}/` | Jupyter container | Access token in URL | Notebook proxy |
+| `/kasmvnc/{token}/` , `/open/{token}/` | SvelteKit | JWT cookie | Session viewer HTML |
+| `/` | SvelteKit | JWT cookie | Dashboard SPA |
 
-## Dynamic VNC Routing
+## Dynamic Instance Routing
 
 The key mechanism enabling scalable instance provisioning:
 
@@ -86,27 +107,25 @@ sequenceDiagram
     participant A as API (Rust)
     participant FS as Filesystem
     participant T as Traefik
-    participant K as KasmVNC Container
+    participant K as Instance Container
 
-    U->>A: POST /api/instances {name: "dev-1"}
-    A->>A: Create DB record, generate vnc_token
-    A->>K: bollard: create_kasm_container()
-    K-->>A: container_id, IP: 172.16.0.4
-    A->>FS: Write vnc-{token}-ws.yml
-    Note over FS: Rule: /vnc/{token}/websockify<br/>Service: https://172.16.0.4:6901<br/>Middleware: vnc-{token}-auth (header injection)
+    U->>A: POST /api/instances {template_id, persistence}
+    A->>A: Create DB record, generate access_token + access_password
+    A->>A: Allocate free host port + free /30 subnet
+    A->>K: bollard: create network + container
+    K-->>A: container_id
+    A->>FS: Write kasmvnc-{token}-ws.yml
+    Note over FS: Rule: PathPrefix(/kasmvnc/{token}/websockify)<br/>Service: https://host.docker.internal:{host_port}<br/>Middleware: auth (Basic header) + strip
     T->>FS: watch detects new .yml
     T->>T: Hot-reload: new routes active
 
-    U->>T: GET /vnc/{token}/
-    T->>A: ForwardAuth → /api/vnc/verify
-    A-->>T: ✅ 200 + X-Forwarded-User
-    T->>A: GET /vnc/{token}/ (SvelteKit)
-    A-->>U: HTML page
+    U->>T: GET /kasmvnc/{token}/
+    T->>T: Match web-router (SvelteKit)
+    T->>A: GET /kasmvnc/{token}/ (SvelteKit page)
 
-    U->>T: wss /vnc/{token}/websockify
-    T->>A: ForwardAuth → /api/vnc/verify
-    A-->>T: ✅ 200
-    T->>K: wss://172.16.0.4:6901/websockify
+    U->>T: wss /kasmvnc/{token}/websockify
+    T->>T: Inject Authorization: Basic header
+    T->>K: wss://host.docker.internal:{host_port}/websockify
     K-->>U: WebSocket tunnel
 ```
 
@@ -116,36 +135,43 @@ Traefik supports multiple providers (Docker, file, etcd, etc.). We chose **file 
 
 1. **Hot reload** — New YAML files are detected and loaded without restarting Traefik
 2. **Full control** — The API generates exactly the routing rules needed per instance
-3. **No label pollution** — KasmVNC containers don't need Traefik Docker labels
-4. **Decoupled lifecycle** — Traefik and KasmVNC are independent; only the API orchestrates both
+3. **No label pollution** — Instance containers don't need Traefik Docker labels
+4. **Decoupled lifecycle** — Traefik and instances are independent; only the API orchestrates both
 
 ### Route File Format
 
-When the API creates an instance with token `abc123`, one file is written to `traefik/dynamic/`:
+When the API creates a KasmVNC instance with token `abc123`, one file is written to `traefik/dynamic/`:
 
-**`vnc-abc123-ws.yml`** — WebSocket route + header injection middleware:
+**`kasmvnc-abc123-ws.yml`** — WebSocket route + Basic auth injection + prefix strip:
 ```yaml
 http:
   routers:
-    vnc-abc123-ws:
-      rule: "PathPrefix(`/vnc/abc123/websockify`)"
-      service: "vnc-abc123"
+    kasmvnc-abc123-ws:
+      rule: "PathPrefix(`/kasmvnc/abc123/websockify`)"
+      service: "kasmvnc-abc123"
       entryPoints:
         - web
       middlewares:
-        - "vnc-abc123-auth"
-  middlewares:
-    vnc-abc123-auth:
-      headers:
-        customRequestHeaders:
-          Authorization: "Basic a2FzbV91c2VyOnh4eHh4eHh4eHg="
+        - "kasmvnc-abc123-auth"
+        - "kasmvnc-abc123-strip"
   services:
-    vnc-abc123:
+    kasmvnc-abc123:
       loadBalancer:
         serversTransport: "kasm-insecure"
         servers:
-          - url: "https://172.16.0.4:6901"
+          - url: "https://host.docker.internal:10000"
+  middlewares:
+    kasmvnc-abc123-auth:
+      headers:
+        customRequestHeaders:
+          Authorization: "Basic a2FzbV91c2VyOnh4eHh4eHh4eHg="
+    kasmvnc-abc123-strip:
+      stripPrefix:
+        prefixes:
+          - "/kasmvnc/abc123"
 ```
+
+ttyd and Jupyter get equivalent files (`ttyd-{token}-ws.yml`, `jupyter-{token}-ws.yml`); Jupyter has no auth middleware (it authenticates via `?token=` in the URL), and only KasmVNC/ttyd strip their prefix.
 
 ## Authentication Flow
 
@@ -154,30 +180,19 @@ sequenceDiagram
     participant U as Browser
     participant T as Traefik
     participant A as API
-    participant K as KasmVNC
+    participant K as Instance Container
 
     Note over U: Login: POST /api/auth/login
     U->>A: {username, password}
     A->>A: bcrypt verify
-    A-->>U: Set-Cookie: ow_token=JWT
+    A-->>U: Set-Cookie: ow_token=JWT (7 days)
 
-    Note over U: Open VNC session
-    U->>T: wss /vnc/{token}/websockify
-    T->>T: Match vnc-ws-router
-    T->>A: ForwardAuth: GET /api/vnc/verify<br/>Cookie: ow_token=JWT<br/>X-Forwarded-Uri: /vnc/{token}/websockify
-    A->>A: Decode JWT → user_id, role
-    A->>A: Extract VNC token from URI
-    A->>A: Cache lookup (DashMap, O(1))
-    alt Cache hit
-        A-->>T: 200 OK
-    else Cache miss
-        A->>A: DB lookup: instance exists + status=running
-        A->>A: Populate cache
-        A-->>T: 200 OK
-    end
-    T->>T: Inject Authorization: Basic header<br/>(from vnc-{token}-auth middleware)
-    T->>K: wss://172.16.0.4:6901/websockify<br/>Authorization: Basic base64(kasm_user:{password})
-    K->>K: Verify Basic auth against .kasmpasswd
+    Note over U: Open session
+    U->>T: wss /kasmvnc/{token}/websockify
+    T->>T: Match kasmvnc-{token}-ws router
+    T->>T: Inject Authorization: Basic header<br/>(from kasmvnc-{token}-auth middleware)
+    T->>K: wss://host.docker.internal:{host_port}/websockify<br/>Authorization: Basic base64(kasm_user:{password})
+    K->>K: Verify Basic auth
     K-->>T: 101 Switching Protocols
     T-->>U: WebSocket upgrade complete
 ```
@@ -192,51 +207,68 @@ sequenceDiagram
 }
 ```
 
-- **Cookie:** `ow_token` (HttpOnly, SameSite=Lax, Path=/, Max-Age=86400)
+- **Cookie:** `ow_token` (HttpOnly, Secure, SameSite=Lax, Path=/, Max-Age=604800 = 7 days)
 - **Secret:** `JWT_SECRET` environment variable
-- **ForwardAuth** uses a separate code path (`vnc_verify`) that reads cookies from headers rather than Axum's cookie jar
+- **VNC cache:** the `vnc_verify` path (`/api/vnc/verify`) decodes the JWT directly from the `Cookie` header (not Axum's cookie jar) and validates the instance via the `VncCache` DashMap, falling back to the DB on cache miss. See [Caching Strategy](caching-strategy.md) and [VNC Authentication](vnc-auth.md).
 
-## KasmVNC Container Lifecycle
+## Instance Lifecycle
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Creating: POST /api/instances
-    Creating --> Running: Container started<br/>+ Traefik route written
-    Creating --> Error: Container create failed
+    [*] --> stopped: POST /api/instances (DB record created)
+    stopped --> starting: POST /api/instances/{id}/start
+    starting --> running: Health probe passes
+    starting --> error: Health probe fails (120s)
+    running --> paused: POST /api/instances/{id}/pause
+    paused --> running: POST /api/instances/{id}/unpause
+    running --> stopped: POST /api/instances/{id}/stop
+    stopped --> running: POST /api/instances/{id}/start
+    running --> stopped: timeout_action (auto-sleep / keep-time)
+    running --> paused: timeout_action (auto-sleep / keep-time)
+    running --> removed: timeout_action (auto-sleep / keep-time)
+    stopped --> removed: DELETE /api/instances/{id}
+    running --> removed: DELETE /api/instances/{id}
+    error --> removed: DELETE /api/instances/{id}
 
-    Running --> Stopped: POST /api/instances/{id}/stop
-    Stopped --> Running: POST /api/instances/{id}/start
-
-    Running --> Deleted: DELETE /api/instances/{id}
-    Stopped --> Deleted: DELETE /api/instances/{id}
-    Error --> Deleted: DELETE /api/instances/{id]
-
-    Deleted --> [*]
+    removed --> [*]
 ```
 
-For persistent Instances, delete keeps the user's data (host dir + volume) so
-it can be reused by a later launch; only a reset wipes it. See
-[Persistent Storage](persistent-storage.md).
+### Instance Status Values
+
+| Status | Meaning |
+|--------|---------|
+| `running` | Container running, Traefik route active |
+| `starting` | Container started, waiting on health probe |
+| `paused` | Container paused (Docker pause), route removed |
+| `stopped` | Container stopped, Traefik route removed |
+| `error` | Container create/start failed or probe timed out |
+
+For persistent instances, delete keeps the user's data (host dir + volume) so it can be reused by a later launch; only a reset wipes it. See [Persistent Storage](persistent-storage.md).
+
+### Background worker (`health_worker.rs`)
+
+Every 3 seconds the API runs three checks:
+
+- **Health probe** — `starting` instances are probed at `https://{host_gateway_ip}:{host_port}/`; a successful response moves them to `running` (and backfills `started_at`/`last_seen_at`), 120s without success moves them to `error`.
+- **Auto-sleep** — instances running past their template's `max_run_seconds` get the configured `timeout_action` (`remove`/`stop`/`pause`).
+- **Keep-time** — instances idle past their template's `keep_time_seconds` get the configured `keep_time_action`. A live container session connection (checked via `has_session_connection`) resets the idle clock, so in-use sessions survive even if the browser focus heartbeat is missed.
 
 ### Container Creation Steps
 
-1. **Pull image** — `tsukisama9292/ow-kasmvnc-ubuntu-dini:jammy`
-2. **Create container** with env vars:
-   - `VNC_PW=<127-char random>` (enables HTTP Basic Auth on websockify)
-   - `KASM_VNC_PORT=6901`
-   - `DISPLAY=:1`
-3. **Join default network** — Docker default `bridge` (instances do **not** join `ow-network`)
-4. **Inject config** — Upload `kasmvnc.yaml` to `/etc/kasmvnc/kasmvnc.yaml` via tar stream
-5. **Start container**
-6. **Publish port** — map the service port (KasmVNC `6901`) to `<host_gateway_ip>:<host_port>` via Docker port bindings
-7. **Write Traefik route** — Generate YAML file in `traefik/dynamic/` targeting `https://host.docker.internal:<host_port>`
+1. **Allocate resources** — a free host port in the pool (`OW_HOST_PORT_START`–`OW_HOST_PORT_END`, default 10000–20000) and a free `/30` subnet from the instance net base (`OW_INSTANCE_NET_BASE`, default `10.200.0.0/16`).
+2. **Create the dedicated network** — `ow-<instance_id>` bridge with `{subnet}/30`; the instance gets the `.2` address (gateway `.1`).
+3. **Create container** with:
+   - env vars: `VNC_PW=<127-char random>`, `KASM_VNC_PORT`/`DISPLAY` (KasmVNC), `OW_DNS` (DNS resolvers; the image entrypoint rewrites `/etc/resolv.conf` — user-defined bridges break Docker's embedded resolver under `runsc`), and `OW_DOCKER_IN_INSTANCE=true` when the template enables in-instance Docker.
+   - runtime `runsc` (gVisor) when the template sets it; `docker`/`runc` otherwise.
+   - `docker_in_instance` security profile: `--privileged` with no capability drops plus a `tmpfs` at `/var/lib/docker`; otherwise `NET_RAW`/`NET_ADMIN` are dropped.
+   - port binding: the service port (KasmVNC `6901`, ttyd `7681`, Jupyter `8888`) published to `<host_gateway_ip>:<host_port>`.
+4. **Inject config** — upload `kasmvnc.yaml` to `/etc/kasmvnc/kasmvnc.yaml` via tar stream (KasmVNC).
+5. **Start container**, then apply tc/HTB bandwidth limits (see below).
+6. **Write Traefik route** — generate the per-remote-type YAML in `traefik/dynamic/` targeting `https://host.docker.internal:<host_port>`.
 
-### kasmvnc.yaml Configuration
+### Network Bandwidth Limiting
 
-The API injects a custom `kasmvnc.yaml` that:
-- Enables SSL (KasmVNC requires it with `-sslOnly` hardcoded in entrypoint)
-- Disables `require_ssl` (allows Traefik to proxy without presenting a client cert)
-- Allows environment variable overrides
+Per-template `network_bandwidth_up_mbps` / `network_bandwidth_down_mbps` (0 = unlimited) are enforced with `tc`/HTB at the kernel on the instance's veth pair: upload shapes egress on `eth0` inside the container netns; download shapes egress on the host-side veth (located by reading the container's `eth0@ifN` via `nsenter`). The API container runs as root with `pid: host`, `cap_add: [SYS_ADMIN, NET_ADMIN]`, and `apparmor=unconfined`. Shaping is applied on every container start (Docker recreates the veth pair) and is **fail-open** — errors log and never kill a session.
 
 ## Traefik Configuration
 
@@ -263,31 +295,33 @@ The dev stack is **HTTP-only** by design (browsers treat `http://localhost` as a
 
 | File | Purpose | Managed by |
 |------|---------|------------|
-| `static-routers.yml` | api-router, web-router, vnc-auth middleware | Manual |
-| `static-services.yml` | api-service, web-service | Manual |
-| `static-transports.yml` | `kasm-insecure` (skip TLS verify) | Manual |
-| `vnc-{token}-ws.yml` | Per-instance WebSocket route + Basic auth middleware | API |
+| `static-routers.yml` | api-router, web-router, vnc-auth forwardAuth middleware | Manual (committed) |
+| `static-services.yml` | api-service, web-service | Manual (committed) |
+| `static-transports.yml` | `kasm-insecure` (skip TLS verify) | Manual (committed) |
+| `kasmvnc-{token}-ws.yml` | Per-instance KasmVNC route + Basic auth + strip | API (gitignored) |
+| `ttyd-{token}-ws.yml` | Per-instance ttyd route + Basic auth + strip | API (gitignored) |
+| `jupyter-{token}-ws.yml` | Per-instance Jupyter route | API (gitignored) |
 
 ### Per-Token Basic Auth Middleware
 
-Instead of using ForwardAuth (which can't inject headers on WebSocket upgrades), Traefik injects `Authorization: Basic` headers per-token via a `headers` middleware:
+Instead of a browser-supplied header (which JS `WebSocket` can't set), Traefik injects `Authorization: Basic` per-token via a `headers` middleware:
 
 ```yaml
 http:
   middlewares:
-    vnc-{token}-auth:
+    kasmvnc-{token}-auth:
       headers:
         customRequestHeaders:
           Authorization: "Basic base64(kasm_user:{password})"
 ```
 
-Each VNC route YAML includes its own middleware with the correct `kasm_user` credentials. The browser never sees these credentials — they are injected server-side by Traefik before proxying to KasmVNC.
+Each instance route YAML includes its own middleware with the correct credentials. The browser never sees these credentials — they are injected server-side by Traefik before proxying to the container.
 
 See [VNC Authentication](vnc-auth.md) for full details.
 
 ### TLS Handling
 
-KasmVNC enforces `-sslOnly` (hardcoded in container entrypoint). All KasmVNC backends use self-signed certificates. The `kasm-insecure` serversTransport tells Traefik to skip certificate verification:
+KasmVNC enforces `-sslOnly` (hardcoded in container entrypoint). All instance backends use self-signed certificates. The `kasm-insecure` serversTransport tells Traefik to skip certificate verification:
 
 ```yaml
 http:
@@ -300,38 +334,29 @@ http:
 
 ```mermaid
 graph LR
-    subgraph "Host"
-        API_PORT["API :3000"]
-        VITE_PORT["Vite :5173"]
-        TRAEFIK_PORT["Traefik :80"]
-        TRAEFIK_DASH["Traefik :8080"]
-    end
-
-    subgraph "ow-network (Docker Bridge)"
-        TRAEFIK_N["Traefik"]
-        API_N["API"]
+    subgraph "Control Plane (ow-network)"
+        TRAEFIK_N["Traefik :80"]
+        API_N["API :3000"]
         WEB_N["Web"]
         DB_N["Postgres"]
     end
 
-    subgraph "Default bridge (Docker)"
-        KASM1_N["KasmVNC #1"]
-        KASM2_N["KasmVNC #2"]
-        KASMN_N["KasmVNC #N"]
+    subgraph "Per-instance /30 (ow-{id})"
+        KASM1_N["Instance #1<br/>10.200.0.2/30"]
+        KASM2_N["Instance #2<br/>10.200.0.6/30"]
+        KASMN_N["Instance #N<br/>10.200.0.10/30"]
     end
 
-    TRAEFIK_PORT --> TRAEFIK_N
-    TRAEFIK_DASH --> TRAEFIK_N
-    TRAEFIK_N -->|"host.docker.internal"| API_PORT
-    TRAEFIK_N -->|"host.docker.internal"| VITE_PORT
-    TRAEFIK_N -->|"host.docker.internal:host_port"| KASM1_N
-    TRAEFIK_N -->|"host.docker.internal:host_port"| KASM2_N
-    TRAEFIK_N -->|"host.docker.internal:host_port"| KASMN_N
+    TRAEFIK_N -->|"host.docker.internal:3000"| API_N
+    TRAEFIK_N -->|"host.docker.internal:5173 / web-service"| WEB_N
+    TRAEFIK_N -->|"host.docker.internal:{host_port}"| KASM1_N
+    TRAEFIK_N -->|"host.docker.internal:{host_port}"| KASM2_N
+    TRAEFIK_N -->|"host.docker.internal:{host_port}"| KASMN_N
 ```
 
-- **Traefik ↔ API/Vite:** via `host.docker.internal` (host.docker.internal extra_hosts in compose)
-- **Traefik ↔ KasmVNC:** via `host.docker.internal:<host_port>` — Traefik reaches the published port on the Docker bridge gateway (default `172.17.0.1`), never a container IP
-- **API ↔ Docker daemon:** Unix socket (`/var/run/docker.sock`)
+- **Control plane:** Traefik, API, web, Postgres all live on `ow-network`. Dev routes reach the host-run API/Vite via `host.docker.internal` (`host-gateway` extra_host); production uses the `ow-service-network` service names (`ow-api`, `ow-web`).
+- **Instances:** each instance has its own `/30` bridge network `ow-<instance_id>`. Its single service port is published to `<host_gateway_ip>:<host_port>` (default gateway `172.17.0.1`), and Traefik reaches it via `https://host.docker.internal:<host_port>` — never a container IP.
+- **API ↔ Docker daemon:** Unix socket (`/var/run/docker.sock`, rw in the API container).
 
 ## Database Schema
 
@@ -346,51 +371,84 @@ erDiagram
         timestamptz updated_at
     }
 
-    instances {
+    workspace_templates {
         uuid id PK
         varchar name
-        serial instance_number UK
+        uuid owner_id FK
+        varchar image
+        integer cores
+        bigint memory
+        integer gpu_count
+        varchar docker_registry
+        varchar remote_type
+        varchar container_runtime
+        varchar persistent_storage_path
+        bigint max_run_seconds
+        varchar timeout_action
+        bigint keep_time_seconds
+        varchar keep_time_action
+        integer network_bandwidth_up_mbps
+        integer network_bandwidth_down_mbps
+        boolean docker_in_instance
+        json run_config
+        json exec_config
+        json volume_mappings
+    }
+
+    workspace_instances {
+        uuid id PK
+        varchar name
+        uuid template_id FK
+        uuid owner_id FK
+        integer instance_number
         varchar container_id
         varchar status
-        uuid owner_id FK
-        varchar vnc_token UK
-        varchar vnc_password
+        varchar access_token UK
+        varchar access_password
+        boolean mount_persistent
+        varchar resolved_volume_host_path
+        integer host_port
+        timestamptz started_at
+        timestamptz last_seen_at
         timestamptz created_at
         timestamptz updated_at
     }
 
-    users ||--o{ instances : "owns"
+    registry_config {
+        varchar url
+    }
+
+    registry_cache {
+        json data
+        timestamptz updated_at
+    }
+
+    users ||--o{ workspace_templates : "owns"
+    users ||--o{ workspace_instances : "owns"
+    workspace_templates ||--o{ workspace_instances : "launches"
 ```
 
-### Instance Status Values
-
-| Status | Meaning |
-|--------|---------|
-| `running` | Container running, Traefik route active |
-| `stopped` | Container stopped, Traefik route removed |
-| `error` | Container creation failed |
+Access credentials are `access_token` / `access_password` (renamed from `vnc_token` / `vnc_password` by migration `000008` when ttyd/Jupyter support landed).
 
 ## Scalability Considerations
 
 **Traefik file provider scales horizontally by design:**
-- Each VNC instance = 1 small YAML file (~250 bytes)
+- Each instance = 1 small YAML file (~250 bytes)
 - Traefik watches for filesystem changes via inotify — O(1) detection
 - Route matching is O(rule_length) per request, independent of total instance count
 - No state stored in Traefik; all state lives in PostgreSQL
 
-**Container network:**
-- Docker bridge network supports ~65k containers (172.x.0.0/16 subnet)
-- Each KasmVNC container gets its own IP; no port conflicts (no host port mapping)
-- Traefik proxies to container IPs directly, no port allocation needed
+**Instance networks:**
+- Each instance consumes a `/30` (4 IPs) from `OW_INSTANCE_NET_BASE`. Default `10.200.0.0/16` provides 16,384 instance subnets.
+- Host ports are drawn from a configurable pool (default 10000–20000); the allocator (`host_port.rs`, `instance_net.rs`) avoids collisions with a token-derived spread on retry, and a `network_lock` serializes allocation within the process.
 
 **In-memory VNC cache (`DashMap`):**
-- `vnc_token → { status, owner_id }` mapping stored in a lock-free concurrent HashMap
-- Populated on API startup from DB (all running instances)
-- Synchronized on instance create/start/stop/delete events
-- `vnc_verify` reads cache first (O(1) hash lookup, no async); falls back to DB on cache miss
+- `access_token → { status }` mapping stored in a lock-free concurrent HashMap
+- Populated on API startup from DB (all instances), synchronized on create/start/stop/delete events
+- `vnc_verify` reads cache first (O(1) hash lookup); falls back to DB on cache miss
 - Eliminates PostgreSQL round-trip on every WebSocket handshake
-- Cache is per-process; sufficient for single-API deployment
+- Cache is per-process; sufficient for single-API deployment (see [Caching Strategy](caching-strategy.md))
 
 ## VNC Authentication
 
-See [VNC Authentication](vnc-auth.md) for full details on the password generation, Traefik header injection, and security model.
+See [VNC Authentication](vnc-auth.md) for full details on password generation, Traefik header injection, and the security model.
