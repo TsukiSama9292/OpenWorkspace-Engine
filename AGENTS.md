@@ -117,7 +117,7 @@ Never suppress a warning. Always fix the root cause.
 
 `references_repo/KasmVNC/kasmweb/` is the upstream KasmVNC source. `core/` contains noVNC protocol files (the basis for `src/lib/vnc/`). `app/` contains the original UI logic (reference only).
 
-`references_repo/gvisor/` is a shallow (depth-1) clone of upstream gVisor (`runsc`). Planned default container Runtime for instances — wire it up as the default runtime in compose/instance creation.
+`references_repo/gvisor/` is a shallow (depth-1) clone of upstream gVisor (`runsc`), sparse-checked-out to only the `g3doc/` docs directory. Planned default container Runtime for instances — wire it up as the default runtime in compose/instance creation.
 
 <!-- CODEGRAPH_START -->
 ## CodeGraph
