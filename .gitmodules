@@ -13,3 +13,6 @@
 [submodule "references_repo/JupyterLab"]
 	path = references_repo/JupyterLab
 	url = https://github.com/jupyterlab/jupyterlab.git
+[submodule "references_repo/gvisor"]
+	path = references_repo/gvisor
+	url = https://github.com/google/gvisor
