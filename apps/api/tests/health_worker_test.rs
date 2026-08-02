@@ -112,6 +112,20 @@ impl WorkerTestContext {
             .await
             .unwrap();
         repo.update_status(instance.id, "starting").await.unwrap();
+        repo.update_host_port(instance.id, Some(12345)).await.unwrap();
+        instance.id
+    }
+
+    async fn create_starting_instance_without_host_port(&self, template_id: uuid::Uuid) -> uuid::Uuid {
+        let repo = WorkspaceInstanceRepository::new(&self.db);
+        let instance = repo
+            .launch(template_id, self.admin_id, "test-no-port", false, None)
+            .await
+            .unwrap();
+        repo.update_container_id(instance.id, "test-container-id")
+            .await
+            .unwrap();
+        repo.update_status(instance.id, "starting").await.unwrap();
         instance.id
     }
 
@@ -266,13 +280,33 @@ async fn test_probe_failure_stays_starting() {
     let template_id = ctx.create_template("probe-fail", "kasmvnc").await;
     let instance_id = ctx.create_starting_instance(template_id).await;
 
-    let mut mock_docker = MockDockerService::new();
-    mock_docker
-        .expect_network_name()
-        .return_const("ow-test".to_string());
-    mock_docker
-        .expect_get_container_ip()
-        .returning(|_, _| Box::pin(async { Ok("10.0.0.1".to_string()) }));
+    let vnc_cache = VncCache::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(1))
+        .build()
+        .unwrap();
+
+    let instance_repo = WorkspaceInstanceRepository::new(&ctx.db);
+
+    let _ = health_worker::check_instances(
+        &instance_repo,
+        &vnc_cache,
+        &client,
+        "172.17.0.1",
+    )
+    .await;
+
+    let instance = instance_repo.find_by_id(instance_id).await.unwrap().unwrap();
+    assert_eq!(instance.status, "starting", "should remain starting when probe fails and not timed out");
+}
+
+// ── Verify that a starting instance with no host_port is skipped (no crash, stays starting) ──
+
+#[tokio::test]
+async fn test_probe_no_host_port_skips_instance() {
+    let ctx = WorkerTestContext::new().await;
+    let template_id = ctx.create_template("probe-no-port", "kasmvnc").await;
+    let instance_id = ctx.create_starting_instance_without_host_port(template_id).await;
 
     let vnc_cache = VncCache::new();
     let client = reqwest::Client::builder()
@@ -281,19 +315,17 @@ async fn test_probe_failure_stays_starting() {
         .unwrap();
 
     let instance_repo = WorkspaceInstanceRepository::new(&ctx.db);
-    let template_repo = WorkspaceTemplateRepository::new(&ctx.db);
 
     let _ = health_worker::check_instances(
         &instance_repo,
-        &template_repo,
-        &mock_docker,
         &vnc_cache,
         &client,
+        "172.17.0.1",
     )
     .await;
 
     let instance = instance_repo.find_by_id(instance_id).await.unwrap().unwrap();
-    assert_eq!(instance.status, "starting", "should remain starting when probe fails and not timed out");
+    assert_eq!(instance.status, "starting", "instance without host_port should be skipped, not failed");
 }
 
 // ── Verify that a starting instance with probe failure + timeout becomes error ──
@@ -315,14 +347,6 @@ async fn test_probe_timeout_sets_error() {
         raw_sql,
     )).await.unwrap();
 
-    let mut mock_docker = MockDockerService::new();
-    mock_docker
-        .expect_network_name()
-        .return_const("ow-test".to_string());
-    mock_docker
-        .expect_get_container_ip()
-        .returning(|_, _| Box::pin(async { Ok("10.0.0.1".to_string()) }));
-
     let vnc_cache = VncCache::new();
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(1))
@@ -330,14 +354,12 @@ async fn test_probe_timeout_sets_error() {
         .unwrap();
 
     let instance_repo = WorkspaceInstanceRepository::new(&ctx.db);
-    let template_repo = WorkspaceTemplateRepository::new(&ctx.db);
 
     let _ = health_worker::check_instances(
         &instance_repo,
-        &template_repo,
-        &mock_docker,
         &vnc_cache,
         &client,
+        "172.17.0.1",
     )
     .await;
 

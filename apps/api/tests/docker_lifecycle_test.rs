@@ -127,6 +127,15 @@ async fn test_stop_and_start_instance() {
 
     let instance_id = launch_instance(&ctx, &template_id).await;
 
+    // Capture the allocated host port at first launch; it must be stable
+    // across the whole stop/start cycle (user story: stable bookmarked URL).
+    let resp = ctx.get(&format!("/api/instances/{}", instance_id)).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let host_port = body["instance"]["host_port"]
+        .as_i64()
+        .expect("instance JSON must expose host_port");
+    assert!(host_port > 0, "host_port must be allocated");
+
     let resp = ctx.post(&format!("/api/instances/{}/stop", instance_id), &serde_json::json!({})).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -135,6 +144,11 @@ async fn test_stop_and_start_instance() {
     let resp = ctx.get(&format!("/api/instances/{}", instance_id)).await;
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["instance"]["status"].as_str().unwrap(), "stopped");
+    assert_eq!(
+        body["instance"]["host_port"].as_i64(),
+        Some(host_port),
+        "host port must survive stop"
+    );
 
     let resp = ctx.post(&format!("/api/instances/{}/start", instance_id), &serde_json::json!({})).await;
     assert_eq!(resp.status(), 200, "start failed: {:?}", resp.text().await);
@@ -146,6 +160,11 @@ async fn test_stop_and_start_instance() {
     let resp = ctx.get(&format!("/api/instances/{}", instance_id)).await;
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["instance"]["status"].as_str().unwrap(), "running");
+    assert_eq!(
+        body["instance"]["host_port"].as_i64(),
+        Some(host_port),
+        "host port must be stable across restart"
+    );
 
 }
 

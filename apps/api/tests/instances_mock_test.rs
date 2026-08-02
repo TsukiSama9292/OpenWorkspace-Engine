@@ -668,6 +668,156 @@ async fn test_start_stopped_container_success() {
     assert_eq!(body["status"], "starting");
 }
 
+#[tokio::test]
+async fn test_stop_preserves_host_port_and_route() {
+    let dir = openworkspace_api::route_writer::default_dynamic_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_stop_container_by_id()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        m.expect_inspect_container_state()
+            .returning(|_| Box::pin(async { Ok(Some("exited".to_string())) }));
+        m.expect_start_container_by_id()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        m.expect_apply_bandwidth_limit()
+            .never();
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let (_, instance_id) = create_config_and_instance(&ctx, &token, "stop-keep-port-route").await;
+
+    let id: uuid::Uuid = instance_id.parse().unwrap();
+    let repo = WorkspaceInstanceRepository::new(&ctx.db);
+    let inst = repo.find_by_id(id).await.unwrap().unwrap();
+    let host_port = inst.host_port.expect("launch must persist a host port");
+    let access_token = inst.access_token.clone();
+    let route_file = dir.join(format!("kasmvnc-{}-ws.yml", access_token));
+    assert!(route_file.exists(), "launch must write a route file");
+
+    set_instance_status(&ctx.db, &instance_id, "running", Some("abc123def456")).await;
+
+    let resp = ctx.post_auth(&format!("/api/instances/{}/stop", instance_id), &serde_json::json!({}), &token).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "stopped");
+
+    assert!(route_file.exists(), "route must survive stop (no route churn)");
+    let after_stop = repo.find_by_id(id).await.unwrap().unwrap();
+    assert_eq!(after_stop.host_port, Some(host_port), "host port must survive stop");
+
+    let resp = ctx.post_auth(&format!("/api/instances/{}/start", instance_id), &serde_json::json!({}), &token).await;
+    assert_eq!(resp.status(), 200, "start failed: {:?}", resp.text().await);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "starting");
+
+    let after_start = repo.find_by_id(id).await.unwrap().unwrap();
+    assert_eq!(after_start.host_port, Some(host_port), "host port must be stable across restart");
+    let content = std::fs::read_to_string(&route_file).unwrap();
+    assert!(
+        content.contains(&format!("host.docker.internal:{}", host_port)),
+        "route must still target the same host port"
+    );
+
+    let _ = std::fs::remove_file(&route_file);
+}
+
+// ── Ticket 02: a legacy instance (host_port NULL) is allocated + committed
+//    a port on next start, before its container is created. ──
+
+#[tokio::test]
+async fn test_start_backfills_host_port_before_create() {
+    let captured = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let mock_captured = std::sync::Arc::clone(&captured);
+    let ctx = MockContext::new(move |m| {
+        let captured = std::sync::Arc::clone(&mock_captured);
+        m.expect_create_container_from_template()
+            .returning(move |_, _, cfg, _, _| {
+                *captured.lock().unwrap() = cfg.host_port;
+                Box::pin(async { Ok("fake-container-id".to_string()) })
+            });
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let config_resp = ctx.post_auth("/api/templates", &serde_json::json!({
+        "name": "legacy-backfill", "image": "busybox:1"
+    }), &token).await;
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
+    let template_uuid: uuid::Uuid = template_id.parse().unwrap();
+
+    let admin = openworkspace_api::db::UserRepository::new(&ctx.db)
+        .find_by_username("admin").await.unwrap().unwrap();
+    let admin_id = admin.0;
+    let repo = WorkspaceInstanceRepository::new(&ctx.db);
+    let instance = repo.launch(template_uuid, admin_id, "legacy-instance", false, None).await.unwrap();
+    assert!(instance.host_port.is_none(), "legacy row has no host_port");
+
+    let resp = ctx.post_auth(&format!("/api/instances/{}/start", instance.id), &serde_json::json!({}), &token).await;
+    assert_eq!(resp.status(), 200, "start failed: {:?}", resp.text().await);
+
+    let after = repo.find_by_id(instance.id).await.unwrap().unwrap();
+    let committed = after.host_port.expect("start must backfill and commit a host port");
+    let used_for_create = captured.lock().unwrap().expect("create must receive the backfilled host port");
+    assert_eq!(
+        committed as u16, used_for_create,
+        "backfill must be committed before the container create uses it"
+    );
+}
+
+// ── Ticket 02: deleting an instance removes its row and frees the port for
+//    reuse by a later launch. ──
+
+#[tokio::test]
+async fn test_delete_frees_host_port() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_stop_container_by_id()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        m.expect_remove_container_by_id()
+            .returning(|_| Box::pin(async { Ok(()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let (_, instance_id_a) = create_config_and_instance(&ctx, &token, "free-port-a").await;
+    let repo = WorkspaceInstanceRepository::new(&ctx.db);
+    let id_a: uuid::Uuid = instance_id_a.parse().unwrap();
+    let port_a = repo.find_by_id(id_a).await.unwrap().unwrap().host_port.unwrap();
+
+    let resp = ctx.delete_auth(&format!("/api/instances/{}", instance_id_a), &token).await;
+    assert_eq!(resp.status(), 204);
+
+    let (_, instance_id_b) = create_config_and_instance(&ctx, &token, "free-port-b").await;
+    let id_b: uuid::Uuid = instance_id_b.parse().unwrap();
+    let port_b = repo.find_by_id(id_b).await.unwrap().unwrap().host_port.unwrap();
+    assert_eq!(port_a, port_b, "deleted instance's port must be reusable");
+}
+
+// ── Ticket 02: an error-state instance keeps its row (and port reservation)
+//    until deleted — a later launch must not take its port. ──
+
+#[tokio::test]
+async fn test_error_instance_keeps_port_reservation() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let (_, instance_id_a) = create_config_and_instance(&ctx, &token, "reserve-port-a").await;
+    let repo = WorkspaceInstanceRepository::new(&ctx.db);
+    let id_a: uuid::Uuid = instance_id_a.parse().unwrap();
+    let port_a = repo.find_by_id(id_a).await.unwrap().unwrap().host_port.unwrap();
+
+    repo.update_status(id_a, "error").await.unwrap();
+
+    let (_, instance_id_b) = create_config_and_instance(&ctx, &token, "reserve-port-b").await;
+    let id_b: uuid::Uuid = instance_id_b.parse().unwrap();
+    let port_b = repo.find_by_id(id_b).await.unwrap().unwrap().host_port.unwrap();
+    assert_ne!(port_a, port_b, "error-state instance must keep its port reserved");
+}
+
 // ── Bandwidth limit: applied on restart of an existing stopped container ──
 
 async fn create_bw_template(ctx: &MockContext, token: &str, name: &str, up_mbps: i32, down_mbps: i32) -> String {

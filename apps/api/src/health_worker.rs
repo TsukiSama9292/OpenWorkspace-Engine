@@ -15,6 +15,7 @@ pub async fn run(
     db: DatabaseConnection,
     docker: Arc<dyn DockerService>,
     vnc_cache: VncCache,
+    host_gateway_ip: String,
 ) {
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
@@ -31,7 +32,7 @@ pub async fn run(
         let instance_repo = WorkspaceInstanceRepository::new(&db);
         let template_repo = WorkspaceTemplateRepository::new(&db);
 
-        match check_instances(&instance_repo, &template_repo, &*docker, &vnc_cache, &client).await {
+        match check_instances(&instance_repo, &vnc_cache, &client, &host_gateway_ip).await {
             Ok(count) => {
                 if count > 0 {
                     tracing::debug!("Health worker updated {} instances", count);
@@ -241,10 +242,9 @@ pub async fn check_keep_time(
 
 pub async fn check_instances(
     instance_repo: &WorkspaceInstanceRepository<'_>,
-    template_repo: &WorkspaceTemplateRepository<'_>,
-    docker: &dyn DockerService,
     vnc_cache: &VncCache,
     client: &reqwest::Client,
+    host_gateway_ip: &str,
 ) -> Result<usize, String> {
     let instances = instance_repo
         .list_by_status("starting")
@@ -254,7 +254,7 @@ pub async fn check_instances(
     let mut updated = 0;
 
     for instance in &instances {
-        let result = check_single_instance(instance_repo, template_repo, docker, vnc_cache, client, instance).await;
+        let result = check_single_instance(instance_repo, vnc_cache, client, instance, host_gateway_ip).await;
         if let Err(e) = result {
             tracing::warn!("Health check for instance '{}': {}", instance.name, e);
         } else {
@@ -267,38 +267,18 @@ pub async fn check_instances(
 
 async fn check_single_instance(
     instance_repo: &WorkspaceInstanceRepository<'_>,
-    template_repo: &WorkspaceTemplateRepository<'_>,
-    docker: &dyn DockerService,
     vnc_cache: &VncCache,
     client: &reqwest::Client,
     instance: &crate::db::WorkspaceInstance,
+    host_gateway_ip: &str,
 ) -> Result<(), String> {
-    let container_id = instance
-        .container_id
-        .as_ref()
-        .ok_or_else(|| "no container_id".to_string())?;
+    // Probe the exact path real traffic uses: the host gateway IP + the
+    // instance's published host port. A container IP is never involved.
+    let host_port = instance
+        .host_port
+        .ok_or_else(|| "no host_port".to_string())?;
 
-    let template = template_repo
-        .find_by_id(instance.template_id)
-        .await
-        .map_err(|e| format!("template lookup failed: {}", e))?
-        .ok_or_else(|| "template not found".to_string())?;
-
-    let remote_type: RemoteType = template
-        .remote_type
-        .parse()
-        .map_err(|_| "invalid remote_type".to_string())?;
-
-    let port = remote_type.port();
-
-    let ip = match docker.get_container_ip(container_id, docker.network_name()).await {
-        Ok(ip) => ip,
-        Err(e) => {
-            return check_timeout(instance_repo, instance, &format!("get_container_ip failed: {}", e)).await;
-        }
-    };
-
-    let url = format!("https://{ip}:{port}/");
+    let url = format!("https://{host_gateway_ip}:{host_port}/");
     match client.get(&url).send().await {
         Ok(_) => {
             instance_repo
@@ -317,8 +297,8 @@ async fn check_single_instance(
             tracing::info!(
                 "Health check passed for instance '{}' ({}:{})",
                 instance.name,
-                ip,
-                port
+                host_gateway_ip,
+                host_port
             );
             Ok(())
         }

@@ -616,6 +616,10 @@ async fn start_instance(
             Json(serde_json::json!({"error": "Instance not found"})),
         ))?;
 
+    // Port the route was last written with. On a plain restart the port is
+    // unchanged, the route still exists, and we skip rewriting it (no churn).
+    let persisted_host_port = instance.host_port.map(|p| p as u16);
+
     if !can_manage_instance(&state, &auth, &instance).await.map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -719,8 +723,13 @@ async fn start_instance(
     if let Some(ref cid) = new_container_id {
         instance_repo.update_container_id(instance.id, cid).await.ok();
 
-        if let Err(e) = crate::route_writer::write_route(&remote_type, &instance.access_token, host_port, &instance.access_password) {
-            tracing::error!("Failed to write Traefik route: {}", e);
+        // Rewrite the route only when the published port changed (a legacy
+        // backfill or a recreate-on-stolen-port). On an unchanged restart the
+        // route survives stop and needs no rewrite.
+        if persisted_host_port != Some(host_port) {
+            if let Err(e) = crate::route_writer::write_route(&remote_type, &instance.access_token, host_port, &instance.access_password) {
+                tracing::error!("Failed to write Traefik route: {}", e);
+            }
         }
         state.vnc_cache.insert(&instance.access_token, "starting");
     }
@@ -1097,9 +1106,9 @@ async fn stop_instance(
         }
     }
 
-    if let Err(e) = crate::route_writer::delete_route(&instance.access_token) {
-        tracing::error!("Failed to delete Traefik VNC route: {}", e);
-    }
+    // The Traefik route is deliberately kept: the host port is reserved for the
+    // lifetime of the instance, so the route stays valid across stop/start with
+    // zero churn (user story: stable bookmarked URL).
     state.vnc_cache.remove(&instance.access_token);
 
     instance_repo.update_status(instance.id, "stopped").await.map_err(|e| {

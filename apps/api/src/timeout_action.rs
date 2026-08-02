@@ -46,9 +46,8 @@ pub async fn stop(
         }
     }
 
-    if let Err(e) = crate::route_writer::delete_route(&instance.access_token) {
-        tracing::error!("Failed to delete Traefik VNC route: {}", e);
-    }
+    // The Traefik route is deliberately kept (same as the stop route): the host
+    // port stays reserved, so stop/start causes no route churn.
     vnc_cache.remove(&instance.access_token);
 
     instance_repo

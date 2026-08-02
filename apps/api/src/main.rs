@@ -82,8 +82,9 @@ async fn main() {
         let worker_db = state.db.clone();
         let worker_docker = state.docker.clone();
         let worker_vnc_cache = state.vnc_cache.clone();
+        let worker_gateway_ip = state.settings.host_gateway_ip.clone();
         tokio::spawn(async move {
-            openworkspace_api::health_worker::run(worker_db, worker_docker, worker_vnc_cache).await;
+            openworkspace_api::health_worker::run(worker_db, worker_docker, worker_vnc_cache, worker_gateway_ip).await;
         });
     }
 
