@@ -104,4 +104,44 @@ describe('TemplatePanel', () => {
     expect(secondsInputs(container).length).toBe(1);
     expect((secondsInputs(container)[0] as HTMLInputElement).value).toBe('3600');
   });
+
+  function showAdvanced(container: HTMLElement) {
+    const btn = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(b => b.textContent?.includes('Show Advanced'));
+    return btn;
+  }
+  function diniToggle(container: HTMLElement) {
+    return Array.from(container.querySelectorAll<HTMLElement>('[data-testid="dini-toggle"]'));
+  }
+  function runtimeSelect(container: HTMLElement) {
+    return container.querySelector<HTMLSelectElement>('[data-testid="runtime-select"]');
+  }
+
+  it('shows the sandbox-protection indicator when DinI is on with the runsc runtime', async () => {
+    const { container } = render(TemplatePanel, { props: panelProps() });
+    await fireEvent.click(showAdvanced(container)!);
+    await tick();
+
+    expect(runtimeSelect(container)).toBeTruthy();
+
+    await fireEvent.click(diniToggle(container)[0]);
+    await tick();
+    const select = runtimeSelect(container)!;
+    await fireEvent.change(select, { target: { value: 'runsc' } });
+    await tick();
+
+    expect(screen.queryByText('Sandboxed via gVisor')).toBeTruthy();
+    expect(screen.queryByText(/runs with full host privileges/i)).toBeNull();
+  });
+
+  it('shows a high-risk warning when DinI is on without the runsc runtime', async () => {
+    const { container } = render(TemplatePanel, { props: panelProps() });
+    await fireEvent.click(showAdvanced(container)!);
+    await tick();
+
+    await fireEvent.click(diniToggle(container)[0]);
+    await tick();
+
+    expect(screen.queryByText(/runs with full host privileges/i)).toBeTruthy();
+    expect(screen.queryByText('Sandboxed via gVisor')).toBeNull();
+  });
 });

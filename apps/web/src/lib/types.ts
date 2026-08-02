@@ -28,6 +28,7 @@ export interface Template {
   keep_time_action: TimeoutAction;
   network_bandwidth_up_mbps: number;
   network_bandwidth_down_mbps: number;
+  docker_in_instance: boolean;
   run_config: Record<string, unknown>;
   exec_config: Record<string, unknown>;
   volume_mappings: Record<string, string>;

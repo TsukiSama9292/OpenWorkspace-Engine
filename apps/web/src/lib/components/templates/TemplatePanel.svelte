@@ -157,7 +157,7 @@
         </button>
 
         {#if form.showAdvanced}
-          <TemplateAdvanced bind:hostname={form.hostname} bind:dns={form.dns} bind:shmSize={form.shmSize} bind:networkMode={form.networkMode} bind:containerRuntime={form.containerRuntime} bind:bandwidthUpMbps={form.bandwidthUpMbps} bind:bandwidthDownMbps={form.bandwidthDownMbps} bind:envVars={form.envVars} bind:execCommand={form.execCommand} bind:volumeMappings={form.volumeMappings} />
+          <TemplateAdvanced bind:hostname={form.hostname} bind:dns={form.dns} bind:shmSize={form.shmSize} bind:networkMode={form.networkMode} bind:containerRuntime={form.containerRuntime} bind:dockerInInstance={form.dockerInInstance} bind:bandwidthUpMbps={form.bandwidthUpMbps} bind:bandwidthDownMbps={form.bandwidthDownMbps} bind:envVars={form.envVars} bind:execCommand={form.execCommand} bind:volumeMappings={form.volumeMappings} />
         {/if}
 
         {#if form.error}

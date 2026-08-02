@@ -34,6 +34,7 @@ const template: Template = {
   keep_time_action: 'pause',
   network_bandwidth_up_mbps: 100,
   network_bandwidth_down_mbps: 50,
+  docker_in_instance: true,
   run_config: {
     hostname: 'devbox',
     dns: ['8.8.8.8', '1.1.1.1'],
@@ -68,6 +69,7 @@ const populatedState: TemplateFormState = {
   keepTimeAction: 'stop',
   bandwidthUpMbps: 50,
   bandwidthDownMbps: 25,
+  dockerInInstance: true,
   envVars: [{ key: 'FOO', value: 'bar' }],
   execCommand: 'bash',
   volumeMappings: [{ host: '/h', container: '/c' }],
@@ -94,6 +96,7 @@ describe('template-form', () => {
       expect(state.timeoutAction).toBe('remove');
       expect(state.keepTimeSeconds).toBeNull();
       expect(state.keepTimeAction).toBe('pause');
+      expect(state.dockerInInstance).toBe(false);
       expect(state.envVars).toEqual([{ key: '', value: '' }]);
       expect(state.volumeMappings).toEqual([{ host: '', container: '' }]);
     });
@@ -134,7 +137,8 @@ describe('template-form', () => {
           keep_time_seconds: 3600,
           keep_time_action: 'stop',
           network_bandwidth_up_mbps: 50,
-          network_bandwidth_down_mbps: 25
+          network_bandwidth_down_mbps: 25,
+          docker_in_instance: true
         })
       }));
     });
@@ -165,7 +169,8 @@ describe('template-form', () => {
           keep_time_seconds: null,
           keep_time_action: 'pause',
           network_bandwidth_up_mbps: 0,
-          network_bandwidth_down_mbps: 0
+          network_bandwidth_down_mbps: 0,
+          docker_in_instance: false
         })
       }));
     });
@@ -261,6 +266,7 @@ describe('template-form', () => {
         keepTimeAction: 'pause',
         bandwidthUpMbps: 100,
         bandwidthDownMbps: 50,
+        dockerInInstance: true,
         envVars: [
           { key: 'FOO', value: 'bar' },
           { key: 'EMPTY', value: '' }
@@ -295,6 +301,12 @@ describe('template-form', () => {
       const state = formStateFromTemplate(rest as Template);
       expect(state.bandwidthUpMbps).toBe(0);
       expect(state.bandwidthDownMbps).toBe(0);
+    });
+
+    it('defaults a missing docker_in_instance to off', () => {
+      const { docker_in_instance, ...rest } = template;
+      const state = formStateFromTemplate(rest as Template);
+      expect(state.dockerInInstance).toBe(false);
     });
 
     it('prefills keep-time fields from a template', () => {
@@ -376,7 +388,8 @@ describe('template-form', () => {
           keep_time_seconds: 3600,
           keep_time_action: 'stop',
           network_bandwidth_up_mbps: 50,
-          network_bandwidth_down_mbps: 25
+          network_bandwidth_down_mbps: 25,
+          docker_in_instance: true
         })
       }));
     });

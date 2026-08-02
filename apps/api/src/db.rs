@@ -98,6 +98,7 @@ pub mod workspace_template {
         pub network_bandwidth_down_mbps: i32,
         pub keep_time_seconds: Option<i64>,
         pub keep_time_action: String,
+        pub docker_in_instance: bool,
         pub created_at: DateTimeUtc,
         pub updated_at: DateTimeUtc,
     }
@@ -249,6 +250,7 @@ pub struct WorkspaceTemplate {
     pub network_bandwidth_down_mbps: i32,
     pub keep_time_seconds: Option<i64>,
     pub keep_time_action: String,
+    pub docker_in_instance: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -277,6 +279,7 @@ impl From<workspace_template::Model> for WorkspaceTemplate {
             network_bandwidth_down_mbps: m.network_bandwidth_down_mbps,
             keep_time_seconds: m.keep_time_seconds,
             keep_time_action: m.keep_time_action,
+            docker_in_instance: m.docker_in_instance,
             created_at: m.created_at,
             updated_at: m.updated_at,
         }
@@ -469,6 +472,7 @@ impl<'a> WorkspaceTemplateRepository<'a> {
         network_bandwidth_down_mbps: i32,
         keep_time_seconds: Option<i64>,
         keep_time_action: &str,
+        docker_in_instance: bool,
     ) -> Result<WorkspaceTemplate, sea_orm::DbErr> {
         let id = Uuid::new_v4();
         let model = workspace_template::ActiveModel {
@@ -493,6 +497,7 @@ impl<'a> WorkspaceTemplateRepository<'a> {
             network_bandwidth_down_mbps: Set(network_bandwidth_down_mbps),
             keep_time_seconds: Set(keep_time_seconds),
             keep_time_action: Set(keep_time_action.to_string()),
+            docker_in_instance: Set(docker_in_instance),
             ..Default::default()
         };
         let inserted = model.insert(self.db).await?;
@@ -551,6 +556,7 @@ impl<'a> WorkspaceTemplateRepository<'a> {
         network_bandwidth_down_mbps: i32,
         keep_time_seconds: Option<i64>,
         keep_time_action: &str,
+        docker_in_instance: bool,
     ) -> Result<bool, sea_orm::DbErr> {
         let result = workspace_template::Entity::update(workspace_template::ActiveModel {
             id: Set(id),
@@ -573,6 +579,7 @@ impl<'a> WorkspaceTemplateRepository<'a> {
             network_bandwidth_down_mbps: Set(network_bandwidth_down_mbps),
             keep_time_seconds: Set(keep_time_seconds),
             keep_time_action: Set(keep_time_action.to_string()),
+            docker_in_instance: Set(docker_in_instance),
             ..Default::default()
         })
         .filter(workspace_template::Column::Id.eq(id))

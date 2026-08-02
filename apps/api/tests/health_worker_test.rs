@@ -95,8 +95,7 @@ impl WorkerTestContext {
                 0,
                 0,
                 None,
-                "pause",
-            )
+                "pause", false)
             .await
             .unwrap();
         template.id
@@ -157,8 +156,7 @@ impl WorkerTestContext {
                 0,
                 0,
                 None,
-                "pause",
-            )
+                "pause", false)
             .await
             .unwrap();
         template.id
@@ -210,8 +208,7 @@ impl WorkerTestContext {
                 0,
                 0,
                 keep_time_seconds,
-                keep_time_action,
-            )
+                keep_time_action, false)
             .await
             .unwrap();
         template.id
@@ -977,8 +974,7 @@ async fn test_keep_time_honors_midrun_template_change() {
             template.network_bandwidth_up_mbps,
             template.network_bandwidth_down_mbps,
             Some(3600),
-            "stop",
-        )
+            "stop", false)
         .await
         .unwrap();
 
@@ -1017,8 +1013,7 @@ async fn test_keep_time_honors_midrun_template_change() {
             template.network_bandwidth_up_mbps,
             template.network_bandwidth_down_mbps,
             Some(60),
-            "stop",
-        )
+            "stop", false)
         .await
         .unwrap();
 

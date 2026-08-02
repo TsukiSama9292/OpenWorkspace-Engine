@@ -577,6 +577,99 @@ async fn test_template_response_includes_container_runtime() {
 }
 
 #[tokio::test]
+async fn test_create_template_with_docker_in_instance() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "dini-config",
+        "image": "busybox:1",
+        "container_runtime": "runsc",
+        "docker_in_instance": true
+    })).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["template"]["docker_in_instance"], true);
+
+    let template_id = body["template"]["id"].as_str().unwrap();
+    let resp = ctx.get(&format!("/api/templates/{}", template_id)).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["template"]["docker_in_instance"], true);
+}
+
+#[tokio::test]
+async fn test_create_template_default_docker_in_instance_false() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "dini-default",
+        "image": "busybox:1"
+    })).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["template"]["docker_in_instance"], false);
+
+    let template_id = body["template"]["id"].as_str().unwrap();
+    let resp = ctx.get(&format!("/api/templates/{}", template_id)).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["template"]["docker_in_instance"], false);
+}
+
+#[tokio::test]
+async fn test_update_template_docker_in_instance() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "dini-update",
+        "image": "busybox:1"
+    })).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let template_id = body["template"]["id"].as_str().unwrap();
+    assert_eq!(body["template"]["docker_in_instance"], false);
+
+    let resp = ctx.put(&format!("/api/templates/{}", template_id), &serde_json::json!({
+        "name": "dini-update",
+        "image": "busybox:1",
+        "cores": 2,
+        "memory": 4294967296_i64,
+        "gpu_count": 0,
+        "run_config": {},
+        "exec_config": {},
+        "volume_mappings": {},
+        "container_runtime": "runsc",
+        "docker_in_instance": true
+    })).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["template"]["docker_in_instance"], true);
+
+    let resp = ctx.get(&format!("/api/templates/{}", template_id)).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["template"]["docker_in_instance"], true);
+}
+
+#[tokio::test]
+async fn test_template_response_includes_docker_in_instance() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "json-dini",
+        "image": "busybox:1",
+        "docker_in_instance": true
+    })).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["template"].get("docker_in_instance").is_some());
+}
+
+#[tokio::test]
 async fn test_create_template_with_auto_sleep() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;

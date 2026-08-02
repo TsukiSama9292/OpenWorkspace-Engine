@@ -46,6 +46,7 @@ fn template_to_json(template: &WorkspaceTemplate, instance_count: i64) -> serde_
         "keep_time_action": template.keep_time_action,
         "network_bandwidth_up_mbps": template.network_bandwidth_up_mbps,
         "network_bandwidth_down_mbps": template.network_bandwidth_down_mbps,
+        "docker_in_instance": template.docker_in_instance,
         "instance_count": instance_count,
         "created_at": template.created_at,
         "updated_at": template.updated_at,
@@ -88,6 +89,8 @@ struct CreateTemplateRequest {
     network_bandwidth_up_mbps: i32,
     #[serde(default)]
     network_bandwidth_down_mbps: i32,
+    #[serde(default)]
+    docker_in_instance: bool,
 }
 
 #[derive(Deserialize)]
@@ -119,6 +122,8 @@ struct UpdateTemplateRequest {
     network_bandwidth_up_mbps: i32,
     #[serde(default)]
     network_bandwidth_down_mbps: i32,
+    #[serde(default)]
+    docker_in_instance: bool,
 }
 
 fn default_image() -> String {
@@ -280,6 +285,7 @@ async fn create_template(
             input.network_bandwidth_down_mbps,
             input.keep_time_seconds,
             &input.keep_time_action,
+            input.docker_in_instance,
         )
         .await
         .map_err(|e| {
@@ -365,6 +371,7 @@ async fn update_template(
             input.network_bandwidth_down_mbps,
             input.keep_time_seconds,
             &input.keep_time_action,
+            input.docker_in_instance,
         )
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

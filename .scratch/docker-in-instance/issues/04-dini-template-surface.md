@@ -4,10 +4,17 @@
 
 **Blocked by:** 01 — Port-Pool Networking for Instances (migration ordering)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Templates store `docker_in_instance`, defaulting to `false`.
-- [ ] Template create, read, and update accept and return `docker_in_instance`.
-- [ ] The template form has a single DinI toggle that serializes into the API payload and deserializes on edit.
-- [ ] With DinI on: `runsc` shows a sandbox-protection indicator; `runc` shows a high-risk warning before/while enabling.
-- [ ] Seam 4 DB and Seam 5 frontend tests are green (field default/persist, round-trip serialization, warning states).
+- [x] Templates store `docker_in_instance`, defaulting to `false`.
+- [x] Template create, read, and update accept and return `docker_in_instance`.
+- [x] The template form has a single DinI toggle that serializes into the API payload and deserializes on edit.
+- [x] With DinI on: `runsc` shows a sandbox-protection indicator; `runc` shows a high-risk warning before/while enabling.
+- [x] Seam 4 DB and Seam 5 frontend tests are green (field default/persist, round-trip serialization, warning states).
+
+## Notes
+
+- Migration `m20260802_000014_add_docker_in_instance` adds `docker_in_instance BOOLEAN NOT NULL DEFAULT false` to `workspace_templates` (down: `DROP COLUMN`).
+- Repo `create`/`update` bumped to 21 args (final `docker_in_instance: bool`); routes accept it with `#[serde(default)]` and `template_to_json` returns it.
+- API tests: 3 new Seam-4 DB tests + 4 round-trip tests in `templates_test.rs`. Full suite: 430/430 passed twice, `check.sh` clean.
+- Frontend: `docker_in_instance` added to `Template`, `dockerInInstance` to `TemplateFormState`/`createDirtySnapshot`; `TemplateAdvanced.svelte` gains the toggle + conditional indicators (`runsc` → "Sandboxed via gVisor", else → high-risk warning). `pnpm test` 154/154, `pnpm check` 0 errors.

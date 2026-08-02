@@ -32,6 +32,7 @@ export interface TemplateFormState {
   keepTimeAction: TimeoutAction;
   bandwidthUpMbps: number;
   bandwidthDownMbps: number;
+  dockerInInstance: boolean;
   envVars: EnvVar[];
   execCommand: string;
   volumeMappings: VolumeMapping[];
@@ -62,6 +63,7 @@ export function createInitialFormState(): TemplateFormState {
     keepTimeAction: 'pause',
     bandwidthUpMbps: 0,
     bandwidthDownMbps: 0,
+    dockerInInstance: false,
     envVars: [createEmptyEnvVar()],
     execCommand: '',
     volumeMappings: [createEmptyVolume()],
@@ -98,6 +100,7 @@ function buildTemplateBody(state: TemplateFormState): Record<string, unknown> {
     keep_time_action: state.keepTimeAction,
     network_bandwidth_up_mbps: state.bandwidthUpMbps,
     network_bandwidth_down_mbps: state.bandwidthDownMbps,
+    docker_in_instance: state.dockerInInstance,
   };
 }
 
@@ -169,6 +172,7 @@ export function formStateFromTemplate(t: Template): TemplateFormState {
     keepTimeAction: (t.keep_time_action ?? 'pause') as TimeoutAction,
     bandwidthUpMbps: t.network_bandwidth_up_mbps ?? 0,
     bandwidthDownMbps: t.network_bandwidth_down_mbps ?? 0,
+    dockerInInstance: t.docker_in_instance ?? false,
     envVars: rc.envVars,
     execCommand: parseExecConfig(t.exec_config as Record<string, unknown>),
     volumeMappings: parseVolumeMappings(t.volume_mappings as Record<string, string>),

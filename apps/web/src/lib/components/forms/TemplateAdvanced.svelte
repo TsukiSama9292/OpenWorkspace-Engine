@@ -9,6 +9,7 @@
     shmSize: string;
     networkMode: string;
     containerRuntime: string;
+    dockerInInstance: boolean;
     bandwidthUpMbps: number;
     bandwidthDownMbps: number;
     envVars: EnvVar[];
@@ -22,6 +23,7 @@
     shmSize = $bindable(),
     networkMode = $bindable(),
     containerRuntime = $bindable(),
+    dockerInInstance = $bindable(),
     bandwidthUpMbps = $bindable(),
     bandwidthDownMbps = $bindable(),
     envVars = $bindable(),
@@ -55,11 +57,30 @@
     </label>
     <label class={labelClass}>
       <span class={spanClass}>Runtime</span>
-      <select bind:value={containerRuntime} class={inputClass}>
+      <select data-testid="runtime-select" bind:value={containerRuntime} class={inputClass}>
         <option value="">Default</option>
         <option value="runsc">runsc (gVisor)</option>
       </select>
     </label>
+  </div>
+
+  <div class="flex flex-col gap-2 p-3 border border-surface-800 rounded-lg">
+    <label class="flex items-center gap-3 cursor-pointer">
+      <input
+        type="checkbox"
+        data-testid="dini-toggle"
+        bind:checked={dockerInInstance}
+        class="w-4 h-4 accent-indigo-500"
+      />
+      <span class="text-sm text-surface-300">Run Docker inside the instance</span>
+    </label>
+    {#if dockerInInstance}
+      {#if containerRuntime === 'runsc'}
+        <p class="text-sm text-emerald-400 m-0" data-testid="dini-safe">Sandboxed via gVisor</p>
+      {:else}
+        <p class="text-sm text-red-400 m-0" data-testid="dini-warning">Runs with full host privileges. Switch to the runsc (gVisor) runtime to sandbox it.</p>
+      {/if}
+    {/if}
   </div>
 
   <h2 class="text-base font-semibold text-surface-200">Network Bandwidth (Mbps)</h2>
