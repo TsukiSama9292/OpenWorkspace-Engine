@@ -428,6 +428,7 @@ async fn launch_instance(
         network_bandwidth_down_mbps: template.network_bandwidth_down_mbps,
         host_port: Some(host_port),
         host_gateway_ip: Some(host_gateway_ip.clone()),
+        docker_in_instance: template.docker_in_instance,
     };
 
     // Bounded retry on the (rare) race where another launch binds our probe-free
@@ -799,6 +800,7 @@ async fn build_and_create_container(
         network_bandwidth_down_mbps: template.network_bandwidth_down_mbps,
         host_port: Some(host_port),
         host_gateway_ip: Some(state.settings.host_gateway_ip.clone()),
+        docker_in_instance: template.docker_in_instance,
     };
     state.docker.create_container_from_template(
         &instance.name,

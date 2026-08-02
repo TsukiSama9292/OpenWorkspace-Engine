@@ -87,6 +87,51 @@ pub struct ContainerConfig {
     /// when `host_port` is set; callers normally pass the `OW_HOST_GATEWAY_IP`
     /// setting.
     pub host_gateway_ip: Option<String>,
+    /// When set, the instance runs a Docker daemon inside it (DinI): the
+    /// container is created `--privileged` with no capability drops, a `tmpfs`
+    /// at `/var/lib/docker`, and `OW_DOCKER_IN_INSTANCE=true` in its
+    /// environment. Under `runsc` this stays sandbox-confined; under `runc` it
+    /// grants full host access (warned in the UI).
+    pub docker_in_instance: bool,
+}
+
+/// Security posture derived from the DinI switch and container runtime. Rows:
+///
+/// | `docker_in_instance` | runtime | `privileged` | `cap_drop` | `/var/lib/docker` tmpfs | `OW_DOCKER_IN_INSTANCE` |
+/// |---|---|---|---|---|---|
+/// | off | any | false | `NET_RAW`, `NET_ADMIN` | none | absent |
+/// | on  | `runsc` | true | none | `exec,mode=755` | `true` |
+/// | on  | `runc`  | true | none | `exec,mode=755` | `true` |
+///
+/// The two "on" rows send the same Docker configuration; `runtime` is part of
+/// the mapping because it determines *why* the elevated profile is acceptable
+/// (`runsc` sandbox) or a UI-warned risk (`runc`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiniSecurityProfile {
+    pub privileged: bool,
+    pub cap_drop: Option<Vec<String>>,
+    pub tmpfs: Option<std::collections::HashMap<String, String>>,
+    pub dind_env: Option<String>,
+}
+
+pub fn dini_security_profile(docker_in_instance: bool, _runtime: &str) -> DiniSecurityProfile {
+    if !docker_in_instance {
+        return DiniSecurityProfile {
+            privileged: false,
+            cap_drop: Some(vec!["NET_RAW".to_string(), "NET_ADMIN".to_string()]),
+            tmpfs: None,
+            dind_env: None,
+        };
+    }
+    DiniSecurityProfile {
+        privileged: true,
+        cap_drop: None,
+        tmpfs: Some(std::collections::HashMap::from([(
+            "/var/lib/docker".to_string(),
+            "exec,mode=755".to_string(),
+        )])),
+        dind_env: Some("OW_DOCKER_IN_INSTANCE=true".to_string()),
+    }
 }
 
 pub fn runtime_to_host_config(value: &str) -> Option<String> {
@@ -388,6 +433,11 @@ impl DockerService for DockerClient {
         let mut env: Vec<&str> = Vec::new();
         let mut owned_env: Vec<String> = Vec::new();
 
+        let dini = dini_security_profile(
+            config.docker_in_instance,
+            config.runtime.as_deref().unwrap_or(""),
+        );
+
         match config.remote_type {
             RemoteType::KasmVnc => {
                 env.push("KASM_VNC_PORT=6901");
@@ -406,6 +456,9 @@ impl DockerService for DockerClient {
         }
 
         // Push owned env strings as borrowed str
+        if let Some(dind_env) = dini.dind_env {
+            owned_env.push(dind_env);
+        }
         for s in &owned_env {
             env.push(s);
         }
@@ -483,8 +536,9 @@ impl DockerService for DockerClient {
             .and_then(|v| v.as_str());
 
         let host_config = bollard::models::HostConfig {
-            privileged: Some(false),
-            cap_drop: Some(vec!["NET_RAW".to_string(), "NET_ADMIN".to_string()]),
+            privileged: Some(dini.privileged),
+            cap_drop: dini.cap_drop,
+            tmpfs: dini.tmpfs,
             nano_cpus: if config.cores > 0 {
                 Some((config.cores as i64) * 1_000_000_000)
             } else {
@@ -1177,6 +1231,48 @@ mod tests {
     #[test]
     fn test_runtime_to_host_config_nvidia_returns_some() {
         assert_eq!(runtime_to_host_config("nvidia"), Some("nvidia".to_string()));
+    }
+
+    #[test]
+    fn test_dini_security_profile_off_keeps_hardened_defaults() {
+        let profile = dini_security_profile(false, "runsc");
+        assert!(!profile.privileged);
+        assert_eq!(
+            profile.cap_drop,
+            Some(vec!["NET_RAW".to_string(), "NET_ADMIN".to_string()])
+        );
+        assert!(profile.tmpfs.is_none());
+        assert!(profile.dind_env.is_none());
+    }
+
+    #[test]
+    fn test_dini_security_profile_on_runsc_is_sandboxed_privileged() {
+        let profile = dini_security_profile(true, "runsc");
+        assert!(profile.privileged);
+        assert!(profile.cap_drop.is_none());
+        assert_eq!(
+            profile.tmpfs,
+            Some(std::collections::HashMap::from([(
+                "/var/lib/docker".to_string(),
+                "exec,mode=755".to_string()
+            )]))
+        );
+        assert_eq!(profile.dind_env.as_deref(), Some("OW_DOCKER_IN_INSTANCE=true"));
+    }
+
+    #[test]
+    fn test_dini_security_profile_on_runc_is_full_host_privileged() {
+        let profile = dini_security_profile(true, "runc");
+        assert!(profile.privileged);
+        assert!(profile.cap_drop.is_none());
+        assert_eq!(
+            profile.tmpfs,
+            Some(std::collections::HashMap::from([(
+                "/var/lib/docker".to_string(),
+                "exec,mode=755".to_string()
+            )]))
+        );
+        assert_eq!(profile.dind_env.as_deref(), Some("OW_DOCKER_IN_INSTANCE=true"));
     }
 
     #[test]

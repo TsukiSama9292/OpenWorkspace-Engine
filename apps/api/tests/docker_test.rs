@@ -117,6 +117,7 @@ async fn test_pause_unpause() {
         network_bandwidth_down_mbps: 0,
         host_port: None,
         host_gateway_ip: None,
+        docker_in_instance: false,
     };
 
     let id = client
@@ -163,6 +164,7 @@ async fn test_create_container_publishes_host_port() {
         network_bandwidth_down_mbps: 0,
         host_port: Some(host_port),
         host_gateway_ip: Some("127.0.0.1".to_string()),
+        docker_in_instance: false,
     };
 
     let id = client
@@ -190,6 +192,177 @@ async fn test_create_container_publishes_host_port() {
     assert_eq!(binding.host_port.as_deref(), Some(host_port.to_string().as_str()));
 }
 
+/// Detect whether the host Docker daemon has the `runsc` (gVisor) runtime
+/// registered. Tests that verify the runtime pass-through skip when it is not.
+async fn runsc_supported() -> bool {
+    static SUPPORTED: tokio::sync::OnceCell<bool> = tokio::sync::OnceCell::const_new();
+    *SUPPORTED
+        .get_or_init(|| async {
+            let docker = match bollard::Docker::connect_with_local_defaults() {
+                Ok(d) => d,
+                Err(_) => return false,
+            };
+            match docker.info().await {
+                Ok(info) => info.runtimes.map_or(false, |r| r.contains_key("runsc")),
+                Err(_) => false,
+            }
+        })
+        .await
+}
+
+#[tokio::test]
+async fn test_create_container_dini_off_keeps_hardened_defaults() {
+    use openworkspace_api::docker::ContainerConfig;
+
+    let client = setup().await;
+    let name = format!("ow_test_docker_dini_off_{}", std::process::id());
+
+    let config = ContainerConfig {
+        image: "busybox:1".to_string(),
+        cores: 0,
+        memory: 0,
+        gpu_count: 0,
+        remote_type: RemoteType::KasmVnc,
+        run_config: serde_json::json!({}),
+        exec_config: serde_json::json!({}),
+        volume_mappings: serde_json::json!({}),
+        persistent_volume_name: None,
+        command: Some(vec!["sleep".to_string(), "3600".to_string()]),
+        runtime: None,
+        network_bandwidth_up_mbps: 0,
+        network_bandwidth_down_mbps: 0,
+        host_port: None,
+        host_gateway_ip: None,
+        docker_in_instance: false,
+    };
+
+    let id = client
+        .create_container_from_template(&name, 1, &config, "test_password", "")
+        .await
+        .unwrap();
+
+    let docker = bollard::Docker::connect_with_local_defaults().unwrap();
+    let inspect = docker.inspect_container(&id, None).await.unwrap();
+    let state = client.inspect_container_state(&id).await.unwrap();
+    let _ = client.remove_container_by_id(&id).await;
+
+    assert_eq!(state.as_deref(), Some("running"));
+
+    let host_config = inspect.host_config.as_ref().expect("expected host config");
+    assert_eq!(host_config.privileged, Some(false));
+    assert_eq!(
+        host_config.cap_drop,
+        Some(vec!["NET_RAW".to_string(), "NET_ADMIN".to_string()])
+    );
+    assert!(host_config.tmpfs.is_none());
+
+    let env = inspect
+        .config
+        .as_ref()
+        .and_then(|c| c.env.as_ref())
+        .expect("expected env");
+    assert!(!env.iter().any(|e| e.starts_with("OW_DOCKER_IN_INSTANCE")));
+}
+
+#[tokio::test]
+async fn test_create_container_dini_on_applies_privileged_tmpfs_and_env() {
+    use openworkspace_api::docker::ContainerConfig;
+
+    let client = setup().await;
+    let name = format!("ow_test_docker_dini_on_{}", std::process::id());
+
+    let config = ContainerConfig {
+        image: "busybox:1".to_string(),
+        cores: 0,
+        memory: 0,
+        gpu_count: 0,
+        remote_type: RemoteType::KasmVnc,
+        run_config: serde_json::json!({}),
+        exec_config: serde_json::json!({}),
+        volume_mappings: serde_json::json!({}),
+        persistent_volume_name: None,
+        command: Some(vec!["sleep".to_string(), "3600".to_string()]),
+        runtime: None,
+        network_bandwidth_up_mbps: 0,
+        network_bandwidth_down_mbps: 0,
+        host_port: None,
+        host_gateway_ip: None,
+        docker_in_instance: true,
+    };
+
+    let id = client
+        .create_container_from_template(&name, 1, &config, "test_password", "")
+        .await
+        .unwrap();
+
+    let docker = bollard::Docker::connect_with_local_defaults().unwrap();
+    let inspect = docker.inspect_container(&id, None).await.unwrap();
+    let state = client.inspect_container_state(&id).await.unwrap();
+    let _ = client.remove_container_by_id(&id).await;
+
+    assert_eq!(state.as_deref(), Some("running"));
+
+    let host_config = inspect.host_config.as_ref().expect("expected host config");
+    assert_eq!(host_config.privileged, Some(true));
+    assert!(host_config.cap_drop.is_none());
+    let tmpfs = host_config.tmpfs.as_ref().expect("expected tmpfs");
+    assert_eq!(tmpfs.get("/var/lib/docker"), Some(&"exec,mode=755".to_string()));
+
+    let env = inspect
+        .config
+        .as_ref()
+        .and_then(|c| c.env.as_ref())
+        .expect("expected env");
+    assert!(env.iter().any(|e| e == "OW_DOCKER_IN_INSTANCE=true"));
+}
+
+#[tokio::test]
+async fn test_create_container_runsc_runtime_passthrough() {
+    use openworkspace_api::docker::ContainerConfig;
+
+    if !runsc_supported().await {
+        eprintln!("skipping: runsc runtime not registered on this host");
+        return;
+    }
+
+    let client = setup().await;
+    let name = format!("ow_test_docker_runsc_{}", std::process::id());
+
+    let config = ContainerConfig {
+        image: "busybox:1".to_string(),
+        cores: 0,
+        memory: 0,
+        gpu_count: 0,
+        remote_type: RemoteType::KasmVnc,
+        run_config: serde_json::json!({}),
+        exec_config: serde_json::json!({}),
+        volume_mappings: serde_json::json!({}),
+        persistent_volume_name: None,
+        command: Some(vec!["sleep".to_string(), "3600".to_string()]),
+        runtime: Some("runsc".to_string()),
+        network_bandwidth_up_mbps: 0,
+        network_bandwidth_down_mbps: 0,
+        host_port: None,
+        host_gateway_ip: None,
+        docker_in_instance: false,
+    };
+
+    let id = client
+        .create_container_from_template(&name, 1, &config, "test_password", "")
+        .await
+        .unwrap();
+
+    let docker = bollard::Docker::connect_with_local_defaults().unwrap();
+    let inspect = docker.inspect_container(&id, None).await.unwrap();
+    let state = client.inspect_container_state(&id).await.unwrap();
+    let _ = client.remove_container_by_id(&id).await;
+
+    assert_eq!(state.as_deref(), Some("running"));
+
+    let host_config = inspect.host_config.as_ref().expect("expected host config");
+    assert_eq!(host_config.runtime, Some("runsc".to_string()));
+}
+
 #[tokio::test]
 async fn test_create_container_from_template() {
     use openworkspace_api::docker::ContainerConfig;
@@ -213,6 +386,7 @@ async fn test_create_container_from_template() {
         network_bandwidth_down_mbps: 0,
         host_port: None,
         host_gateway_ip: None,
+        docker_in_instance: false,
     };
 
     let id = client
@@ -251,6 +425,7 @@ async fn test_create_container_from_template_with_env_and_dns() {
         network_bandwidth_down_mbps: 0,
         host_port: None,
         host_gateway_ip: None,
+        docker_in_instance: false,
     };
 
     let id = client
@@ -289,6 +464,7 @@ async fn test_create_container_from_template_with_volume() {
         network_bandwidth_down_mbps: 0,
         host_port: None,
         host_gateway_ip: None,
+        docker_in_instance: false,
     };
 
     let id = client
@@ -344,6 +520,7 @@ async fn test_create_container_from_template_with_exec() {
         network_bandwidth_down_mbps: 0,
         host_port: None,
         host_gateway_ip: None,
+        docker_in_instance: false,
     };
 
     let id = client
@@ -381,6 +558,7 @@ async fn test_create_container_from_template_with_hostname() {
         network_bandwidth_down_mbps: 0,
         host_port: None,
         host_gateway_ip: None,
+        docker_in_instance: false,
     };
 
     let id = client
@@ -415,6 +593,7 @@ async fn test_create_container_from_template_command_from_run_config() {
         network_bandwidth_down_mbps: 0,
         host_port: None,
         host_gateway_ip: None,
+        docker_in_instance: false,
     };
 
     let id = client
@@ -450,6 +629,7 @@ async fn test_create_container_from_template_no_command() {
         network_bandwidth_down_mbps: 0,
         host_port: None,
         host_gateway_ip: None,
+        docker_in_instance: false,
     };
 
     let _result = client.create_container_from_template(&name, 1, &config, "test_password", "").await;
@@ -480,6 +660,7 @@ async fn test_create_container_from_template_with_shm_size_and_network_mode() {
         network_bandwidth_down_mbps: 0,
         host_port: None,
         host_gateway_ip: None,
+        docker_in_instance: false,
     };
 
     let id = client
@@ -531,6 +712,7 @@ async fn test_create_container_from_template_with_gpu() {
         network_bandwidth_down_mbps: 0,
         host_port: None,
         host_gateway_ip: None,
+        docker_in_instance: false,
     };
 
     let result = client
@@ -570,6 +752,7 @@ async fn test_create_container_from_template_image_already_cached() {
         network_bandwidth_down_mbps: 0,
         host_port: None,
         host_gateway_ip: None,
+        docker_in_instance: false,
     };
 
     let _id1 = client
@@ -616,6 +799,7 @@ async fn test_create_container_from_template_cores_and_memory() {
         network_bandwidth_down_mbps: 0,
         host_port: None,
         host_gateway_ip: None,
+        docker_in_instance: false,
     };
 
     let id = client
@@ -675,6 +859,7 @@ async fn test_inspect_container_state_running() {
         network_bandwidth_down_mbps: 0,
         host_port: None,
         host_gateway_ip: None,
+        docker_in_instance: false,
     };
 
     let id = client
@@ -715,6 +900,7 @@ async fn test_persistent_volume_lifecycle_via_client() {
         network_bandwidth_down_mbps: 0,
         host_port: None,
         host_gateway_ip: None,
+        docker_in_instance: false,
     };
 
     let name1 = format!("ow_test_pv_lc1_{}", std::process::id());
