@@ -3,7 +3,8 @@ use bollard::container::{
     StartContainerOptions, StopContainerOptions, UploadToContainerOptions, WaitContainerOptions,
 };
 use bollard::image::CreateImageOptions;
-use bollard::models::ContainerSummary;
+use bollard::models::{ContainerSummary, Ipam, IpamConfig};
+use bollard::network::CreateNetworkOptions;
 use bollard::volume::{CreateVolumeOptions, RemoveVolumeOptions};
 use bollard::Docker;
 use futures_util::stream::TryStreamExt;
@@ -81,7 +82,8 @@ pub struct ContainerConfig {
     pub network_bandwidth_up_mbps: i32,
     pub network_bandwidth_down_mbps: i32,
     /// Allocated host port this instance's single service port is published to.
-    /// `None` keeps the container on `ow-network` with no host binding.
+    /// `None` leaves the container on the default `bridge` network with no host
+    /// binding.
     pub host_port: Option<u16>,
     /// Host Docker-bridge gateway IP to bind the published port to. Only used
     /// when `host_port` is set; callers normally pass the `OW_HOST_GATEWAY_IP`
@@ -93,6 +95,17 @@ pub struct ContainerConfig {
     /// environment. Under `runsc` this stays sandbox-confined; under `runc` it
     /// grants full host access (warned in the UI).
     pub docker_in_instance: bool,
+    /// Name of the instance's dedicated bridge network. When set, the created
+    /// container's `network_mode` is this name, placing it on its own `/30`
+    /// isolated subnet. When unset, the container stays on Docker's default
+    /// `bridge` (helpers, non-instance containers, and the persistent-volume
+    /// `alpine` helpers).
+    pub network_name: Option<String>,
+    /// DNS resolvers for this instance, passed through as `OW_DNS` so the image
+    /// entrypoint can rewrite `/etc/resolv.conf` (user-defined bridges break
+    /// Docker's embedded resolver under `runsc`). When unset, no `OW_DNS` env
+    /// is added. Unaffected by the template `run_config.dns` Docker-level hint.
+    pub instance_dns: Option<String>,
 }
 
 /// Security posture derived from the DinI switch and container runtime. Rows:
@@ -134,13 +147,29 @@ pub fn dini_security_profile(docker_in_instance: bool, _runtime: &str) -> DiniSe
     }
 }
 
+/// The container's `network_mode`: the instance's dedicated network name when
+/// the config carries one, else Docker's default `bridge`. Helpers and
+/// non-instance containers keep the pre-isolation default bridge behavior.
+pub fn network_mode_for(network_name: &Option<String>) -> String {
+    network_name
+        .clone()
+        .unwrap_or_else(|| "bridge".to_string())
+}
+
+/// The `OW_DNS` environment entry for an instance container, or `None` when the
+/// config has no instance DNS. Images read `OW_DNS` to rewrite `/etc/resolv.conf`
+/// at entrypoint (user-defined bridges break Docker's embedded resolver under
+/// `runsc`); the API only passes the value through.
+pub fn ow_dns_env(instance_dns: Option<&str>) -> Option<String> {
+    instance_dns.map(|dns| format!("OW_DNS={}", dns))
+}
+
 pub fn runtime_to_host_config(value: &str) -> Option<String> {
     match value {
         "" | "docker" => None,
         other => Some(other.to_string()),
     }
 }
-
 /// Port binding map for publishing an instance's single service port to a
 /// given host gateway IP / host port. One binding per `remote_type` container
 /// port (KasmVNC `6901`, ttyd `7681`, Jupyter `8888`).
@@ -160,12 +189,69 @@ pub fn port_bindings_for(
     bindings
 }
 
+/// The network lifecycle operations that are treated idempotently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkOp {
+    Create,
+    Remove,
+}
+
+/// Classify a Docker error from a network lifecycle call: a `409` "already
+/// exists" on create, or a `404` on remove, means the intended end state
+/// already holds — an idempotent success. Everything else is a real failure
+/// (subnet conflict, network in use, transport error, ...).
+pub fn network_error_is_idempotent_success(
+    err: &bollard::errors::Error,
+    op: NetworkOp,
+) -> bool {
+    match (err, op) {
+        (
+            bollard::errors::Error::DockerResponseServerError {
+                status_code: 409,
+                message,
+                ..
+            },
+            NetworkOp::Create,
+        ) => message.contains("already exists"),
+        (
+            bollard::errors::Error::DockerResponseServerError {
+                status_code: 404,
+                ..
+            },
+            NetworkOp::Remove,
+        ) => true,
+        _ => false,
+    }
+}
+
+/// Summary of one Docker network — its name plus the first IPv4 IPAM subnet —
+/// enough for the subnet allocator to compute the in-use set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkInfo {
+    pub name: String,
+    pub subnet: Option<String>,
+}
+
+/// First IPv4 IPAM subnet declared by a Docker network. Docker lists IPv6
+/// configs too when IPv6 is enabled; the allocator only consumes IPv4 `/30`s,
+/// so non-IPv4 (colon-bearing) subnets are skipped.
+fn first_ipv4_subnet(network: &bollard::models::Network) -> Option<String> {
+    network
+        .ipam
+        .as_ref()
+        .and_then(|ipam| ipam.config.as_ref())
+        .and_then(|configs| {
+            configs
+                .iter()
+                .find(|c| c.subnet.as_deref().is_some_and(|s| !s.contains(':')))
+        })
+        .and_then(|c| c.subnet.clone())
+}
+
 /// Trait for Docker operations, allowing mock implementations in tests.
 #[async_trait::async_trait]
 #[mockall::automock]
 pub trait DockerService: Send + Sync {
-    fn network_name(&self) -> &str;
-
     async fn list_containers(
         &self,
         all: bool,
@@ -271,6 +357,24 @@ pub trait DockerService: Send + Sync {
         host_path: &str,
         volume_name: &str,
     ) -> Result<(), String>;
+
+    /// Create a dedicated bridge network for an instance on its own subnet,
+    /// isolating it from every other instance. Idempotent: if the network
+    /// already exists, that is success, not an error.
+    async fn create_network(
+        &self,
+        name: &str,
+        subnet: &str,
+        gateway: &str,
+    ) -> Result<(), String>;
+
+    /// Remove an instance network. Idempotent: if the network is already gone,
+    /// that is success, not an error.
+    async fn remove_network(&self, name: &str) -> Result<(), String>;
+
+    /// List the networks Docker currently knows (name + first IPv4 IPAM
+    /// subnet), enough for the subnet allocator to compute the in-use set.
+    async fn list_networks(&self) -> Result<Vec<NetworkInfo>, String>;
 }
 
 pub fn is_container_not_found(err: &bollard::errors::Error) -> bool {
@@ -319,26 +423,17 @@ pub async fn stop_and_remove_container(
 
 pub struct DockerClient {
     docker: Docker,
-    network_name: String,
 }
 
 impl DockerClient {
     pub async fn new() -> Result<Self, String> {
-        Self::with_network("ow-network").await
-    }
-
-    pub async fn with_network(network_name: &str) -> Result<Self, String> {
         let docker = Docker::connect_with_local_defaults().map_err(|e| e.to_string())?;
-        Ok(Self { docker, network_name: network_name.to_string() })
+        Ok(Self { docker })
     }
 }
 
 #[async_trait::async_trait]
 impl DockerService for DockerClient {
-    fn network_name(&self) -> &str {
-        &self.network_name
-    }
-
     async fn list_containers(
         &self,
         all: bool,
@@ -459,6 +554,9 @@ impl DockerService for DockerClient {
         if let Some(dind_env) = dini.dind_env {
             owned_env.push(dind_env);
         }
+        if let Some(dns_env) = ow_dns_env(config.instance_dns.as_deref()) {
+            owned_env.push(dns_env);
+        }
         for s in &owned_env {
             env.push(s);
         }
@@ -551,7 +649,7 @@ impl DockerService for DockerClient {
             },
             dns,
             shm_size,
-            network_mode: Some(self.network_name().to_string()),
+            network_mode: Some(network_mode_for(&config.network_name)),
             binds: if binds.is_empty() { None } else { Some(binds) },
             device_requests: if config.gpu_count > 0 {
                 Some(vec![bollard::models::DeviceRequest {
@@ -884,6 +982,58 @@ impl DockerService for DockerClient {
         }
 
         Ok(())
+    }
+
+    async fn create_network(
+        &self,
+        name: &str,
+        subnet: &str,
+        gateway: &str,
+    ) -> Result<(), String> {
+        let config = CreateNetworkOptions {
+            name,
+            check_duplicate: true,
+            driver: "bridge",
+            ipam: Ipam {
+                config: Some(vec![IpamConfig {
+                    subnet: Some(subnet.to_string()),
+                    gateway: Some(gateway.to_string()),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        match self.docker.create_network(config).await {
+            Ok(_) => Ok(()),
+            Err(ref e) if network_error_is_idempotent_success(e, NetworkOp::Create) => Ok(()),
+            Err(e) => Err(format!("Failed to create network '{}': {}", name, e)),
+        }
+    }
+
+    async fn remove_network(&self, name: &str) -> Result<(), String> {
+        match self.docker.remove_network(name).await {
+            Ok(()) => Ok(()),
+            Err(ref e) if network_error_is_idempotent_success(e, NetworkOp::Remove) => Ok(()),
+            Err(e) => Err(format!("Failed to remove network '{}': {}", name, e)),
+        }
+    }
+
+    async fn list_networks(&self) -> Result<Vec<NetworkInfo>, String> {
+        let networks = self
+            .docker
+            .list_networks(None::<bollard::network::ListNetworksOptions<String>>)
+            .await
+            .map_err(|e| format!("Failed to list networks: {}", e))?;
+
+        Ok(networks
+            .into_iter()
+            .map(|network| NetworkInfo {
+                name: network.name.clone().unwrap_or_default(),
+                subnet: first_ipv4_subnet(&network),
+            })
+            .collect())
     }
 
     async fn has_session_connection(
@@ -1299,5 +1449,132 @@ mod tests {
         let header = "State  Recv-Q  Send-Q  Local Address:Port  Peer Address:Port  Process\n";
         assert!(!ss_output_has_connection(header, 6901));
         assert!(!ss_output_has_connection("", 6901));
+    }
+
+    #[test]
+    fn test_network_mode_for_unset_stays_bridge() {
+        assert_eq!(network_mode_for(&None), "bridge".to_string());
+    }
+
+    #[test]
+    fn test_network_mode_for_instance_network_name() {
+        assert_eq!(
+            network_mode_for(&Some("ow-abc123".to_string())),
+            "ow-abc123".to_string()
+        );
+    }
+
+    #[test]
+    fn test_ow_dns_env_unset_is_none() {
+        assert_eq!(ow_dns_env(None), None);
+    }
+
+    #[test]
+    fn test_ow_dns_env_set_emits_env_entry() {
+        assert_eq!(
+            ow_dns_env(Some("8.8.8.8,1.1.1.1")),
+            Some("OW_DNS=8.8.8.8,1.1.1.1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_network_error_create_already_exists_is_idempotent() {
+        let conflict = bollard::errors::Error::DockerResponseServerError {
+            status_code: 409,
+            message: "network with name ow-abc already exists".to_string(),
+        };
+        assert!(network_error_is_idempotent_success(&conflict, NetworkOp::Create));
+    }
+
+    #[test]
+    fn test_network_error_create_subnet_conflict_is_real() {
+        let conflict = bollard::errors::Error::DockerResponseServerError {
+            status_code: 409,
+            message: "conflict: pool 10.200.0.0/30 overlaps with another network".to_string(),
+        };
+        assert!(!network_error_is_idempotent_success(&conflict, NetworkOp::Create));
+    }
+
+    #[test]
+    fn test_network_error_remove_not_found_is_idempotent() {
+        let not_found = bollard::errors::Error::DockerResponseServerError {
+            status_code: 404,
+            message: "network ow-abc not found".to_string(),
+        };
+        assert!(network_error_is_idempotent_success(&not_found, NetworkOp::Remove));
+    }
+
+    #[test]
+    fn test_network_error_remove_active_endpoints_is_real() {
+        let conflict = bollard::errors::Error::DockerResponseServerError {
+            status_code: 409,
+            message: "network ow-abc has active endpoints".to_string(),
+        };
+        assert!(!network_error_is_idempotent_success(&conflict, NetworkOp::Remove));
+    }
+
+    #[test]
+    fn test_network_error_not_found_on_create_is_real() {
+        let not_found = bollard::errors::Error::DockerResponseServerError {
+            status_code: 404,
+            message: "network driver bridge not found".to_string(),
+        };
+        assert!(!network_error_is_idempotent_success(&not_found, NetworkOp::Create));
+    }
+
+    #[test]
+    fn test_network_error_transport_failure_is_real() {
+        let io = std::io::Error::new(std::io::ErrorKind::Other, "daemon unreachable");
+        let io_err: bollard::errors::Error = io.into();
+        assert!(!network_error_is_idempotent_success(&io_err, NetworkOp::Create));
+        assert!(!network_error_is_idempotent_success(&io_err, NetworkOp::Remove));
+    }
+
+    #[test]
+    fn test_first_ipv4_subnet_extracts_ipv4_subnet() {
+        let network = bollard::models::Network {
+            name: Some("ow-abc".to_string()),
+            ipam: Some(Ipam {
+                config: Some(vec![IpamConfig {
+                    subnet: Some("10.200.0.0/30".to_string()),
+                    gateway: Some("10.200.0.1".to_string()),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(first_ipv4_subnet(&network), Some("10.200.0.0/30".to_string()));
+    }
+
+    #[test]
+    fn test_first_ipv4_subnet_skips_ipv6_config() {
+        let network = bollard::models::Network {
+            name: Some("ow-abc".to_string()),
+            ipam: Some(Ipam {
+                config: Some(vec![
+                    IpamConfig {
+                        subnet: Some("2001:db8::/64".to_string()),
+                        ..Default::default()
+                    },
+                    IpamConfig {
+                        subnet: Some("10.200.0.4/30".to_string()),
+                        ..Default::default()
+                    },
+                ]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(first_ipv4_subnet(&network), Some("10.200.0.4/30".to_string()));
+    }
+
+    #[test]
+    fn test_first_ipv4_subnet_none_without_ipam() {
+        let network = bollard::models::Network {
+            name: Some("host".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(first_ipv4_subnet(&network), None);
     }
 }

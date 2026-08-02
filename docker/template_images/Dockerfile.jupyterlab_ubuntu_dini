@@ -1,0 +1,24 @@
+ARG VERSION="jammy"
+
+FROM tsukisama9292/ow-jupyter-ubuntu:${VERSION}
+
+USER root
+
+# In-instance Docker: root dockerd on the /var/lib/docker tmpfs, started by the
+# shared bootstrap script when OW_DOCKER_IN_INSTANCE=true. The container runs
+# as root so the bootstrap needs no setuid/sudo (Docker-in-gVisor recipe); the
+# entrypoint then drops to ow_user for the app.
+COPY ./src/dini/ /usr/local/share/ow-dini/
+RUN bash /usr/local/share/ow-dini/install_dind.sh && \
+    install -m 0755 /usr/local/share/ow-dini/bootstrap-dockerd.sh /usr/local/bin/bootstrap-dockerd.sh && \
+    install -m 0755 /usr/local/share/ow-dini/apply_ow_dns.sh /usr/local/bin/apply-ow-dns.sh && \
+    install -m 0755 /usr/local/share/ow-dini/modprobe /usr/local/bin/modprobe && \
+    usermod -aG docker ow_user && \
+    rm -rf /usr/local/share/ow-dini
+
+COPY ./entrypoint/entrypoint_jupyterlab_dini.sh /usr/local/bin/entrypoint-dini.sh
+RUN chmod +x /usr/local/bin/entrypoint-dini.sh
+
+USER root
+WORKDIR /home/ow_user
+ENTRYPOINT ["/usr/local/bin/entrypoint-dini.sh"]

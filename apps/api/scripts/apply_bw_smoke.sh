@@ -18,6 +18,16 @@
 # nsenter (util-linux), python3, and the busybox:1 image.
 set -euo pipefail
 
+ARGS=()
+for arg in "$@"; do
+    case "$arg" in
+        --verbose|-v) VERBOSE=1 ;;
+        *) ARGS+=("$arg") ;;
+    esac
+done
+VERBOSE="${VERBOSE:-0}"
+set -- "${ARGS[@]}"
+
 UP=${1:-10}
 DOWN=${2:-20}
 SECS=${3:-8}
@@ -27,7 +37,11 @@ SERVER="bw-smoke-server"
 DATA_DIR="$(mktemp -d /tmp/bw-smoke.XXXXXX)"
 HTTP_PID=""
 
-log() { echo "==> $*"; }
+log() {
+    if [ "$VERBOSE" -eq 1 ]; then
+        echo "==> $*"
+    fi
+}
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
 cleanup() {

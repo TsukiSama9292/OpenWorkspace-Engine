@@ -19,3 +19,6 @@
 [submodule "references_repo/docker-docs"]
 	path = references_repo/docker-docs
 	url = https://github.com/docker/docs.git
+[submodule "references_repo/TsukiSama9292-Dockerfiles"]
+	path = references_repo/TsukiSama9292-Dockerfiles
+	url = https://github.com/TsukiSama9292/Dockerfiles.git

@@ -15,6 +15,22 @@
 
 set -euo pipefail
 
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    VERBOSE=0
+    for arg in "$@"; do
+        case "$arg" in
+            --verbose|-v) VERBOSE=1 ;;
+        esac
+    done
+fi
+VERBOSE="${VERBOSE:-0}"
+
+log() {
+    if [ "$VERBOSE" -eq 1 ]; then
+        echo "$@"
+    fi
+}
+
 DOCKER_DAEMON_JSON="${DOCKER_DAEMON_JSON:-/etc/docker/daemon.json}"
 RUNSC_INSTALL_DIR="${RUNSC_INSTALL_DIR:-/usr/local/bin}"
 RUNSC_BIN="${RUNSC_INSTALL_DIR%/}/runsc"
@@ -63,7 +79,7 @@ install_runsc() {
     local reg target arch url
     reg="$(registered_runsc_bin)"
     if [ -n "$reg" ] && [ -x "$reg" ]; then
-        echo "> runsc 已存在於 $reg，略過下載。"
+        log "> runsc 已存在於 $reg，略過下載。"
         return
     fi
     if [ -n "$reg" ]; then
@@ -72,12 +88,12 @@ install_runsc() {
         target="$RUNSC_BIN"
     fi
     if [ -x "$target" ]; then
-        echo "> runsc 已存在於 $target，略過下載。"
+        log "> runsc 已存在於 $target，略過下載。"
         return
     fi
     arch="$(host_arch)"
     url="https://storage.googleapis.com/gvisor/releases/release/${RUNSC_VERSION}/${arch}/runsc"
-    echo "> 下載 runsc ($RUNSC_VERSION/$arch) → $target"
+    log "> 下載 runsc ($RUNSC_VERSION/$arch) → $target"
     $SUDO_PREFIX mkdir -p "$(dirname "$target")"
     $SUDO_PREFIX curl -fsSL -o "$target" "$url"
     $SUDO_PREFIX chmod +x "$target"
@@ -146,7 +162,7 @@ write_merged_daemon_json() {
     merged="$(merged_daemon_json "$DOCKER_DAEMON_JSON")"
 
     if daemon_json_already_applied "$DOCKER_DAEMON_JSON" "$merged"; then
-        echo "> $DOCKER_DAEMON_JSON 已包含 runsc runtime，略過。"
+        log "> $DOCKER_DAEMON_JSON 已包含 runsc runtime，略過。"
         return 1
     fi
 
@@ -166,7 +182,7 @@ reload_docker() {
     if ! $SUDO_PREFIX systemctl reload docker 2>/dev/null; then
         $SUDO_PREFIX systemctl restart docker
     fi
-    echo "> Docker daemon 已重新載入。"
+    log "> Docker daemon 已重新載入。"
 }
 
 main() {
@@ -176,7 +192,7 @@ main() {
 
     if write_merged_daemon_json; then
         if [ "$SKIP_DAEMON_RELOAD" != "1" ]; then
-            echo "> 已更新 $DOCKER_DAEMON_JSON，重新載入 Docker daemon..."
+            log "> 已更新 $DOCKER_DAEMON_JSON，重新載入 Docker daemon..."
             reload_docker
         fi
     fi

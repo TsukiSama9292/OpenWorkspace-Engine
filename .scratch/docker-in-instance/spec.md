@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: complete — all 8 tickets shipped and verified in code. Networking-topology decision §1 is **superseded** by `.scratch/docker-in-instance_2` (per-instance `/30` bridges + `OW_DNS` resolv.conf rewrite); the port-pool, DinI security matrix, image contract, and host-provisioning decisions remain current.
 
 # Docker in Instances (DinI) — Host Port Pool Networking + In-Instance dockerd
 
@@ -44,14 +44,26 @@ On top of this, add an optional per-template switch — **`docker_in_instance` (
 
 ### 1. Network topology (global, all instances)
 
-All instances move to the host-port-binding model. There is exactly one code path:
+> **SUPERSEDED — replaced by `.scratch/docker-in-instance_2` (per-instance `/30` bridges).**
+> This decision shipped, then was reversed. Sharing the default `bridge` left every
+> instance (and, under DinI, every nested `--network=host` service) on the shared
+> `docker0` subnet, directly reachable by every other tenant — a cross-tenant
+> isolation hole. The successor spec gives each instance its own dedicated `/30`
+> bridge (`ow-<instance-id>`, gateway `.1`, instance `.2`) and fixes the runsc DNS
+> break this section worked around by having the instance images rewrite
+> `/etc/resolv.conf` from an `OW_DNS` env var. The port-pool / Traefik / `get_container_ip`
+> bullets below are **still current**; the "join the default bridge" bullets and the
+> rationale are historical only.
 
-- The instance container stays on the `ow-network` bridge, unchanged from today.
-- Its single service port (`RemoteType::port()`: KasmVNC `6901`, ttyd `7681`, Jupyter `8888`) is published to **`<host_gateway_ip>:<host_port>`** via Docker port bindings (`exposed_ports` + `port_bindings`).
-- Traefik route files target **`https://host.docker.internal:<host_port>`** with the existing `kasm-insecure` serversTransport. No scheme/transport branching is introduced.
-- `get_container_ip` is removed from the Docker service trait, its implementation, call sites, mocks, and feature-gated tests.
+All instances use the host-port-binding model. **As originally shipped**, the instance container joined the Docker default `bridge` network (`network_mode = "bridge"`), **not** `ow-network`; under the successor spec the container's `network_mode` is its per-instance network name instead (`instance_net::network_name`, i.e. `ow-<instance-id>`). The compose stack (`api`, `web`, `traefik`, `postgres`) keeps using `ow-network`; instances are deliberately excluded from it in both generations.
 
-Why the host gateway IP rather than loopback: Traefik runs in a container, so a strictly `127.0.0.1`-bound port is unreachable through `host.docker.internal`. Binding on the Docker bridge gateway (default `172.17.0.1`) is reachable via `host.docker.internal:host-gateway` while staying off the LAN.
+- Its single service port (`RemoteType::port()`: KasmVNC `6901`, ttyd `7681`, Jupyter `8888`) is published to **`<host_gateway_ip>:<host_port>`** via Docker port bindings (`exposed_ports` + `port_bindings`). *(still current)*
+- Traefik route files target **`https://host.docker.internal:<host_port>`** with the existing `kasm-insecure` serversTransport. No scheme/transport branching is introduced. *(still current)*
+- `get_container_ip` is removed from the Docker service trait, its implementation, call sites, mocks, and feature-gated tests. *(still current)*
+
+*Historical rationale (why the default `bridge` was chosen at the time; obsolete under the successor):* on a user-defined bridge, Docker injects its embedded resolver (`nameserver 127.0.0.11`) into every container's `resolv.conf`. Inside a `runsc` sandbox that resolver does not bind, so **all name resolution fails in the instance** — including for the in-instance `dockerd`, which inherits the instance's `resolv.conf` (observed live: nested `docker run hello-world` fails `lookup registry-1.docker.io on 127.0.0.11:53: connection refused`, and even `curl` to a public host fails in the instance). The default `bridge` network carries the host's real upstream DNS servers, which are reachable from the instance and its nested daemon; the DinI smoke test (which runs on `bridge`) proves the pull path works. The successor approach fixes the same root cause differently — rewriting `/etc/resolv.conf` in-image from `OW_DNS` — which is what makes per-instance user-defined bridges viable again.
+
+Why the host gateway IP rather than loopback *(still current)*: Traefik runs in a container, so a strictly `127.0.0.1`-bound port is unreachable through `host.docker.internal`. Binding on the Docker bridge gateway (default `172.17.0.1`) is reachable via `host.docker.internal:host-gateway` while staying off the LAN.
 
 ### 2. Host gateway IP setting
 
@@ -125,7 +137,7 @@ New repo script `scripts/docker-runtime-gvisor.sh`, wired into `pnpm run init` a
 ### 10. Nested service exposure (known limitation)
 
 - Because `dockerd` runs with `--iptables=false --ip6tables=false`, nested `docker run -p` publishing does not function on either runtime. Nested containers must use `--network=host`.
-- Nested services then bind inside the instance container's network namespace (its `ow-network` IP): reachable from the instance's own localhost (KasmVNC desktop browser, ttyd) and from other `ow-network` peers — but **not** through the host port pool / Traefik / the tenant's browser via platform URLs. This is an accepted boundary, deliberately kept out of scope (see Out of Scope).
+- Nested services then bind inside the instance container's network namespace (its dedicated `/30` IP `10.200.x.2` under the successor topology; was the default-`bridge` IP under the superseded v1 topology): reachable from the instance's own localhost (KasmVNC desktop browser, ttyd) — but **not** through the host port pool / Traefik / the tenant's browser via platform URLs. This is an accepted boundary, deliberately kept out of scope (see Out of Scope).
 
 ### 11. Database schema & API contract
 
@@ -172,7 +184,7 @@ What makes a good test: assert the **external behavior** (what lands in `HostCon
 
 ## Out of Scope
 
-- **Nested port forwarding** (watching nested containers, allocating host ports for them, registering Traefik routes for nested services). Nested services stay reachable only via the instance's own localhost/`ow-network`.
+- **Nested port forwarding** (watching nested containers, allocating host ports for them, registering Traefik routes for nested services). Nested services stay reachable only via the instance's own localhost.
 - **Rootless `dockerd`** in instances.
 - **Nested Docker data persistence** (`vfs` storage driver, or relocating `/var/lib/docker` off tmpfs). Nested state is ephemeral by design; tenants persist via home bind-mounts.
 - **Manual host-port reservation or per-instance override** of the pool.
@@ -183,6 +195,6 @@ What makes a good test: assert the **external behavior** (what lands in `HostCon
 ## Further Notes
 
 - Health-check probing and Traefik routing now share an identical path (`host-gateway` → published port), which removes the class of bug where "health says OK but Traefik can't reach".
-- The `172.17.0.1` binding keeps instance-to-instance reachability on `ow-network` at today's level — no new LAN exposure.
+- Binding on `172.17.0.1` (the default-bridge gateway) keeps published ports off the LAN. Because instances no longer share `ow-network`, they lose direct container-IP peer access to one another; cross-instance traffic flows only through published ports, which is acceptable and more isolated.
 - Port binding under `runsc` and the tmpfs-backed `dockerd` behavior must be confirmed once by the smoke script (the repo precedent is `apply_bw_smoke.sh`).
 - New smoke script `scripts/dini_smoke_test.sh` verifies, on both runtimes: (1) `dockerd` readiness within 15 s via `OW_DOCKER_IN_INSTANCE=true`; (2) a nested `--network=host` service (e.g. `nginx:alpine`) reachable at `localhost` inside the instance; (3) a nested container bind-mounting the persistent home writes through to the host volume.

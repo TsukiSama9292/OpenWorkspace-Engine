@@ -36,5 +36,5 @@
 
 <label class={labelClass}>
   <span class={spanClass}>Image *</span>
-  <input type="text" bind:value={image} placeholder="tsukisama9292/ow-kasmvnc-ubuntu:jammy" class={inputClass} />
+  <input type="text" bind:value={image} placeholder="tsukisama9292/ow-kasmvnc-ubuntu-dini:jammy" class={inputClass} />
 </label>

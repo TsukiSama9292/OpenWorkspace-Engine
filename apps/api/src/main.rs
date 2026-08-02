@@ -70,12 +70,18 @@ async fn main() {
         }
     }
 
-    let docker_client = DockerClient::with_network(&settings.docker_network)
+    let docker_client = DockerClient::new()
         .await
         .expect("Failed to connect to Docker");
     let docker: Arc<dyn DockerService> = Arc::new(docker_client);
 
-    let state = AppState { db, docker, vnc_cache: vnc_cache.clone(), settings: settings.clone() };
+    let state = AppState {
+        db,
+        docker,
+        vnc_cache: vnc_cache.clone(),
+        settings: settings.clone(),
+        network_lock: Arc::new(tokio::sync::Mutex::new(())),
+    };
 
     // ── Spawn health worker ──
     {

@@ -28,7 +28,16 @@ RUN chown -R ow_user:ow_user /etc/ssl/private /etc/ssl/certs
 COPY ./entrypoint/entrypoint_ttyd.sh /home/ow_user/entrypoint.sh
 RUN chmod +x /home/ow_user/entrypoint.sh
 
-USER ow_user
+# OW resolv.conf rewrite: the rewrite needs root, so the container starts via
+# a root wrapper that applies it, then drops to ow_user and execs the app
+# entrypoint (mirrors the *_dini entrypoints minus the dockerd bootstrap).
+# With OW_DNS unset the wrapper is a no-op and the app runs as ow_user as
+# before.
+USER root
 WORKDIR /home/ow_user
+COPY ./src/dini/apply_ow_dns.sh /usr/local/bin/apply-ow-dns.sh
+RUN chmod +x /usr/local/bin/apply-ow-dns.sh
+COPY ./entrypoint/entrypoint_ow_user_root.sh /usr/local/bin/entrypoint-root.sh
+RUN chmod +x /usr/local/bin/entrypoint-root.sh
 
-ENTRYPOINT ["/home/ow_user/entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/entrypoint-root.sh"]

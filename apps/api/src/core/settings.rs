@@ -6,11 +6,12 @@ pub struct Settings {
     pub server_host: String,
     pub server_port: u16,
     pub db_max_connections: u32,
-    pub docker_network: String,
     pub container_runtime: String,
     pub host_gateway_ip: String,
     pub host_port_start: u16,
     pub host_port_end: u16,
+    pub instance_net_base: String,
+    pub instance_dns: String,
 }
 
 impl Settings {
@@ -33,6 +34,11 @@ impl Settings {
             env.get(key).cloned()
         };
 
+        let instance_net_base = get("OW_INSTANCE_NET_BASE")
+            .unwrap_or_else(|| "10.200.0.0/16".to_string());
+        crate::instance_net::NetBase::parse(&instance_net_base)
+            .map_err(|e| format!("OW_INSTANCE_NET_BASE invalid: {}", e))?;
+
         Ok(Self {
             database_url: get("DATABASE_URL")
                 .ok_or_else(|| "DATABASE_URL must be set".to_string())?,
@@ -50,8 +56,6 @@ impl Settings {
                 .unwrap_or_else(|| "5".to_string())
                 .parse()
                 .map_err(|e| format!("DB_MAX_CONNECTIONS invalid: {}", e))?,
-            docker_network: get("DOCKER_NETWORK")
-                .unwrap_or_else(|| "ow-network".to_string()),
             container_runtime: get("OW_CONTAINER_RUNTIME")
                 .unwrap_or_else(|| "docker".to_string()),
             host_gateway_ip: get("OW_HOST_GATEWAY_IP")
@@ -64,6 +68,9 @@ impl Settings {
                 .unwrap_or_else(|| "20000".to_string())
                 .parse()
                 .map_err(|e| format!("OW_HOST_PORT_END invalid: {}", e))?,
+            instance_net_base,
+            instance_dns: get("OW_INSTANCE_DNS")
+                .unwrap_or_else(|| "8.8.8.8,1.1.1.1".to_string()),
         })
     }
 
@@ -89,11 +96,12 @@ mod tests {
             server_host: "0.0.0.0".to_string(),
             server_port: 3000,
             db_max_connections: 5,
-            docker_network: "ow-network".to_string(),
             container_runtime: "docker".to_string(),
             host_gateway_ip: "172.17.0.1".to_string(),
             host_port_start: 10000,
             host_port_end: 20000,
+            instance_net_base: "10.200.0.0/16".to_string(),
+            instance_dns: "8.8.8.8,1.1.1.1".to_string(),
         };
         assert_eq!(settings.bind_address(), "0.0.0.0:3000");
     }
@@ -107,11 +115,12 @@ mod tests {
             server_host: "127.0.0.1".to_string(),
             server_port: 8080,
             db_max_connections: 10,
-            docker_network: "ow-network".to_string(),
             container_runtime: "docker".to_string(),
             host_gateway_ip: "172.17.0.1".to_string(),
             host_port_start: 10000,
             host_port_end: 20000,
+            instance_net_base: "10.200.0.0/16".to_string(),
+            instance_dns: "8.8.8.8,1.1.1.1".to_string(),
         };
         assert_eq!(settings.bind_address(), "127.0.0.1:8080");
     }
@@ -125,11 +134,12 @@ mod tests {
             server_host: "0.0.0.0".to_string(),
             server_port: 3000,
             db_max_connections: 5,
-            docker_network: "ow-network".to_string(),
             container_runtime: "docker".to_string(),
             host_gateway_ip: "172.17.0.1".to_string(),
             host_port_start: 10000,
             host_port_end: 20000,
+            instance_net_base: "10.200.0.0/16".to_string(),
+            instance_dns: "8.8.8.8,1.1.1.1".to_string(),
         };
         let debug = format!("{:?}", settings);
         assert!(debug.contains("Settings"));
@@ -145,11 +155,12 @@ mod tests {
             server_host: "0.0.0.0".to_string(),
             server_port: 3000,
             db_max_connections: 5,
-            docker_network: "ow-network".to_string(),
             container_runtime: "docker".to_string(),
             host_gateway_ip: "172.17.0.1".to_string(),
             host_port_start: 10000,
             host_port_end: 20000,
+            instance_net_base: "10.200.0.0/16".to_string(),
+            instance_dns: "8.8.8.8,1.1.1.1".to_string(),
         };
         let cloned = settings.clone();
         assert_eq!(settings.database_url, cloned.database_url);
@@ -250,7 +261,6 @@ mod tests {
             ("SERVER_HOST", "192.168.1.100"),
             ("SERVER_PORT", "8080"),
             ("DB_MAX_CONNECTIONS", "20"),
-            ("DOCKER_NETWORK", "custom-network"),
             ("OW_CONTAINER_RUNTIME", "runsc"),
         ]))
         .unwrap();
@@ -261,7 +271,6 @@ mod tests {
         assert_eq!(settings.server_host, "192.168.1.100");
         assert_eq!(settings.server_port, 8080);
         assert_eq!(settings.db_max_connections, 20);
-        assert_eq!(settings.docker_network, "custom-network");
         assert_eq!(settings.container_runtime, "runsc");
         assert_eq!(settings.bind_address(), "192.168.1.100:8080");
     }
@@ -367,5 +376,51 @@ mod tests {
         assert_eq!(settings.host_gateway_ip, "192.168.50.1");
         assert_eq!(settings.host_port_start, 40000);
         assert_eq!(settings.host_port_end, 50000);
+    }
+
+    #[test]
+    fn test_instance_net_defaults() {
+        let settings = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://localhost/test"),
+            ("JWT_SECRET", "test"),
+        ]))
+        .unwrap();
+        assert_eq!(settings.instance_net_base, "10.200.0.0/16");
+        assert_eq!(settings.instance_dns, "8.8.8.8,1.1.1.1");
+    }
+
+    #[test]
+    fn test_instance_net_custom_values() {
+        let settings = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://localhost/test"),
+            ("JWT_SECRET", "test"),
+            ("OW_INSTANCE_NET_BASE", "192.168.0.0/16"),
+            ("OW_INSTANCE_DNS", "10.0.0.53,10.0.0.54"),
+        ]))
+        .unwrap();
+        assert_eq!(settings.instance_net_base, "192.168.0.0/16");
+        assert_eq!(settings.instance_dns, "10.0.0.53,10.0.0.54");
+    }
+
+    #[test]
+    fn test_instance_net_base_invalid() {
+        let result = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://localhost/test"),
+            ("JWT_SECRET", "test"),
+            ("OW_INSTANCE_NET_BASE", "not-a-cidr"),
+        ]));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("OW_INSTANCE_NET_BASE invalid"));
+    }
+
+    #[test]
+    fn test_instance_net_base_misaligned_rejected() {
+        let result = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://localhost/test"),
+            ("JWT_SECRET", "test"),
+            ("OW_INSTANCE_NET_BASE", "10.200.0.4/16"),
+        ]));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("OW_INSTANCE_NET_BASE invalid"));
     }
 }

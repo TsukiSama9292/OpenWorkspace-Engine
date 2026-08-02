@@ -220,16 +220,16 @@ it can be reused by a later launch; only a reset wipes it. See
 
 ### Container Creation Steps
 
-1. **Pull image** — `tsukisama9292/ow-kasmvnc-ubuntu:jammy`
+1. **Pull image** — `tsukisama9292/ow-kasmvnc-ubuntu-dini:jammy`
 2. **Create container** with env vars:
    - `VNC_PW=<127-char random>` (enables HTTP Basic Auth on websockify)
    - `KASM_VNC_PORT=6901`
    - `DISPLAY=:1`
-3. **Connect to network** — `ow-network` (Docker bridge)
+3. **Join default network** — Docker default `bridge` (instances do **not** join `ow-network`)
 4. **Inject config** — Upload `kasmvnc.yaml` to `/etc/kasmvnc/kasmvnc.yaml` via tar stream
 5. **Start container**
-6. **Get IP** — Query Docker API for container IP on the bridge network
-7. **Write Traefik route** — Generate YAML file in `traefik/dynamic/`
+6. **Publish port** — map the service port (KasmVNC `6901`) to `<host_gateway_ip>:<host_port>` via Docker port bindings
+7. **Write Traefik route** — Generate YAML file in `traefik/dynamic/` targeting `https://host.docker.internal:<host_port>`
 
 ### kasmvnc.yaml Configuration
 
@@ -309,6 +309,12 @@ graph LR
 
     subgraph "ow-network (Docker Bridge)"
         TRAEFIK_N["Traefik"]
+        API_N["API"]
+        WEB_N["Web"]
+        DB_N["Postgres"]
+    end
+
+    subgraph "Default bridge (Docker)"
         KASM1_N["KasmVNC #1"]
         KASM2_N["KasmVNC #2"]
         KASMN_N["KasmVNC #N"]
@@ -318,13 +324,13 @@ graph LR
     TRAEFIK_DASH --> TRAEFIK_N
     TRAEFIK_N -->|"host.docker.internal"| API_PORT
     TRAEFIK_N -->|"host.docker.internal"| VITE_PORT
-    TRAEFIK_N -->|"direct IP"| KASM1_N
-    TRAEFIK_N -->|"direct IP"| KASM2_N
-    TRAEFIK_N -->|"direct IP"| KASMN_N
+    TRAEFIK_N -->|"host.docker.internal:host_port"| KASM1_N
+    TRAEFIK_N -->|"host.docker.internal:host_port"| KASM2_N
+    TRAEFIK_N -->|"host.docker.internal:host_port"| KASMN_N
 ```
 
 - **Traefik ↔ API/Vite:** via `host.docker.internal` (host.docker.internal extra_hosts in compose)
-- **Traefik ↔ KasmVNC:** direct container IP on `ow-network` bridge network
+- **Traefik ↔ KasmVNC:** via `host.docker.internal:<host_port>` — Traefik reaches the published port on the Docker bridge gateway (default `172.17.0.1`), never a container IP
 - **API ↔ Docker daemon:** Unix socket (`/var/run/docker.sock`)
 
 ## Database Schema

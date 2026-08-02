@@ -87,7 +87,7 @@ describe('template-form', () => {
     it('returns the default empty form state', () => {
       const state = createInitialFormState();
       expect(state.name).toBe('');
-      expect(state.image).toBe('tsukisama9292/ow-kasmvnc-ubuntu:jammy');
+      expect(state.image).toBe('tsukisama9292/ow-kasmvnc-ubuntu-dini:jammy');
       expect(state.cores).toBe(2);
       expect(state.ramGb).toBe(4);
       expect(state.gpuCount).toBe(0);
@@ -153,7 +153,7 @@ describe('template-form', () => {
         body: JSON.stringify({
           name: 'X',
           description: null,
-          image: 'tsukisama9292/ow-kasmvnc-ubuntu:jammy',
+          image: 'tsukisama9292/ow-kasmvnc-ubuntu-dini:jammy',
           cores: 2,
           memory: 4294967296,
           gpu_count: 0,

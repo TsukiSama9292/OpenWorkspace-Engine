@@ -6,6 +6,7 @@ use axum::{
 };
 use serde::Deserialize;
 use std::collections::BTreeSet;
+use std::net::Ipv4Addr;
 use uuid::Uuid;
 
 use super::super::AppState;
@@ -82,6 +83,7 @@ fn instance_to_json(
         "owner_role": owner_role.unwrap_or("user"),
         "container_id": inst.container_id,
         "host_port": inst.host_port,
+        "network_name": crate::instance_net::network_name(&inst.id.to_string()),
         "status": inst.status,
         "access_token": inst.access_token,
         "access_password": inst.access_password,
@@ -412,6 +414,19 @@ async fn launch_instance(
         }
     };
 
+    // Ensure the instance's dedicated `/30` network before the container create
+    // (spec §5: allocate host port → ensure instance network → create container).
+    // The port-conflict retry loop below reuses this same already-created
+    // network — only the host port changes between retries, so no subnet is
+    // re-scanned or re-allocated.
+    let network = match ensure_instance_network(&state, &instance).await {
+        Ok(network) => network,
+        Err(msg) => {
+            instance_repo.update_status(instance.id, "error").await.ok();
+            return Ok(Json(launch_error_response(&state, instance, &template, &msg).await));
+        }
+    };
+
     let mut container_config = ContainerConfig {
         image: template.image.clone(),
         cores: template.cores,
@@ -429,6 +444,8 @@ async fn launch_instance(
         host_port: Some(host_port),
         host_gateway_ip: Some(host_gateway_ip.clone()),
         docker_in_instance: template.docker_in_instance,
+        network_name: Some(network.clone()),
+        instance_dns: Some(state.settings.instance_dns.clone()),
     };
 
     // Bounded retry on the (rare) race where another launch binds our probe-free
@@ -575,6 +592,21 @@ async fn delete_instance(
     if let Some(ref container_id) = instance.container_id {
         crate::docker::stop_and_remove_container(&*state.docker, container_id, &instance.name)
             .await;
+    }
+
+    // Remove the instance's dedicated network after the container is gone
+    // (Docker refuses to remove a network with attached containers). The seam
+    // treats a missing network as idempotent success, so a double-delete or a
+    // crash-cleaned network is not an error; any real failure is logged and
+    // does not block the deletion.
+    let network_name = crate::instance_net::network_name(&instance.id.to_string());
+    if let Err(e) = state.docker.remove_network(&network_name).await {
+        tracing::warn!(
+            "Failed to remove network '{}' for instance '{}': {}",
+            network_name,
+            instance.name,
+            e
+        );
     }
 
     // Persistent data (host dir + Volume declaration) is deliberately kept on
@@ -765,6 +797,106 @@ async fn collect_used_host_ports(
         .collect()
 }
 
+/// Reduce a Docker network's IPv4 subnet CIDR to its aligned `/30` network
+/// address — the key the subnet allocator compares. Docker hands back aligned
+/// `a.b.c.d/30` strings (unchanged by the mask); any non-`/30` subnet that
+/// overlaps the base range is folded down to the `/30` block it occupies.
+fn subnet_network_address(subnet: &str) -> Option<Ipv4Addr> {
+    let addr: Ipv4Addr = subnet.split('/').next()?.parse().ok()?;
+    Some(Ipv4Addr::from(u32::from(addr) & !0b11))
+}
+
+/// Docker rejects a network whose pool overlaps an existing one on the same
+/// address space (HTTP 403, `invalid pool request: Pool overlaps ...`). Two
+/// *concurrent* launches can both compute the same free subnet from the same
+/// `list_networks` snapshot; this error means the launch should re-scan and
+/// re-allocate rather than fail outright.
+fn is_network_pool_overlap(err: &str) -> bool {
+    err.contains("Pool overlaps") || err.contains("pool overlaps")
+}
+
+/// Ensure `instance`'s dedicated `/30` network exists (spec §5) and return its
+/// name. Idempotent: if the network already exists, its subnet is reused
+/// unchanged; otherwise the lowest free `/30` from the base range is allocated
+/// and created. The `network_lock` serializes concurrent ensures in this
+/// process; a concurrent pool-overlap (cross-process or a manual
+/// `docker network create` landing between list and create) triggers a bounded
+/// re-allocation from a per-instance spread so retries don't stampede the same
+/// block. Shared by the `launch` and `start` (backfill) paths.
+async fn ensure_instance_network(
+    state: &AppState,
+    instance: &WorkspaceInstance,
+) -> Result<String, String> {
+    let base = crate::instance_net::NetBase::parse(&state.settings.instance_net_base)
+        .map_err(|e| format!("Invalid instance network base: {}", e))?;
+    let network_name = crate::instance_net::network_name(&instance.id.to_string());
+    let max_network_attempts = 4;
+    {
+        let _network_guard = state.network_lock.lock().await;
+        for attempt in 0..max_network_attempts {
+            let networks = state.docker
+                .list_networks()
+                .await
+                .map_err(|e| format!("Failed to list Docker networks: {}", e))?;
+            // Reuse the existing network (idempotent ensure / legacy backfill):
+            // a pre-existing instance keeps its subnet across stops and starts.
+            if let Some(_existing) = networks
+                .iter()
+                .find(|info| info.name == network_name)
+                .and_then(|info| info.subnet.as_deref())
+                .and_then(subnet_network_address)
+            {
+                return Ok(network_name);
+            }
+            let used_subnets: BTreeSet<Ipv4Addr> = networks
+                .iter()
+                .filter_map(|info| info.subnet.as_deref())
+                .filter_map(subnet_network_address)
+                .collect();
+            let instance_network = match if attempt == 0 {
+                crate::instance_net::lowest_free_subnet(&used_subnets, &base)
+            } else {
+                // After a pool-overlap collision, re-scan from a per-instance
+                // spread so concurrent retries don't all stampede the same
+                // lowest free block.
+                crate::instance_net::lowest_free_subnet_from(
+                    &used_subnets,
+                    &base,
+                    crate::instance_net::spread_block_offset(&instance.access_token, &base),
+                )
+            } {
+                Some(network) => network,
+                None => return Err("Instance subnet pool exhausted".to_string()),
+            };
+            let subnet_cidr = format!("{}/30", instance_network);
+            let gateway_ip = crate::instance_net::gateway_ip(instance_network).to_string();
+            match state.docker
+                .create_network(&network_name, &subnet_cidr, &gateway_ip)
+                .await
+            {
+                Ok(()) => return Ok(network_name),
+                Err(e) if attempt + 1 < max_network_attempts && is_network_pool_overlap(&e) => {
+                    tracing::warn!(
+                        "Instance network subnet {} for '{}' collided with a concurrent launch, re-allocating: {}",
+                        subnet_cidr,
+                        instance.name,
+                        e
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to create instance network for '{}': {} (DB record kept)",
+                        instance.name,
+                        e
+                    );
+                    return Err(format!("Failed to create network '{}': {}", network_name, e));
+                }
+            }
+        }
+    }
+    Err("Instance subnet pool exhausted".to_string())
+}
+
 /// Circular-scan base port for a port-conflict retry: a token-derived offset
 /// into the pool so concurrent launches don't all retry the same lowest port.
 fn host_port_spread_base(start: u16, end: u16, token: &str) -> u16 {
@@ -773,9 +905,11 @@ fn host_port_spread_base(start: u16, end: u16, token: &str) -> u16 {
 }
 
 /// Build the `ContainerConfig` and create the container for `instance`. The
-/// persistent-volume ensure happens once in `create_container_with_port_retry`
-/// (idempotent) before any create attempt. Returns the raw Docker error string
-/// so callers can distinguish the port-conflict race.
+/// container is placed on `instance`'s dedicated network (`network_name`) with
+/// the `OW_DNS` nameservers. The persistent-volume ensure happens once in
+/// `create_container_with_port_retry` (idempotent) before any create attempt.
+/// Returns the raw Docker error string so callers can distinguish the
+/// port-conflict race.
 async fn build_and_create_container(
     state: &AppState,
     template: &WorkspaceTemplate,
@@ -783,6 +917,7 @@ async fn build_and_create_container(
     remote_type: &RemoteType,
     resolved_host_path: Option<&str>,
     host_port: u16,
+    network_name: &str,
 ) -> Result<String, String> {
     let container_config = ContainerConfig {
         image: template.image.clone(),
@@ -801,6 +936,8 @@ async fn build_and_create_container(
         host_port: Some(host_port),
         host_gateway_ip: Some(state.settings.host_gateway_ip.clone()),
         docker_in_instance: template.docker_in_instance,
+        network_name: Some(network_name.to_string()),
+        instance_dns: Some(state.settings.instance_dns.clone()),
     };
     state.docker.create_container_from_template(
         &instance.name,
@@ -814,7 +951,9 @@ async fn build_and_create_container(
 /// Create `instance`'s container with a bounded retry on the port-conflict
 /// race (mirrors the launch path): each retry re-allocates the next free port
 /// scanning circularly from a token-derived offset. `to_remove` is an optional
-/// stale container to drop first so its name is free for re-creation.
+/// stale container to drop first so its name is free for re-creation. The
+/// container always attaches to `network_name` (already ensured by the caller),
+/// so a recreate-on-stolen-port reuses the same network and subnet.
 async fn create_container_with_port_retry<'a>(
     state: &AppState,
     template: &WorkspaceTemplate,
@@ -824,6 +963,7 @@ async fn create_container_with_port_retry<'a>(
     initial_port: u16,
     used_ports: &mut BTreeSet<u16>,
     to_remove: Option<&'a str>,
+    network_name: &str,
 ) -> Result<(String, u16), (StatusCode, Json<serde_json::Value>)> {
     let instance_repo = WorkspaceInstanceRepository::new(&state.db);
     let base_from = host_port_spread_base(
@@ -864,7 +1004,7 @@ async fn create_container_with_port_retry<'a>(
             })?;
             to_remove = None;
         }
-        match build_and_create_container(state, template, instance, remote_type, resolved_host_path, host_port).await {
+        match build_and_create_container(state, template, instance, remote_type, resolved_host_path, host_port, network_name).await {
             Ok(id) => {
             instance_repo.update_host_port(instance.id, Some(host_port as i32)).await.map_err(|e| {
                 tracing::error!("Failed to commit host port {} for '{}': {}", host_port, instance.name, e);
@@ -923,6 +1063,21 @@ async fn ensure_container_running(
     instance_repo: &WorkspaceInstanceRepository<'_>,
     host_port: u16,
 ) -> Result<(Option<String>, u16), (StatusCode, Json<serde_json::Value>)> {
+    // Ensure the instance's dedicated `/30` network exists before any restart
+    // or recreate (spec §5). Idempotent: an unchanged restart reuses the same
+    // network and subnet, and a pre-existing instance created before this
+    // feature gets its network backfilled on its next start.
+    let network = match ensure_instance_network(state, instance).await {
+        Ok(network) => network,
+        Err(e) => {
+            tracing::error!("Failed to ensure network for instance '{}': {}", instance.name, e);
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to ensure instance network: {}", e)})),
+            ));
+        }
+    };
+
     let mut used_ports: BTreeSet<u16> = collect_used_host_ports(instance_repo).await;
     used_ports.insert(host_port);
     let base_from = host_port_spread_base(
@@ -975,6 +1130,7 @@ async fn ensure_container_running(
                             fresh,
                             &mut used_ports,
                             Some(cid),
+                            &network,
                         )
                         .await?;
                         current_port = new_port;
@@ -1020,6 +1176,7 @@ async fn ensure_container_running(
                     current_port,
                     &mut used_ports,
                     None,
+                    &network,
                 )
                 .await?;
                 current_port = new_port;
@@ -1041,6 +1198,7 @@ async fn ensure_container_running(
                 current_port,
                 &mut used_ports,
                 None,
+                &network,
             )
             .await?;
             current_port = new_port;

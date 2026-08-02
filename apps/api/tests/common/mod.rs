@@ -88,11 +88,12 @@ impl TestContext {
             server_host: "127.0.0.1".to_string(),
             server_port: 0,
             db_max_connections: 5,
-            docker_network: "ow-test".to_string(),
             container_runtime: "docker".to_string(),
             host_gateway_ip: "172.17.0.1".to_string(),
             host_port_start: 10000,
             host_port_end: 20000,
+            instance_net_base: "10.200.0.0/16".to_string(),
+            instance_dns: "8.8.8.8,1.1.1.1".to_string(),
         };
 
         UserRepository::new(&db)
@@ -100,7 +101,7 @@ impl TestContext {
             .await
             .expect("failed to seed admin");
 
-        let docker = DockerClient::with_network(&settings.docker_network)
+        let docker = DockerClient::new()
             .await
             .expect("failed to create Docker client for test");
 
@@ -110,6 +111,7 @@ impl TestContext {
             docker: std::sync::Arc::new(docker),
             vnc_cache,
             settings: settings.clone(),
+            network_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
         };
 
         let cors = tower_http::cors::CorsLayer::new()

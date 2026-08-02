@@ -5,6 +5,19 @@
 
 set -euo pipefail
 
+VERBOSE=0
+for arg in "$@"; do
+    case "$arg" in
+        --verbose|-v) VERBOSE=1 ;;
+    esac
+done
+
+log() {
+    if [ "$VERBOSE" -eq 1 ]; then
+        echo "$@"
+    fi
+}
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPT="$ROOT/scripts/docker-runtime-gvisor.sh"
 
@@ -31,7 +44,7 @@ assert r["path"].endswith("/bin/runsc"), r
 assert r["runtimeArgs"] == ["--net-raw", "--allow-packet-socket-write"], r
 assert len(d) == 1, d
 PY
-echo "ok: creates file with runsc runtime when absent"
+log "ok: creates file with runsc runtime when absent"
 
 # 2. Merges into an existing file, preserving other keys; backs up the original.
 cat > "$TMP/daemon.json" <<'JSON'
@@ -48,7 +61,7 @@ assert d["runtimes"]["nvidia"]["path"] == "/usr/bin/nvidia-container-runtime", d
 PY
 [ -f "$TMP/daemon.json.bak" ] || { echo "FAIL: 2b backup not created"; exit 1; }
 cmp -s "$TMP/daemon.json.bak" "$TMP/original.json" || { echo "FAIL: 2c backup != original"; exit 1; }
-echo "ok: merges preserving existing keys, backs up original"
+log "ok: merges preserving existing keys, backs up original"
 
 # 3. Idempotent re-run: no rewrite, backup not overwritten.
 cp "$TMP/daemon.json.bak" "$TMP/bak-before.json"
@@ -56,7 +69,7 @@ cp "$TMP/daemon.json" "$TMP/merged-before.json"
 run_script
 cmp -s "$TMP/daemon.json.bak" "$TMP/bak-before.json" || { echo "FAIL: 3a backup overwritten"; exit 1; }
 cmp -s "$TMP/daemon.json" "$TMP/merged-before.json" || { echo "FAIL: 3b file rewritten"; exit 1; }
-echo "ok: re-run is a no-op"
+log "ok: re-run is a no-op"
 
 # 4. runsc already registered with a custom path + runtimeArgs:
 #    merge preserves the entry and only adds the required flags.
@@ -89,7 +102,7 @@ assert d["storage-driver"] == "overlay2", d
 PY
 [ -f "$REG_DIR/daemon.json.bak" ] || { echo "FAIL: 4b backup not created"; exit 1; }
 cmp -s "$REG_DIR/daemon.json.bak" "$REG_DIR/orig-runsc.json" || { echo "FAIL: 4c backup != original"; exit 1; }
-echo "ok: preserves existing runsc path/runtimeArgs, adds required flags"
+log "ok: preserves existing runsc path/runtimeArgs, adds required flags"
 
 # 5. Idempotent: re-run with a registered runsc entry is a byte-level no-op.
 cp "$REG_DIR/daemon.json" "$REG_DIR/runsc-merged.json"
@@ -97,7 +110,7 @@ cp "$REG_DIR/daemon.json.bak" "$REG_DIR/runsc-bak-before.json"
 run_script "$REG_DIR/daemon.json"
 cmp -s "$REG_DIR/daemon.json" "$REG_DIR/runsc-merged.json" || { echo "FAIL: 5a rewritten"; exit 1; }
 cmp -s "$REG_DIR/daemon.json.bak" "$REG_DIR/runsc-bak-before.json" || { echo "FAIL: 5b backup overwritten"; exit 1; }
-echo "ok: re-run with registered runsc is a no-op"
+log "ok: re-run with registered runsc is a no-op"
 
 # 6. runsc presence detection (skip-install logic, no network needed).
 mkdir -p "$TMP/bin"
@@ -117,6 +130,6 @@ rm "$TMP/bin/runsc"
     runsc_is_installed && { echo "FAIL: 6 absent binary detected as installed"; exit 1; }
     [ "$(host_arch)" != "" ] || { echo "FAIL: 6 host_arch empty"; exit 1; }
 )
-echo "ok: runsc presence detection"
+log "ok: runsc presence detection"
 
 echo "ALL TESTS PASSED"

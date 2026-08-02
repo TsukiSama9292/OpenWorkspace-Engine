@@ -55,6 +55,17 @@ RUN echo "kasm-user ALL=(ALL) NOPASSWD: /usr/bin/apt, /usr/bin/apt-get" > /etc/s
 # Userspace Runtime
 ENV HOME /home/kasm-user
 WORKDIR $HOME
-USER 1000
+
+# OW resolv.conf rewrite: the rewrite needs root (it runs before the setpriv
+# drop to kasm-user), so the container starts via an OW-owned root wrapper
+# that mirrors kasm-dini-entrypoint.sh minus the dockerd bootstrap. With
+# OW_DNS unset the wrapper is a no-op and Kasm's stock startup runs unchanged.
+COPY ./src/dini/apply_ow_dns.sh /usr/local/bin/apply-ow-dns.sh
+RUN chmod +x /usr/local/bin/apply-ow-dns.sh
+COPY ./entrypoint/entrypoint_kasm.sh /usr/local/bin/kasm-entrypoint.sh
+RUN chmod +x /usr/local/bin/kasm-entrypoint.sh
+
+USER root
 ENV PATH="/home/ow_user/.nix-profile/bin:${PATH}"
+ENTRYPOINT ["/usr/local/bin/kasm-entrypoint.sh"]
 CMD ["--tail-log"]

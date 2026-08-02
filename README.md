@@ -114,14 +114,12 @@ This runs `kill-dev.sh` → creates the `ow-network` Docker network → starts T
 
 ### Production
 
-1. **Build (or pull) the three template images.** From the repo root:
+1. **Build (or pull) the template images.** From the repo root:
 
    ```bash
    # Option A — build locally (recommended; keep images in sync with this repo)
-   cd docker/template_images
-   docker build -t tsukisama9292/ow-jupyter-ubuntu:jammy -f Dockerfile.jupyterlab_ubuntu .
-   docker build -t tsukisama9292/ow-ttyd-ubuntu:jammy -f Dockerfile.ttyd_ubuntu .
-   docker build -t tsukisama9292/ow-kasmvnc-ubuntu:jammy -f Dockerfile.kasmvnc_ubuntu --build-arg BASE_TAG=1.19.0-rolling-daily .
+   # Builds the three regular images plus their *_dini (in-instance Docker) variants.
+   pnpm run build:template-images
    ```
 
    ```bash
@@ -129,7 +127,14 @@ This runs `kill-dev.sh` → creates the `ow-network` Docker network → starts T
    docker pull tsukisama9292/ow-jupyter-ubuntu:jammy
    docker pull tsukisama9292/ow-ttyd-ubuntu:jammy
    docker pull tsukisama9292/ow-kasmvnc-ubuntu:jammy
+   docker pull tsukisama9292/ow-jupyter-ubuntu-dini:jammy
+   docker pull tsukisama9292/ow-ttyd-ubuntu-dini:jammy
+   docker pull tsukisama9292/ow-kasmvnc-ubuntu-dini:jammy
    ```
+
+   > New templates default to the `_dini` images so the `docker_in_instance`
+   > switch works out of the box. The regular images remain available for
+   > templates that never need an in-instance daemon.
 
 2. **Start the production stack** (Traefik + PostgreSQL + nginx web + Rust API):
 

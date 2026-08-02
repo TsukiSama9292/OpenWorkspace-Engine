@@ -370,7 +370,7 @@ async fn test_create_template_with_defaults() {
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["template"]["image"], "tsukisama9292/ow-kasmvnc-ubuntu:jammy");
+    assert_eq!(body["template"]["image"], "tsukisama9292/ow-kasmvnc-ubuntu-dini:jammy");
     assert_eq!(body["template"]["cores"], 2);
     assert_eq!(body["template"]["memory"], 4_294_967_296_i64);
 }

@@ -6,9 +6,9 @@ import type { Template, RemoteType, TimeoutAction } from '$lib/types';
 export type { TimeoutAction } from '$lib/types';
 
 export const DEFAULT_IMAGES: Record<RemoteType, string> = {
-  kasmvnc: 'tsukisama9292/ow-kasmvnc-ubuntu:jammy',
-  ttyd: 'tsukisama9292/ow-ttyd-ubuntu:jammy',
-  jupyter: 'tsukisama9292/ow-jupyter-ubuntu:jammy',
+  kasmvnc: 'tsukisama9292/ow-kasmvnc-ubuntu-dini:jammy',
+  ttyd: 'tsukisama9292/ow-ttyd-ubuntu-dini:jammy',
+  jupyter: 'tsukisama9292/ow-jupyter-ubuntu-dini:jammy',
 };
 
 export interface TemplateFormState {

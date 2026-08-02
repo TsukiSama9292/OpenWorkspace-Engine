@@ -128,7 +128,7 @@ No `?pw=` query parameter — password never visible in URL bar.
 | Traefik ForwardAuth | JWT cookie validation | Only authenticated users can reach VNC routes |
 | Traefik Header Injection | Per-token Basic auth | Only Traefik-injected traffic reaches KasmVNC |
 | KasmVNC Basic Auth | HTTP Basic on websockify | Container rejects unauthenticated connections |
-| Docker Network | Isolation on `ow-network` | Containers can't reach each other directly |
+| Docker Network | Instances on default `bridge` (not `ow-network`) | Containers can't reach each other directly; only published ports are exposed |
 
 ### Attack Scenarios
 
@@ -198,7 +198,7 @@ curl https://172.16.0.4:6901/websockify -k
 
 ### Cleanup Script
 
-`scripts/traefik_dynamic_clean.sh` removes all `vnc-*` files from dynamic dir, preserving static config files.
+`scripts/cleanup.sh traefik` (also part of the default full cleanup) removes all per-instance route files from the dynamic dir, preserving static config files.
 
 ## Migration History
 

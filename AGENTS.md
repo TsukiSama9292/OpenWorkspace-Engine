@@ -94,7 +94,7 @@ The actual test runner is `apps/api/scripts/run_tests.sh`, which starts a Postgr
 
 ```bash
 cd apps/api && bash scripts/check.sh
-cd apps/api && bash scripts/run_tests.sh 2>&1 | grep -iE "(fail|warn|error|failed|warning|summary)"
+cd apps/api && bash scripts/run_tests.sh 2>&1 | grep -iE "(fail|error|warn|summary)"
 ```
 
 ### How to fix warnings
@@ -131,6 +131,29 @@ In repositories indexed by CodeGraph (a `.codegraph/` directory exists at the re
 
 If there is no `.codegraph/` directory, skip CodeGraph entirely — indexing is the user's decision.
 <!-- CODEGRAPH_END -->
+
+## Development workflow
+
+New work flows through five stages, each a skill. A stage starts only when the previous one is explicitly agreed/published — don't skip ahead or combine stages.
+
+Prerequisite: the pipeline assumes the repo is already configured with an issue tracker, triage label vocabulary, and domain-doc layout (the `## Agent skills` block below). If those are missing, run the `setup-matt-pocock-skills` skill once first — it is one-time repo bootstrap, not a per-feature stage.
+
+1. **grilling** (`grilling`) — Clarify the problem. Grill the user one question at a time, walking each branch of the decision tree and resolving dependencies between decisions before moving on. Look facts up in the environment (filesystem, code, tools) rather than asking; the user owns the *decisions*. Stop only when AI and user share a mental model.
+
+2. **to-spec** — Without further interview, distill the agreed understanding into the spec at `.scratch/<feature-slug>/spec.md`. The spec is conceptual consensus, not code: Problem Statement, Solution, a long numbered User Stories list, Implementation Decisions, Testing Decisions (including the pre-agreed seams), Out of Scope, Further Notes. No file paths or code snippets. Use the `codebase-design` vocabulary when deciding the seams.
+
+3. **to-tickets** — Split the spec into small tracer-bullet vertical slices, one file per ticket at `.scratch/<feature-slug>/issues/<NN>-<slug>.md` (numbered from `01` in dependency order, `Blocked by:` edges listed). Present the breakdown to the user and ask explicitly: is the granularity right, are the blocking edges correct, should any tickets be merged, split, or reordered? Iterate until approved, then publish. Work the frontier — tickets whose blockers are all done.
+
+4. **implement & tdd** — Implement the tickets test-first at the pre-agreed seams (red → green, one slice at a time). Typecheck regularly and run single test files while working; run the full suite once at the end. Use the `codebase-design` vocabulary when designing module interfaces.
+
+5. **code-review** — Review the completed work against the tickets along two axes: Standards (repo conventions + smell baseline) and Spec (does it fulfill `.scratch/<feature-slug>/issues/<NN>-<slug>.md`). Fix findings, re-run the suite, then commit to the current branch.
+
+The pipeline is a loop, not a one-way gate: findings from stage 5 can bounce back to a new round of grilling/spec/tickets for follow-up work.
+
+Two supporting skills are used *within* the stages, not as stages of their own:
+
+- **codebase-design** — the deep-module vocabulary (module, interface, seam, depth, adapter) for designing module interfaces and deciding where a seam goes. Reach for it during **to-spec** (the pre-agreed seams) and **implement** (interface design).
+- **github-repository-reference** — when a stage needs to consult an external GitHub repo, add it as a git submodule under `references_repo/` (upstream KasmVNC, gVisor, and docker-docs already live there).
 
 ## Agent skills
 

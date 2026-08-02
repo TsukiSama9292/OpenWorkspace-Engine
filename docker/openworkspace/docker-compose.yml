@@ -95,7 +95,6 @@ services:
       - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@ow-postgres:5432/${POSTGRES_DB:-postgres}
       - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
-      - DOCKER_NETWORK=ow-network
       - TRAEFIK_DYNAMIC_DIR=/data/traefik/dynamic
     networks:
       - ow-service-network

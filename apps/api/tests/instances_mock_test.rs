@@ -34,6 +34,20 @@ fn docker_404() -> bollard::errors::Error {
     }
 }
 
+/// The launch path lists existing Docker networks and creates the instance's
+/// dedicated `/30` network before the container. Registered as a fallback after
+/// each test's own expectations — mockall matches expectations FIFO, so a test
+/// that declares its own `list_networks`/`create_network` expectations shadows
+/// these. Default: an empty used-subnet set (no pre-existing network collides)
+/// and an idempotent successful create. Accepts any call count, so tests that
+/// fail before the network step (volume-prep) are unaffected.
+fn mock_instance_network(m: &mut MockDockerService) {
+    m.expect_list_networks()
+        .returning(|| Box::pin(async { Ok(Vec::new()) }));
+    m.expect_create_network()
+        .returning(|_, _, _| Box::pin(async { Ok(()) }));
+}
+
 impl MockContext {
     async fn new<F: FnOnce(&mut MockDockerService)>(setup_mock: F) -> Self {
         ensure_pg().await;
@@ -74,11 +88,12 @@ impl MockContext {
             server_host: "127.0.0.1".to_string(),
             server_port: 0,
             db_max_connections: 5,
-            docker_network: "ow-test".to_string(),
             container_runtime: "docker".to_string(),
             host_gateway_ip: "172.17.0.1".to_string(),
             host_port_start: 10000,
             host_port_end: 20000,
+            instance_net_base: "10.200.0.0/16".to_string(),
+            instance_dns: "8.8.8.8,1.1.1.1".to_string(),
         };
 
         openworkspace_api::db::UserRepository::new(&db)
@@ -87,15 +102,15 @@ impl MockContext {
             .unwrap();
 
         let mut mock_docker = MockDockerService::new();
-        mock_docker.expect_network_name()
-            .return_const("ow-test".to_string());
         setup_mock(&mut mock_docker);
+        mock_instance_network(&mut mock_docker);
 
         let state = AppState {
             db: db.clone(),
             docker: Arc::new(mock_docker),
             vnc_cache: VncCache::new(),
             settings,
+            network_lock: Arc::new(tokio::sync::Mutex::new(())),
         };
 
         let cors = tower_http::cors::CorsLayer::new()
@@ -252,6 +267,297 @@ async fn test_launch_retries_on_port_conflict_with_new_port() {
     assert_eq!(attempted.len(), 2, "conflict should trigger exactly one retry");
     assert_ne!(attempted[0], attempted[1], "retry must pick a different host port");
     assert_eq!(body["instance"]["host_port"], attempted[1]);
+}
+
+#[tokio::test]
+async fn test_launch_creates_network_before_container_with_ow_dns() {
+    let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured = Arc::new(std::sync::Mutex::new(None::<(Option<String>, Option<String>)>));
+    let order_for_mock = order.clone();
+    let captured_for_mock = captured.clone();
+
+    let ctx = MockContext::new(move |m| {
+        let order = order_for_mock.clone();
+        m.expect_list_networks()
+            .times(1)
+            .returning(move || {
+                order.lock().unwrap().push("list_networks".to_string());
+                Box::pin(async { Ok(Vec::new()) })
+            });
+        let order = order_for_mock.clone();
+        m.expect_create_network()
+            .times(1)
+            .returning(move |name, subnet, gateway| {
+                order.lock().unwrap().push(format!("create_network|{}|{}|{}", name, subnet, gateway));
+                Box::pin(async { Ok(()) })
+            });
+        let order = order_for_mock.clone();
+        let captured = captured_for_mock.clone();
+        m.expect_create_container_from_template()
+            .returning(move |_, _, config, _, _| {
+                order.lock().unwrap().push("create_container".to_string());
+                *captured.lock().unwrap() = Some((config.network_name.clone(), config.instance_dns.clone()));
+                Box::pin(async { Ok("fake-container-id".to_string()) })
+            });
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let (template_id, instance_id) = create_config_and_instance(&ctx, &token, "launch-net-order").await;
+    let _ = template_id;
+
+    let expected_net = format!("ow-{}", instance_id);
+    let order = order.lock().unwrap();
+    assert_eq!(order.len(), 3);
+    assert_eq!(order[0], "list_networks");
+    assert_eq!(order[1], format!("create_network|{}|10.200.0.0/30|10.200.0.1", expected_net));
+    assert_eq!(order[2], "create_container");
+
+    let captured = captured.lock().unwrap();
+    let (network_name, instance_dns) = captured.as_ref().expect("container config must be captured");
+    assert_eq!(network_name.as_deref(), Some(expected_net.as_str()));
+    assert_eq!(instance_dns.as_deref(), Some("8.8.8.8,1.1.1.1"));
+}
+
+#[tokio::test]
+async fn test_launch_response_exposes_network_name() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let (template_id, instance_id) = create_config_and_instance(&ctx, &token, "launch-net-json").await;
+    let expected_net = format!("ow-{}", instance_id);
+
+    let resp = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id
+    }), &token).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let second_id = body["instance"]["id"].as_str().unwrap().to_string();
+    assert_eq!(body["instance"]["network_name"], format!("ow-{}", second_id));
+
+    let resp = ctx.get_auth(&format!("/api/instances/{}", instance_id), &token).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["instance"]["network_name"], expected_net);
+
+    let resp = ctx.get_auth("/api/instances", &token).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let found = body["instances"].as_array().unwrap().iter()
+        .find(|i| i["id"] == serde_json::Value::String(instance_id.clone())).unwrap();
+    assert_eq!(found["network_name"], expected_net);
+}
+
+#[tokio::test]
+async fn test_launch_port_conflict_retry_reuses_same_network() {
+    let network_calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let calls = Arc::new(AtomicU32::new(0));
+    let network_calls_for_mock = network_calls.clone();
+    let calls_for_mock = calls.clone();
+
+    let ctx = MockContext::new(move |m| {
+        m.expect_list_networks()
+            .times(1)
+            .returning(|| Box::pin(async { Ok(Vec::new()) }));
+        let names = network_calls_for_mock.clone();
+        m.expect_create_network()
+            .times(1)
+            .returning(move |name, _, _| {
+                names.lock().unwrap().push(format!("create_network|{}", name));
+                Box::pin(async { Ok(()) })
+            });
+        let names = network_calls_for_mock.clone();
+        let calls_for_mock = calls_for_mock.clone();
+        m.expect_create_container_from_template()
+            .returning(move |_, _, config, _, _| {
+                names.lock().unwrap().push(format!("create_container|{}", config.network_name.as_deref().unwrap_or("")));
+                let is_first = calls_for_mock.fetch_add(1, Ordering::Relaxed) == 0;
+                Box::pin(async move {
+                    if is_first {
+                        Err("Bind for 172.17.0.1:10000 failed: port is already allocated".to_string())
+                    } else {
+                        Ok("fake-container-id".to_string())
+                    }
+                })
+            });
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let (template_id, instance_id) = create_config_and_instance(&ctx, &token, "retry-same-net").await;
+    let _ = template_id;
+
+    let resp = ctx.get_auth(&format!("/api/instances/{}", instance_id), &token).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["instance"]["status"], "starting");
+
+    let expected_net = format!("ow-{}", instance_id);
+    let names = network_calls.lock().unwrap();
+    assert_eq!(names.len(), 3, "one create_network plus two container creates");
+    assert_eq!(names[0], format!("create_network|{}", expected_net));
+    assert_eq!(names[1], format!("create_container|{}", expected_net));
+    assert_eq!(names[2], format!("create_container|{}", expected_net));
+}
+
+#[tokio::test]
+async fn test_launch_subnet_pool_exhausted_marks_error() {
+    let ctx = MockContext::new(|m| {
+        m.expect_list_networks()
+            .times(1)
+            .returning(|| {
+                use openworkspace_api::docker::NetworkInfo;
+                let base = u32::from(std::net::Ipv4Addr::new(10, 200, 0, 0));
+                let subnets = (0..(1u32 << 14))
+                    .map(|i| NetworkInfo {
+                        name: format!("taken-{}", i),
+                        subnet: Some(format!("{}/30", std::net::Ipv4Addr::from(base + i * 4))),
+                    })
+                    .collect();
+                Box::pin(async move { Ok(subnets) })
+            });
+        m.expect_create_network().never();
+        m.expect_create_container_from_template().never();
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let config_resp = ctx.post_auth("/api/templates", &serde_json::json!({
+        "name": "net-exhausted", "image": "busybox:1"
+    }), &token).await;
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
+
+    let resp = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id
+    }), &token).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["instance"]["status"], "error");
+    assert!(body["docker_error"].as_str().unwrap().contains("subnet pool exhausted"));
+}
+
+#[tokio::test]
+async fn test_launch_network_create_failure_marks_error() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_network()
+            .times(1)
+            .returning(|_, _, _| Box::pin(async { Err("Failed to create network 'ow-x': boom".to_string()) }));
+        m.expect_create_container_from_template().never();
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let config_resp = ctx.post_auth("/api/templates", &serde_json::json!({
+        "name": "net-create-fail", "image": "busybox:1"
+    }), &token).await;
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
+
+    let resp = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id
+    }), &token).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["instance"]["status"], "error");
+    assert!(body["docker_error"].as_str().unwrap().contains("Failed to create network"));
+}
+
+#[tokio::test]
+async fn test_launch_list_networks_failure_marks_error() {
+    let ctx = MockContext::new(|m| {
+        m.expect_list_networks()
+            .times(1)
+            .returning(|| Box::pin(async { Err("Failed to list networks: boom".to_string()) }));
+        m.expect_create_network().never();
+        m.expect_create_container_from_template().never();
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let config_resp = ctx.post_auth("/api/templates", &serde_json::json!({
+        "name": "net-list-fail", "image": "busybox:1"
+    }), &token).await;
+    let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
+
+    let resp = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id
+    }), &token).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["instance"]["status"], "error");
+    assert!(body["docker_error"].as_str().unwrap().contains("Failed to list Docker networks"));
+}
+
+#[tokio::test]
+async fn test_launch_network_overlap_reallocates_subnet() {
+    use openworkspace_api::docker::NetworkInfo;
+
+    let list_calls = Arc::new(AtomicU32::new(0));
+    let create_calls = Arc::new(AtomicU32::new(0));
+    let created_networks = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured_network = Arc::new(std::sync::Mutex::new(None::<String>));
+    let list_calls_for_mock = list_calls.clone();
+    let create_calls_for_mock = create_calls.clone();
+    let created_networks_for_mock = created_networks.clone();
+    let captured_network_for_mock = captured_network.clone();
+
+    let ctx = MockContext::new(move |m| {
+        let list_calls = list_calls_for_mock.clone();
+        m.expect_list_networks()
+            .returning(move || {
+                let call = list_calls.fetch_add(1, Ordering::Relaxed);
+                if call == 0 {
+                    // Both launches see the same empty snapshot.
+                    Box::pin(async { Ok(Vec::new()) })
+                } else {
+                    // After the overlap, the concurrent launch's network is visible.
+                    Box::pin(async {
+                        Ok(vec![NetworkInfo {
+                            name: "ow-other".to_string(),
+                            subnet: Some("10.200.0.0/30".to_string()),
+                        }])
+                    })
+                }
+            });
+        let create_calls = create_calls_for_mock.clone();
+        let created_networks = created_networks_for_mock.clone();
+        m.expect_create_network()
+            .returning(move |name, subnet, gateway| {
+                let call = create_calls.fetch_add(1, Ordering::Relaxed);
+                created_networks.lock().unwrap().push(format!("{}|{}|{}", name, subnet, gateway));
+                if call == 0 {
+                    Box::pin(async { Err("invalid pool request: Pool overlaps with other one on this address space".to_string()) })
+                } else {
+                    Box::pin(async { Ok(()) })
+                }
+            });
+        let captured_network = captured_network_for_mock.clone();
+        m.expect_create_container_from_template()
+            .returning(move |_, _, config, _, _| {
+                *captured_network.lock().unwrap() = config.network_name.clone();
+                Box::pin(async { Ok("fake-container-id".to_string()) })
+            });
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let (template_id, instance_id) = create_config_and_instance(&ctx, &token, "net-overlap").await;
+    let _ = template_id;
+    let expected_net = format!("ow-{}", instance_id);
+
+    let resp = ctx.get_auth(&format!("/api/instances/{}", instance_id), &token).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["instance"]["status"], "starting");
+
+    let created = created_networks.lock().unwrap();
+    assert_eq!(created.len(), 2, "overlap must trigger exactly one re-allocation");
+    let first: Vec<&str> = created[0].split('|').collect();
+    let second: Vec<&str> = created[1].split('|').collect();
+    assert_eq!(first[0], expected_net);
+    assert_eq!(second[0], expected_net, "retry must reuse the same network name");
+    assert_eq!(first[1], "10.200.0.0/30", "first attempt takes the lowest free block");
+    assert_eq!(first[2], "10.200.0.1");
+    assert_ne!(second[1], first[1], "re-allocation must pick a different subnet");
+    let second_net: std::net::Ipv4Addr = second[1].split('/').next().unwrap().parse().unwrap();
+    let octets = second_net.octets();
+    assert_eq!(octets[0..2], [10, 200], "retry must stay inside the base range");
+    assert_eq!(octets[3] % 4, 0, "retry must pick an aligned /30 block");
+    assert_ne!(second_net, std::net::Ipv4Addr::new(10, 200, 0, 0), "retry must skip the subnet the concurrent launch took");
+    assert_eq!(captured_network.lock().unwrap().as_deref(), Some(expected_net.as_str()));
 }
 
 #[tokio::test]
@@ -483,6 +789,8 @@ async fn test_delete_container_remove_fails() {
             .returning(|_| Box::pin(async { Ok(()) }));
         m.expect_remove_container_by_id()
             .returning(|_| Box::pin(async { Err(docker_err("remove failed")) }));
+        m.expect_remove_network()
+            .returning(|_| Box::pin(async { Ok(()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -741,6 +1049,8 @@ async fn test_delete_frees_host_port() {
             .returning(|_| Box::pin(async { Ok(()) }));
         m.expect_remove_container_by_id()
             .returning(|_| Box::pin(async { Ok(()) }));
+        m.expect_remove_network()
+            .returning(|_| Box::pin(async { Ok(()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -852,6 +1162,8 @@ async fn test_delete_no_container() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_remove_network()
+            .returning(|_| Box::pin(async { Ok(()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1022,6 +1334,8 @@ async fn test_delete_with_container_success() {
             .returning(|_| Box::pin(async { Ok(()) }));
         m.expect_remove_container_by_id()
             .returning(|_| Box::pin(async { Ok(()) }));
+        m.expect_remove_network()
+            .returning(|_| Box::pin(async { Ok(()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1042,6 +1356,8 @@ async fn test_delete_with_container_already_removed() {
             .returning(|_| Box::pin(async { Err(docker_404()) }));
         m.expect_remove_container_by_id()
             .returning(|_| Box::pin(async { Err(docker_404()) }));
+        m.expect_remove_network()
+            .returning(|_| Box::pin(async { Ok(()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1773,6 +2089,8 @@ async fn test_delete_persistent_instance_preserves_volume() {
         m.expect_stop_container_by_id()
             .returning(|_| Box::pin(async { Ok(()) }));
         m.expect_remove_container_by_id()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        m.expect_remove_network()
             .returning(|_| Box::pin(async { Ok(()) }));
         m.expect_remove_persistent_volume()
             .never();

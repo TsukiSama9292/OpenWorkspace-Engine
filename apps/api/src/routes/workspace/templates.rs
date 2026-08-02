@@ -127,7 +127,7 @@ struct UpdateTemplateRequest {
 }
 
 fn default_image() -> String {
-    "tsukisama9292/ow-kasmvnc-ubuntu:jammy".to_string()
+    "tsukisama9292/ow-kasmvnc-ubuntu-dini:jammy".to_string()
 }
 fn default_cores() -> i32 {
     2

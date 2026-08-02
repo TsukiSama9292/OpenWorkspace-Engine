@@ -1,12 +1,22 @@
 # 06 — In-Repo DinI Images and Entrypoint Contract
 
-**What to build:** Tenants launching a DinI template get a working in-instance Docker daemon that is ready before the main service starts. The images for the three remote types are built and version-controlled in this repo, so the API↔image contract (env var name, tmpfs mount, `dockerd` flags) cannot drift.
+**What to build:** Tenants launching a DinI template get a working in-instance Docker daemon that is ready before the main service starts. The images for the three remote types are built and version-controlled in this repo, so the API↔image contract (env var name, tmpfs mount, `dockerd` flags) cannot drift. Per the design decision, none of this lives in the API server — DinI is purely a set of separate `*_dini` images layered on the regular ones.
 
 **Blocked by:** 05 — DinI Runtime Provisioning
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A shared entrypoint + Dockerfiles for the KasmVNC / ttyd / Jupyter variants build in this repo.
-- [ ] With `OW_DOCKER_IN_INSTANCE=true`, the entrypoint starts `dockerd --iptables=false --ip6tables=false --data-root=/var/lib/docker`, polls readiness via `docker info` (15 s timeout; logs and exits non-zero on failure), then execs the main service.
-- [ ] Without the env var, the entrypoint behaves exactly as today.
-- [ ] Template default images point at the new in-repo images, and the deploy flow builds them.
+- [x] Separate `Dockerfile.{kasmvnc_ubuntu,ttyd_ubuntu,jupyterlab_ubuntu}_dini` images build in this repo, each layered on the corresponding regular image; no DinI logic is added to the API server.
+- [x] With `OW_DOCKER_IN_INSTANCE=true`, the shared bootstrap starts `dockerd --iptables=false --ip6tables=false --data-root=/var/lib/docker`, polls readiness via `docker info` (15 s timeout; logs and exits non-zero on failure), then the main service starts.
+- [x] Without the env var, the entrypoint behaves exactly as today.
+- [x] Template default images point at the new in-repo images, and the deploy flow builds them.
+
+## Notes
+
+- **Root dockerd, not rootless.** Confirmed with the user during grilling: the container is already `privileged`, so rootless dind would be redundant and couldn't use the root-owned `/var/lib/docker` tmpfs. The reference repo (`references_repo/TsukiSama9292-Dockerfiles`, added as a git submodule) contributes the structure — install script and modprobe shim — from its `dind-rootless`/`jammy-dind` Dockerfiles.
+- **Image layout** (`docker/template_images/`): each `*_dini` Dockerfile is `FROM tsukisama9292/ow-*-ubuntu:jammy` plus a layer that runs `install_dind.sh` (docker-ce stack via the Docker apt repo), installs the shared bootstrap + modprobe shim to `/usr/local/bin`, and adds the service user to the `docker` group.
+- **Root-first startup (all three images).** The `_dini` images run `USER root` and their entrypoints boot the in-instance dockerd directly as root — the Docker-in-gVisor recipe, no setuid/sudo involved — then drop to the service user (`setpriv --reuid=1000 --regid=1000 --init-groups -- env HOME=...`) before handing off to the unchanged app entrypoint. This is what makes DinI work under `runsc`: gVisor does not honor the SUID bit by default, so a `sudo -n`-based bootstrap fails there ("effective uid is not 0") even with a `NOPASSWD` sudoers entry. The ttyd/jupyter variants use `entrypoint_{ttyd,jupyterlab}_dini.sh`; Kasm overrides its ENTRYPOINT with `entrypoint_kasm_dini.sh` which reproduces the stock chain (`kasm_default_profile.sh vnc_startup.sh kasm_startup.sh "$@"`). The earlier `custom_startup.sh` hook and the `sudoers.d/ow-dini` env_keep workaround were removed as obsolete.
+- **Without the env var** the entrypoint skips the bootstrap and behaves exactly as today (the drop to the service user still happens, so the app never runs as root).
+- **Storage driver is runtime-selected.** The nested daemon's data root sits on the `/var/lib/docker` tmpfs. Under `runc` it uses `fuse-overlayfs` (avoids the overlay maximum-nesting-depth limit against the host's overlay2). Under `runsc` (gVisor) FUSE is broken in-sandbox, so it uses `overlay2` on the tmpfs — the Docker-in-gVisor storage recipe. The bootstrap detects gVisor via `/proc/version` and writes `/etc/docker/daemon.json` accordingly. The modprobe shim (reference's `modprobe`) prevents missing-kernel-module failures.
+- **Defaults + deploy flow:** web `DEFAULT_IMAGES`, API `default_image()`, and their tests/placeholders now point at `tsukisama9292/ow-*-ubuntu-dini:jammy`. `docker/template_images/build.sh` builds all six images in dependency order (regular first); wired as `pnpm run build:template-images` into `docker:up`.
+- **Verification:** all three `_dini` images built locally. With env off → no dockerd, service serves as today, app runs as the service user. With env on + `--privileged --tmpfs /var/lib/docker:exec,mode=755` → `dockerd` ready before the service (1–2 s on both runtimes), `docker run busybox` works, nested `--network=host` services are reachable, and nested bind-mounts of the persistent home write through to the host. Full end-to-end proof on both `runc` and `runsc` is `scripts/dini_smoke_test.sh` (ticket 08). API 436/436, web 154/154, svelte-check 0 errors, `check.sh` clean.

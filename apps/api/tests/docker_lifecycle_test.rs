@@ -388,7 +388,68 @@ async fn test_start_already_running_container_just_updates_db() {
     let resp = ctx.get(&format!("/api/instances/{}", instance_id)).await;
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["instance"]["status"].as_str().unwrap(), "running");
+}
 
+#[tokio::test]
+async fn test_launch_lands_container_on_dedicated_30_network() {
+    let ctx = TestContext::new().await;
+    let template_id = create_test_template(&ctx, "net30").await;
+
+    let instance_id = launch_instance(&ctx, &template_id).await;
+
+    let resp = ctx.get(&format!("/api/instances/{}", instance_id)).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let network_name = body["instance"]["network_name"].as_str().unwrap().to_string();
+    assert_eq!(network_name, format!("ow-{}", instance_id));
+    let container_id = body["instance"]["container_id"].as_str().unwrap().to_string();
+
+    let docker = bollard::Docker::connect_with_local_defaults().unwrap();
+
+    let network = docker
+        .inspect_network::<String>(&network_name, None)
+        .await
+        .expect("instance network must exist");
+    let subnet = network
+        .ipam
+        .as_ref()
+        .and_then(|ipam| ipam.config.as_ref())
+        .and_then(|config| config.first())
+        .and_then(|config| config.subnet.as_ref())
+        .expect("instance network has a subnet");
+    let (net_part, prefix_len) = subnet.rsplit_once('/').expect("subnet has a prefix");
+    assert_eq!(prefix_len, "30", "expected a /30 carved from the base range, got {}", subnet);
+    let net_addr: u32 = net_part.parse::<std::net::Ipv4Addr>().unwrap().into();
+
+    let inspect = docker
+        .inspect_container(&container_id, None::<bollard::container::InspectContainerOptions>)
+        .await
+        .expect("container exists");
+    let host_config = inspect.host_config.as_ref().expect("host config");
+    assert_eq!(
+        host_config.network_mode.as_deref(),
+        Some(network_name.as_str()),
+        "container must be created on the instance network, not the default bridge"
+    );
+    let networks = inspect
+        .network_settings
+        .as_ref()
+        .and_then(|ns| ns.networks.as_ref())
+        .expect("network settings");
+    let net = networks.get(&network_name).expect("container attached to instance network");
+    let container_ip = net.ip_address.as_deref().expect("container has an IP");
+    assert_eq!(
+        u32::from(container_ip.parse::<std::net::Ipv4Addr>().unwrap()),
+        net_addr + 2,
+        "container must take the /30's unique .2 IP"
+    );
+
+    let resp = ctx.delete(&format!("/api/instances/{}", instance_id)).await;
+    assert_eq!(resp.status(), 204);
+
+    // Delete does not remove the instance network (out of scope); clean it up so
+    // the /30 block is released for later launches in this test run.
+    let _ = docker.remove_network(&network_name).await;
 }
 
 #[tokio::test]
