@@ -6,6 +6,33 @@
 
 ---
 
+## Design Philosophy: Security · Stability · Performance
+
+This project is engineered to reach a **balanced optimum of `Security`, `Stability`, and `Performance`**. Every layer is chosen for a deliberate trade-off — no single property is maximized at the expense of the others:
+
+| Layer | Technology | What it buys us |
+|---|---|---|
+| **Control Plane API** | Rust | **Security + Performance** — memory safety with zero-cost abstractions; <20MB RAM, high-concurrency non-blocking I/O |
+| **Frontend** | SvelteKit | **Performance + DX** — ships a lightweight static SPA (small bundle, fast load) without abandoning development convenience (runes reactivity, batteries-included tooling) |
+| **Reverse Proxy** | Traefik | **Stability + Performance** — efficient reverse proxying with **zero-downtime config** (file provider + inotify hot-reload; a bad/added route never requires a restart) |
+| **Static Asset Serving** | Nginx | **Performance** — HTTP caching eliminates the I/O bottleneck of repeated asset requests |
+| **Container Runtime** | Docker OCI + **runC** | **Performance** — fast instance creation with the standard OCI runtime |
+| **Container Runtime (hardened)** | **gVisor (runsc)** | **Security** — a user-space kernel intercepts syscalls, drastically reducing container-escape risk; selectable per template as an alternative to runC |
+| **Instance Networking** | Per-instance `/30` + host-published ports | **Security (network segmentation)** — see below |
+
+### Why per-instance `/30` networks instead of one shared subnet
+
+Managing every instance on a single flat virtual subnet (e.g. one `/16` or `/24`) is convenient, but it is also a **lateral-movement attack surface**: a compromised user could scan the shared segment and attack other instances from inside the network.
+
+To reduce the attack surface at the network layer *before* it becomes a problem:
+
+- The instance's **remote service port is published directly to a host port on the Docker bridge gateway** (`<host_gateway_ip>:<host_port>`) — Traefik reaches it via `host.docker.internal:<host_port>`, never a container IP.
+- **Outbound internet access uses a dedicated `/30` subnet per instance**: one IP for the gateway, one IP for the instance. With only 4 addresses (2 usable), each instance is isolated into its own L2 segment — no peer instances exist on the same broadcast domain, so **east-west attacks between instances are structurally impossible**.
+
+This is network-level isolation taken to its extreme: each container lives in its own bubble, and the only entrance to it is the single Traefik-controlled published port.
+
+---
+
 ## Product Vision
 
 ### Core Pain Points
