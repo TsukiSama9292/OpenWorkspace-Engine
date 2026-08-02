@@ -12,7 +12,7 @@ This project is engineered to reach a **balanced optimum of `Security`, `Stabili
 
 | Layer | Technology | What it buys us |
 |---|---|---|
-| **Control Plane API** | Rust | **Security + Performance** — memory safety with zero-cost abstractions; <20MB RAM, high-concurrency non-blocking I/O |
+| **Control Plane API** | Rust | **Security + Performance** — memory safety with zero-cost abstractions; <35MB RAM, high-concurrency non-blocking I/O |
 | **Frontend** | SvelteKit | **Performance + DX** — ships a lightweight static SPA (small bundle, fast load) without abandoning development convenience (runes reactivity, batteries-included tooling) |
 | **Reverse Proxy** | Traefik | **Stability + Performance** — efficient reverse proxying with **zero-downtime config** (file provider + inotify hot-reload; a bad/added route never requires a restart) |
 | **Static Asset Serving** | Nginx | **Performance** — HTTP caching eliminates the I/O bottleneck of repeated asset requests |
