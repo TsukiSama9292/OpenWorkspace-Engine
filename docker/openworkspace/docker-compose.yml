@@ -21,6 +21,11 @@ services:
     volumes:
       - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./traefik/dynamic:/etc/traefik/dynamic:ro
+    # Per-instance routes point at host.docker.internal:<host_port> (the
+    # host-side binding of each instance container's published port); resolve
+    # it to the Docker bridge gateway so traefik can reach them.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - ow-network
       - ow-service-network

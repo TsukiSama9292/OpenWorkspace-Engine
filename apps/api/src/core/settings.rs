@@ -8,6 +8,9 @@ pub struct Settings {
     pub db_max_connections: u32,
     pub docker_network: String,
     pub container_runtime: String,
+    pub host_gateway_ip: String,
+    pub host_port_start: u16,
+    pub host_port_end: u16,
 }
 
 impl Settings {
@@ -51,6 +54,16 @@ impl Settings {
                 .unwrap_or_else(|| "ow-network".to_string()),
             container_runtime: get("OW_CONTAINER_RUNTIME")
                 .unwrap_or_else(|| "docker".to_string()),
+            host_gateway_ip: get("OW_HOST_GATEWAY_IP")
+                .unwrap_or_else(|| "172.17.0.1".to_string()),
+            host_port_start: get("OW_HOST_PORT_START")
+                .unwrap_or_else(|| "10000".to_string())
+                .parse()
+                .map_err(|e| format!("OW_HOST_PORT_START invalid: {}", e))?,
+            host_port_end: get("OW_HOST_PORT_END")
+                .unwrap_or_else(|| "20000".to_string())
+                .parse()
+                .map_err(|e| format!("OW_HOST_PORT_END invalid: {}", e))?,
         })
     }
 
@@ -78,6 +91,9 @@ mod tests {
             db_max_connections: 5,
             docker_network: "ow-network".to_string(),
             container_runtime: "docker".to_string(),
+            host_gateway_ip: "172.17.0.1".to_string(),
+            host_port_start: 10000,
+            host_port_end: 20000,
         };
         assert_eq!(settings.bind_address(), "0.0.0.0:3000");
     }
@@ -93,6 +109,9 @@ mod tests {
             db_max_connections: 10,
             docker_network: "ow-network".to_string(),
             container_runtime: "docker".to_string(),
+            host_gateway_ip: "172.17.0.1".to_string(),
+            host_port_start: 10000,
+            host_port_end: 20000,
         };
         assert_eq!(settings.bind_address(), "127.0.0.1:8080");
     }
@@ -108,6 +127,9 @@ mod tests {
             db_max_connections: 5,
             docker_network: "ow-network".to_string(),
             container_runtime: "docker".to_string(),
+            host_gateway_ip: "172.17.0.1".to_string(),
+            host_port_start: 10000,
+            host_port_end: 20000,
         };
         let debug = format!("{:?}", settings);
         assert!(debug.contains("Settings"));
@@ -125,6 +147,9 @@ mod tests {
             db_max_connections: 5,
             docker_network: "ow-network".to_string(),
             container_runtime: "docker".to_string(),
+            host_gateway_ip: "172.17.0.1".to_string(),
+            host_port_start: 10000,
+            host_port_end: 20000,
         };
         let cloned = settings.clone();
         assert_eq!(settings.database_url, cloned.database_url);
@@ -181,6 +206,9 @@ mod tests {
         assert_eq!(settings.db_max_connections, 5);
         assert_eq!(settings.admin_password, "admin");
         assert_eq!(settings.container_runtime, "docker");
+        assert_eq!(settings.host_gateway_ip, "172.17.0.1");
+        assert_eq!(settings.host_port_start, 10000);
+        assert_eq!(settings.host_port_end, 20000);
     }
 
     #[test]
@@ -268,5 +296,76 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(settings.container_runtime, "");
+    }
+
+    #[test]
+    fn test_host_gateway_ip_default() {
+        let settings = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://localhost/test"),
+            ("JWT_SECRET", "test"),
+        ]))
+        .unwrap();
+        assert_eq!(settings.host_gateway_ip, "172.17.0.1");
+    }
+
+    #[test]
+    fn test_host_gateway_ip_custom() {
+        let settings = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://localhost/test"),
+            ("JWT_SECRET", "test"),
+            ("OW_HOST_GATEWAY_IP", "10.0.0.1"),
+        ]))
+        .unwrap();
+        assert_eq!(settings.host_gateway_ip, "10.0.0.1");
+    }
+
+    #[test]
+    fn test_host_port_range_custom() {
+        let settings = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://localhost/test"),
+            ("JWT_SECRET", "test"),
+            ("OW_HOST_PORT_START", "20000"),
+            ("OW_HOST_PORT_END", "30000"),
+        ]))
+        .unwrap();
+        assert_eq!(settings.host_port_start, 20000);
+        assert_eq!(settings.host_port_end, 30000);
+    }
+
+    #[test]
+    fn test_host_port_start_invalid() {
+        let result = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://localhost/test"),
+            ("JWT_SECRET", "test"),
+            ("OW_HOST_PORT_START", "not-a-number"),
+        ]));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("OW_HOST_PORT_START invalid"));
+    }
+
+    #[test]
+    fn test_host_port_end_invalid() {
+        let result = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://localhost/test"),
+            ("JWT_SECRET", "test"),
+            ("OW_HOST_PORT_END", "not-a-number"),
+        ]));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("OW_HOST_PORT_END invalid"));
+    }
+
+    #[test]
+    fn test_host_port_range_custom_env_values() {
+        let settings = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://remote:5432/prod"),
+            ("JWT_SECRET", "super-secret"),
+            ("OW_HOST_GATEWAY_IP", "192.168.50.1"),
+            ("OW_HOST_PORT_START", "40000"),
+            ("OW_HOST_PORT_END", "50000"),
+        ]))
+        .unwrap();
+        assert_eq!(settings.host_gateway_ip, "192.168.50.1");
+        assert_eq!(settings.host_port_start, 40000);
+        assert_eq!(settings.host_port_end, 50000);
     }
 }

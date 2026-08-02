@@ -76,6 +76,9 @@ impl MockContext {
             db_max_connections: 5,
             docker_network: "ow-test".to_string(),
             container_runtime: "docker".to_string(),
+            host_gateway_ip: "172.17.0.1".to_string(),
+            host_port_start: 10000,
+            host_port_end: 20000,
         };
 
         openworkspace_api::db::UserRepository::new(&db)
@@ -212,6 +215,102 @@ async fn test_launch_docker_create_fails() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["instance"]["status"], "error");
     assert_eq!(body["docker_error"], "Docker create failed");
+}
+
+#[tokio::test]
+async fn test_launch_retries_on_port_conflict_with_new_port() {
+    let attempted_ports = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let calls = Arc::new(AtomicU32::new(0));
+    let attempted_ports_for_mock = attempted_ports.clone();
+    let calls_for_mock = calls.clone();
+
+    let ctx = MockContext::new(move |m| {
+        m.expect_create_container_from_template()
+            .returning(move |_, _, config, _, _| {
+                let ports_for_mock = attempted_ports_for_mock.clone();
+                let calls_for_mock = calls_for_mock.clone();
+                let host_port = config.host_port.unwrap_or(0);
+                Box::pin(async move {
+                    ports_for_mock.lock().unwrap().push(host_port);
+                    if calls_for_mock.fetch_add(1, Ordering::Relaxed) == 0 {
+                        Err("Bind for 172.17.0.1:10000 failed: port is already allocated".to_string())
+                    } else {
+                        Ok("fake-container-id".to_string())
+                    }
+                })
+            });
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let (template_id, instance_id) = create_config_and_instance(&ctx, &token, "port-conflict-retry").await;
+    let _ = template_id;
+
+    let resp = ctx.get_auth(&format!("/api/instances/{}", instance_id), &token).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["instance"]["status"], "starting");
+
+    let attempted = attempted_ports.lock().unwrap().clone();
+    assert_eq!(attempted.len(), 2, "conflict should trigger exactly one retry");
+    assert_ne!(attempted[0], attempted[1], "retry must pick a different host port");
+    assert_eq!(body["instance"]["host_port"], attempted[1]);
+}
+
+#[tokio::test]
+async fn test_start_recreates_on_port_conflict() {
+    let attempted_ports = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let calls = Arc::new(AtomicU32::new(0));
+    let attempted_ports_for_mock = attempted_ports.clone();
+    let calls_for_mock = calls.clone();
+
+    let ctx = MockContext::new(move |m| {
+        m.expect_create_container_from_template()
+            .returning(move |_, _, config, _, _| {
+                let ports_for_mock = attempted_ports_for_mock.clone();
+                let calls_for_mock = calls_for_mock.clone();
+                let host_port = config.host_port.unwrap_or(0);
+                Box::pin(async move {
+                    ports_for_mock.lock().unwrap().push(host_port);
+                    if calls_for_mock.fetch_add(1, Ordering::Relaxed) == 0 {
+                        Ok("id1".to_string())
+                    } else {
+                        Ok("id2".to_string())
+                    }
+                })
+            });
+        m.expect_get_container_ip()
+            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
+        m.expect_inspect_container_state()
+            .returning(|_| Box::pin(async { Ok(Some("exited".to_string())) }));
+        m.expect_start_container_by_id()
+            .returning(|_| Box::pin(async {
+                Err(docker_err("Bind for 172.17.0.1:10000 failed: port is already allocated"))
+            }));
+        m.expect_remove_container_by_id()
+            .returning(|_| Box::pin(async { Ok(()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let (template_id, instance_id) = create_config_and_instance(&ctx, &token, "start-conflict-recreate").await;
+    let _ = template_id;
+    set_instance_status(&ctx.db, &instance_id, "stopped", Some("id1")).await;
+
+    let resp = ctx.post_auth(&format!("/api/instances/{}/start", instance_id), &serde_json::json!({}), &token).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "starting");
+    assert_eq!(body["container_id"], "id2");
+
+    let attempted = attempted_ports.lock().unwrap().clone();
+    assert_eq!(attempted.len(), 2, "launch + one recreated container");
+    assert_ne!(attempted[0], attempted[1], "recreate must pick a different host port");
+
+    let resp = ctx.get_auth(&format!("/api/instances/{}", instance_id), &token).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["instance"]["container_id"], "id2");
+    assert_eq!(body["instance"]["host_port"], attempted[1]);
 }
 
 #[tokio::test]

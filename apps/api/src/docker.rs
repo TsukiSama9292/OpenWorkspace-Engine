@@ -80,6 +80,13 @@ pub struct ContainerConfig {
     pub runtime: Option<String>,
     pub network_bandwidth_up_mbps: i32,
     pub network_bandwidth_down_mbps: i32,
+    /// Allocated host port this instance's single service port is published to.
+    /// `None` keeps the container on `ow-network` with no host binding.
+    pub host_port: Option<u16>,
+    /// Host Docker-bridge gateway IP to bind the published port to. Only used
+    /// when `host_port` is set; callers normally pass the `OW_HOST_GATEWAY_IP`
+    /// setting.
+    pub host_gateway_ip: Option<String>,
 }
 
 pub fn runtime_to_host_config(value: &str) -> Option<String> {
@@ -87,6 +94,25 @@ pub fn runtime_to_host_config(value: &str) -> Option<String> {
         "" | "docker" => None,
         other => Some(other.to_string()),
     }
+}
+
+/// Port binding map for publishing an instance's single service port to a
+/// given host gateway IP / host port. One binding per `remote_type` container
+/// port (KasmVNC `6901`, ttyd `7681`, Jupyter `8888`).
+pub fn port_bindings_for(
+    remote_type: &RemoteType,
+    host_ip: &str,
+    host_port: u16,
+) -> HashMap<String, Vec<bollard::models::PortBinding>> {
+    let mut bindings = HashMap::new();
+    bindings.insert(
+        format!("{}/tcp", remote_type.port()),
+        vec![bollard::models::PortBinding {
+            host_ip: Some(host_ip.to_string()),
+            host_port: Some(host_port.to_string()),
+        }],
+    );
+    bindings
 }
 
 /// Trait for Docker operations, allowing mock implementations in tests.
@@ -490,6 +516,11 @@ impl DockerService for DockerClient {
                 None
             },
             runtime: config.runtime.as_deref().and_then(runtime_to_host_config),
+            port_bindings: config.host_port.map(|host_port| {
+                let host_ip = config.host_gateway_ip.as_deref().unwrap_or("172.17.0.1");
+                let bindings = port_bindings_for(&config.remote_type, host_ip, host_port);
+                bindings.into_iter().map(|(k, v)| (k, Some(v))).collect()
+            }),
             ..Default::default()
         };
 
@@ -527,46 +558,81 @@ impl DockerService for DockerClient {
             .await
             .map_err(|e| e.to_string())?;
 
-        // ── Inject kasmvnc.yaml only for KasmVNC ──
-        if config.remote_type == RemoteType::KasmVnc {
-            tracing::info!("Injecting kasmvnc.yaml into container '{}'...", container_name);
+        // A created-but-not-started container is a half-open resource: Docker
+        // programs the host port binding at *start* time, so a concurrent launch
+        // can steal our port between create and start (the DB UNIQUE index on
+        // `host_port` arbitrates allocation, but the bind itself is the race).
+        // If any post-create step fails, remove the container so the launch
+        // route's port-conflict retry can re-create it under the same name with
+        // a fresh port — otherwise the orphaned name would 409 on retry.
+        let post_create = async {
+            // ── Inject kasmvnc.yaml only for KasmVNC ──
+            if config.remote_type == RemoteType::KasmVnc {
+                tracing::info!("Injecting kasmvnc.yaml into container '{}'...", container_name);
 
-            let mut header = tar::Header::new_gnu();
-            header.set_size(KASMVNC_YAML.len() as u64);
-            header.set_mode(0o644);
-            header.set_cksum();
+                let mut header = tar::Header::new_gnu();
+                header.set_size(KASMVNC_YAML.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
 
-            let mut tar_buf: Vec<u8> = Vec::new();
-            {
-                let mut ar = tar::Builder::new(&mut tar_buf);
-                ar.append_data(
-                    &mut header,
-                    "etc/kasmvnc/kasmvnc.yaml",
-                    KASMVNC_YAML.as_bytes(),
-                )
-                .map_err(|e| e.to_string())?;
-                ar.finish().map_err(|e| e.to_string())?;
+                let mut tar_buf: Vec<u8> = Vec::new();
+                {
+                    let mut ar = tar::Builder::new(&mut tar_buf);
+                    ar.append_data(
+                        &mut header,
+                        "etc/kasmvnc/kasmvnc.yaml",
+                        KASMVNC_YAML.as_bytes(),
+                    )
+                    .map_err(|e| e.to_string())?;
+                    ar.finish().map_err(|e| e.to_string())?;
+                }
+
+                self.docker
+                    .upload_to_container(
+                        &container.id,
+                        Some(UploadToContainerOptions {
+                            path: "/",
+                            ..Default::default()
+                        }),
+                        tar_buf.into(),
+                    )
+                    .await
+                    .map_err(|e| format!("upload_to_container failed: {}", e))?;
             }
 
+            tracing::info!("Starting container '{}'...", container_name);
+
             self.docker
-                .upload_to_container(
+                .start_container(&container.id, None::<StartContainerOptions<String>>)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok::<(), String>(())
+        }
+        .await;
+
+        if let Err(e) = post_create {
+            tracing::warn!(
+                "Container '{}' failed after creation ({}); removing it so a launch retry can rebind a fresh port",
+                container_name,
+                e
+            );
+            if let Err(remove_err) = self
+                .docker
+                .remove_container(
                     &container.id,
-                    Some(UploadToContainerOptions {
-                        path: "/",
-                        ..Default::default()
-                    }),
-                    tar_buf.into(),
+                    None::<bollard::container::RemoveContainerOptions>,
                 )
                 .await
-                .map_err(|e| format!("upload_to_container failed: {}", e))?;
+            {
+                tracing::warn!(
+                    "Failed to remove container '{}' after failed start: {}",
+                    container_name,
+                    remove_err
+                );
+            }
+            return Err(e);
         }
-
-        tracing::info!("Starting container '{}'...", container_name);
-
-        self.docker
-            .start_container(&container.id, None::<StartContainerOptions<String>>)
-            .await
-            .map_err(|e| e.to_string())?;
 
         // ── Apply per-instance bandwidth limit (fail-open) ──
         if config.network_bandwidth_up_mbps > 0 || config.network_bandwidth_down_mbps > 0 {
@@ -1102,6 +1168,30 @@ mod tests {
     #[test]
     fn test_runtime_to_host_config_runsc_returns_some() {
         assert_eq!(runtime_to_host_config("runsc"), Some("runsc".to_string()));
+    }
+
+    #[test]
+    fn test_port_bindings_for_kasmvnc() {
+        let bindings = port_bindings_for(&RemoteType::KasmVnc, "172.17.0.1", 10000);
+        let entry = bindings.get("6901/tcp").expect("expected 6901/tcp binding");
+        assert_eq!(entry.len(), 1);
+        assert_eq!(entry[0].host_ip.as_deref(), Some("172.17.0.1"));
+        assert_eq!(entry[0].host_port.as_deref(), Some("10000"));
+    }
+
+    #[test]
+    fn test_port_bindings_for_ttyd() {
+        let bindings = port_bindings_for(&RemoteType::Ttyd, "172.17.0.1", 10001);
+        assert!(bindings.contains_key("7681/tcp"));
+        assert!(!bindings.contains_key("6901/tcp"));
+    }
+
+    #[test]
+    fn test_port_bindings_for_jupyter() {
+        let bindings = port_bindings_for(&RemoteType::Jupyter, "10.0.0.1", 20000);
+        let entry = bindings.get("8888/tcp").expect("expected 8888/tcp binding");
+        assert_eq!(entry[0].host_ip.as_deref(), Some("10.0.0.1"));
+        assert_eq!(entry[0].host_port.as_deref(), Some("20000"));
     }
 
     #[test]

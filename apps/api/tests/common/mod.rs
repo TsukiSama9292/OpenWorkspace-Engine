@@ -90,6 +90,9 @@ impl TestContext {
             db_max_connections: 5,
             docker_network: "ow-test".to_string(),
             container_runtime: "docker".to_string(),
+            host_gateway_ip: "172.17.0.1".to_string(),
+            host_port_start: 10000,
+            host_port_end: 20000,
         };
 
         UserRepository::new(&db)

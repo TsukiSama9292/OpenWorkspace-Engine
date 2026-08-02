@@ -115,6 +115,8 @@ async fn test_pause_unpause() {
         runtime: None,
         network_bandwidth_up_mbps: 0,
         network_bandwidth_down_mbps: 0,
+        host_port: None,
+        host_gateway_ip: None,
     };
 
     let id = client
@@ -129,6 +131,63 @@ async fn test_pause_unpause() {
     client.unpause_container_by_id(&id).await.unwrap();
     let state = client.inspect_container_state(&id).await.unwrap();
     assert_eq!(state.as_deref(), Some("running"));
+}
+
+#[tokio::test]
+async fn test_create_container_publishes_host_port() {
+    use openworkspace_api::docker::ContainerConfig;
+
+    let client = setup().await;
+
+    // Grab a currently-free host port (the bind IP 127.0.0.1 keeps the test
+    // independent of the host's gateway IP).
+    let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let host_port = probe.local_addr().unwrap().port();
+    drop(probe);
+
+    let name = format!("ow_test_docker_hostport_{}_{}", std::process::id(), host_port);
+
+    let config = ContainerConfig {
+        image: "busybox:1".to_string(),
+        cores: 0,
+        memory: 0,
+        gpu_count: 0,
+        remote_type: RemoteType::KasmVnc,
+        run_config: serde_json::json!({}),
+        exec_config: serde_json::json!({}),
+        volume_mappings: serde_json::json!({}),
+        persistent_volume_name: None,
+        command: Some(vec!["sleep".to_string(), "3600".to_string()]),
+        runtime: None,
+        network_bandwidth_up_mbps: 0,
+        network_bandwidth_down_mbps: 0,
+        host_port: Some(host_port),
+        host_gateway_ip: Some("127.0.0.1".to_string()),
+    };
+
+    let id = client
+        .create_container_from_template(&name, 1, &config, "test_password", "")
+        .await
+        .unwrap();
+
+    let docker = bollard::Docker::connect_with_local_defaults().unwrap();
+    let inspect = docker.inspect_container(&id, None).await.unwrap();
+    let _ = client.remove_container_by_id(&id).await;
+
+    let ports = inspect
+        .network_settings
+        .and_then(|ns| ns.ports)
+        .unwrap_or_default();
+    let entry = ports
+        .get("6901/tcp")
+        .expect("expected a published 6901/tcp binding");
+    let binding = entry
+        .iter()
+        .flatten()
+        .next()
+        .expect("expected a host-side binding");
+    assert_eq!(binding.host_ip.as_deref(), Some("127.0.0.1"));
+    assert_eq!(binding.host_port.as_deref(), Some(host_port.to_string().as_str()));
 }
 
 #[tokio::test]
@@ -169,6 +228,8 @@ async fn test_create_container_from_template() {
         runtime: None,
         network_bandwidth_up_mbps: 0,
         network_bandwidth_down_mbps: 0,
+        host_port: None,
+        host_gateway_ip: None,
     };
 
     let id = client
@@ -205,6 +266,8 @@ async fn test_create_container_from_template_with_env_and_dns() {
         runtime: None,
         network_bandwidth_up_mbps: 0,
         network_bandwidth_down_mbps: 0,
+        host_port: None,
+        host_gateway_ip: None,
     };
 
     let id = client
@@ -241,6 +304,8 @@ async fn test_create_container_from_template_with_volume() {
         runtime: None,
         network_bandwidth_up_mbps: 0,
         network_bandwidth_down_mbps: 0,
+        host_port: None,
+        host_gateway_ip: None,
     };
 
     let id = client
@@ -294,6 +359,8 @@ async fn test_create_container_from_template_with_exec() {
         runtime: None,
         network_bandwidth_up_mbps: 0,
         network_bandwidth_down_mbps: 0,
+        host_port: None,
+        host_gateway_ip: None,
     };
 
     let id = client
@@ -329,6 +396,8 @@ async fn test_create_container_from_template_with_hostname() {
         runtime: None,
         network_bandwidth_up_mbps: 0,
         network_bandwidth_down_mbps: 0,
+        host_port: None,
+        host_gateway_ip: None,
     };
 
     let id = client
@@ -361,6 +430,8 @@ async fn test_create_container_from_template_command_from_run_config() {
         runtime: None,
         network_bandwidth_up_mbps: 0,
         network_bandwidth_down_mbps: 0,
+        host_port: None,
+        host_gateway_ip: None,
     };
 
     let id = client
@@ -394,6 +465,8 @@ async fn test_create_container_from_template_no_command() {
         runtime: None,
         network_bandwidth_up_mbps: 0,
         network_bandwidth_down_mbps: 0,
+        host_port: None,
+        host_gateway_ip: None,
     };
 
     let _result = client.create_container_from_template(&name, 1, &config, "test_password", "").await;
@@ -422,6 +495,8 @@ async fn test_create_container_from_template_with_shm_size_and_network_mode() {
         runtime: None,
         network_bandwidth_up_mbps: 0,
         network_bandwidth_down_mbps: 0,
+        host_port: None,
+        host_gateway_ip: None,
     };
 
     let id = client
@@ -482,6 +557,8 @@ async fn test_create_container_from_template_with_gpu() {
         runtime: None,
         network_bandwidth_up_mbps: 0,
         network_bandwidth_down_mbps: 0,
+        host_port: None,
+        host_gateway_ip: None,
     };
 
     let result = client
@@ -519,6 +596,8 @@ async fn test_create_container_from_template_image_already_cached() {
         runtime: None,
         network_bandwidth_up_mbps: 0,
         network_bandwidth_down_mbps: 0,
+        host_port: None,
+        host_gateway_ip: None,
     };
 
     let _id1 = client
@@ -563,6 +642,8 @@ async fn test_create_container_from_template_cores_and_memory() {
         runtime: None,
         network_bandwidth_up_mbps: 0,
         network_bandwidth_down_mbps: 0,
+        host_port: None,
+        host_gateway_ip: None,
     };
 
     let id = client
@@ -620,6 +701,8 @@ async fn test_inspect_container_state_running() {
         runtime: None,
         network_bandwidth_up_mbps: 0,
         network_bandwidth_down_mbps: 0,
+        host_port: None,
+        host_gateway_ip: None,
     };
 
     let id = client
@@ -665,6 +748,8 @@ async fn test_persistent_volume_lifecycle_via_client() {
         runtime: None,
         network_bandwidth_up_mbps: 0,
         network_bandwidth_down_mbps: 0,
+        host_port: None,
+        host_gateway_ip: None,
     };
 
     let name1 = format!("ow_test_pv_lc1_{}", std::process::id());

@@ -926,6 +926,7 @@ fn instance_model_from_converts_all_fields() {
         instance_number: 1,
         owner_id,
         container_id: Some("abc123".to_string()),
+        host_port: Some(10000),
         status: "running".to_string(),
         access_token: "vtok".to_string(),
         access_password: "secretpw".to_string(),
@@ -961,6 +962,7 @@ fn instance_model_from_none_optionals() {
         instance_number: 1,
         owner_id: uuid::Uuid::new_v4(),
         container_id: None,
+        host_port: None,
         status: "stopped".to_string(),
         access_token: "tok".to_string(),
         access_password: "pw".to_string(),
@@ -1105,5 +1107,42 @@ async fn instance_list_running_with_started_at() {
     let mut expected = vec![a.id, b.id];
     expected.sort();
     assert_eq!(ids, expected);
+}
+
+#[tokio::test]
+async fn instance_host_port_commit_list_and_clear() {
+    let db = setup_db().await;
+    let template_repo = WorkspaceTemplateRepository::new(&db);
+    let instance_repo = WorkspaceInstanceRepository::new(&db);
+    let user_repo = UserRepository::new(&db);
+
+    user_repo.seed_admin("pass").await.unwrap();
+    let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
+
+    let config = template_repo
+        .create("hp-cfg", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause")
+        .await
+        .unwrap();
+
+    let a = instance_repo.launch(config.id, admin.0, "hp", false, None).await.unwrap();
+    let b = instance_repo.launch(config.id, admin.0, "hp", false, None).await.unwrap();
+
+    assert!(instance_repo.list_host_ports().await.unwrap().is_empty());
+
+    assert!(instance_repo.update_host_port(a.id, Some(10000)).await.unwrap());
+    let found = instance_repo.find_by_id(a.id).await.unwrap().unwrap();
+    assert_eq!(found.host_port, Some(10000));
+    assert_eq!(instance_repo.list_host_ports().await.unwrap(), vec![10000]);
+
+    // UNIQUE index on host_port is the concurrency arbiter: a second instance
+    // cannot claim the same port.
+    assert!(instance_repo.update_host_port(b.id, Some(10000)).await.is_err());
+    assert_eq!(instance_repo.list_host_ports().await.unwrap(), vec![10000]);
+
+    assert!(instance_repo.update_host_port(a.id, None).await.unwrap());
+    assert!(instance_repo.list_host_ports().await.unwrap().is_empty());
+
+    assert!(instance_repo.update_host_port(b.id, Some(10001)).await.unwrap());
+    assert_eq!(instance_repo.list_host_ports().await.unwrap(), vec![10001]);
 }
 

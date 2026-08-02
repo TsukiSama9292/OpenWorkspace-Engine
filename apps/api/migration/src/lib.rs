@@ -13,6 +13,7 @@ mod m20260723_000009_add_container_runtime;
 mod m20260731_000010_add_auto_sleep;
 mod m20260731_000011_add_network_bandwidth;
 mod m20260801_000012_add_keep_time;
+mod m20260801_000013_add_host_port;
 
 pub struct Migrator;
 
@@ -32,6 +33,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260731_000010_add_auto_sleep::Migration),
             Box::new(m20260731_000011_add_network_bandwidth::Migration),
             Box::new(m20260801_000012_add_keep_time::Migration),
+            Box::new(m20260801_000013_add_host_port::Migration),
         ]
     }
 }

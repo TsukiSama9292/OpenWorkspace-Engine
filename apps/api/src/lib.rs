@@ -3,6 +3,7 @@ pub mod core;
 pub mod db;
 pub mod docker;
 pub mod health_worker;
+pub mod host_port;
 pub mod network_qos;
 pub mod persistent_volume;
 pub mod routes;

@@ -148,6 +148,7 @@ pub mod workspace_instance {
         pub access_password: String,
         pub mount_persistent: bool,
         pub resolved_volume_host_path: Option<String>,
+        pub host_port: Option<i32>,
         pub started_at: Option<DateTimeUtc>,
         pub last_seen_at: Option<DateTimeUtc>,
         pub created_at: DateTimeUtc,
@@ -295,6 +296,7 @@ pub struct WorkspaceInstance {
     pub access_password: String,
     pub mount_persistent: bool,
     pub resolved_volume_host_path: Option<String>,
+    pub host_port: Option<i32>,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -315,6 +317,7 @@ impl From<workspace_instance::Model> for WorkspaceInstance {
             access_password: m.access_password,
             mount_persistent: m.mount_persistent,
             resolved_volume_host_path: m.resolved_volume_host_path,
+            host_port: m.host_port,
             started_at: m.started_at,
             last_seen_at: m.last_seen_at,
             created_at: m.created_at,
@@ -752,6 +755,39 @@ impl<'a> WorkspaceInstanceRepository<'a> {
         let result = workspace_instance::Entity::update(workspace_instance::ActiveModel {
             id: Set(id),
             resolved_volume_host_path: Set(host_path.map(|s| s.to_string())),
+            ..Default::default()
+        })
+        .filter(workspace_instance::Column::Id.eq(id))
+        .exec(self.db)
+        .await;
+        match result {
+            Ok(_) => Ok(true),
+            Err(sea_orm::DbErr::RecordNotFound(_)) | Err(sea_orm::DbErr::RecordNotUpdated) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// All host ports currently allocated to non-deleted instances, i.e. the
+    /// live set the pure allocator must not hand out again.
+    pub async fn list_host_ports(&self) -> Result<Vec<i32>, sea_orm::DbErr> {
+        let results = workspace_instance::Entity::find()
+            .filter(workspace_instance::Column::HostPort.is_not_null())
+            .all(self.db)
+            .await?;
+        Ok(results.into_iter().filter_map(|m| m.host_port).collect())
+    }
+
+    /// Commit (or clear) an instance's host port allocation. The UNIQUE index
+    /// on `host_port` is the concurrency arbiter: two concurrent launches
+    /// cannot both win the same port.
+    pub async fn update_host_port(
+        &self,
+        id: Uuid,
+        host_port: Option<i32>,
+    ) -> Result<bool, sea_orm::DbErr> {
+        let result = workspace_instance::Entity::update(workspace_instance::ActiveModel {
+            id: Set(id),
+            host_port: Set(host_port),
             ..Default::default()
         })
         .filter(workspace_instance::Column::Id.eq(id))

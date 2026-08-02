@@ -12,15 +12,15 @@ fn default_dynamic_dir() -> PathBuf {
         .join("../../docker/openworkspace_dev/traefik/dynamic")
 }
 
-fn write_route_to(dir: &PathBuf, remote_type: &RemoteType, token: &str, container_ip: &str, password: &str) -> Result<(), String> {
+fn write_route_to(dir: &PathBuf, remote_type: &RemoteType, token: &str, host_port: u16, password: &str) -> Result<(), String> {
     match remote_type {
-        RemoteType::KasmVnc => write_vnc_route_to(dir, token, container_ip, password),
-        RemoteType::Ttyd => write_ttyd_route_to(dir, token, container_ip, password),
-        RemoteType::Jupyter => write_jupyter_route_to(dir, token, container_ip),
+        RemoteType::KasmVnc => write_vnc_route_to(dir, token, host_port, password),
+        RemoteType::Ttyd => write_ttyd_route_to(dir, token, host_port, password),
+        RemoteType::Jupyter => write_jupyter_route_to(dir, token, host_port),
     }
 }
 
-fn write_vnc_route_to(dir: &PathBuf, token: &str, container_ip: &str, vnc_password: &str) -> Result<(), String> {
+fn write_vnc_route_to(dir: &PathBuf, token: &str, host_port: u16, vnc_password: &str) -> Result<(), String> {
     use base64::Engine;
     let auth_header = format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(format!("kasm_user:{}", vnc_password)));
 
@@ -41,7 +41,7 @@ fn write_vnc_route_to(dir: &PathBuf, token: &str, container_ip: &str, vnc_passwo
       loadBalancer:
         serversTransport: "kasm-insecure"
         servers:
-          - url: "https://{ip}:6901"
+          - url: "https://host.docker.internal:{host_port}"
   middlewares:
     kasmvnc-{token}-auth:
       headers:
@@ -53,7 +53,7 @@ fn write_vnc_route_to(dir: &PathBuf, token: &str, container_ip: &str, vnc_passwo
           - "/kasmvnc/{token}"
 "#,
         token = token,
-        ip = container_ip,
+        host_port = host_port,
         auth_header = auth_header,
     );
     std::fs::write(&ws_path, ws_yaml).map_err(|e| format!("write {}: {}", ws_path.display(), e))?;
@@ -62,7 +62,7 @@ fn write_vnc_route_to(dir: &PathBuf, token: &str, container_ip: &str, vnc_passwo
     Ok(())
 }
 
-fn write_ttyd_route_to(dir: &PathBuf, token: &str, container_ip: &str, password: &str) -> Result<(), String> {
+fn write_ttyd_route_to(dir: &PathBuf, token: &str, host_port: u16, password: &str) -> Result<(), String> {
     use base64::Engine;
     let auth_header = format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(format!("ow_user:{}", password)));
 
@@ -83,7 +83,7 @@ fn write_ttyd_route_to(dir: &PathBuf, token: &str, container_ip: &str, password:
       loadBalancer:
         serversTransport: "kasm-insecure"
         servers:
-          - url: "https://{ip}:7681"
+          - url: "https://host.docker.internal:{host_port}"
   middlewares:
     ttyd-{token}-auth:
       headers:
@@ -95,7 +95,7 @@ fn write_ttyd_route_to(dir: &PathBuf, token: &str, container_ip: &str, password:
           - "/ttyd/{token}"
 "#,
         token = token,
-        ip = container_ip,
+        host_port = host_port,
         auth_header = auth_header,
     );
     std::fs::write(&ws_path, ws_yaml).map_err(|e| format!("write {}: {}", ws_path.display(), e))?;
@@ -104,7 +104,7 @@ fn write_ttyd_route_to(dir: &PathBuf, token: &str, container_ip: &str, password:
     Ok(())
 }
 
-fn write_jupyter_route_to(dir: &PathBuf, token: &str, container_ip: &str) -> Result<(), String> {
+fn write_jupyter_route_to(dir: &PathBuf, token: &str, host_port: u16) -> Result<(), String> {
     let ws_path = dir.join(format!("jupyter-{}-ws.yml", token));
     let ws_yaml = format!(
         r#"http:
@@ -119,10 +119,10 @@ fn write_jupyter_route_to(dir: &PathBuf, token: &str, container_ip: &str) -> Res
       loadBalancer:
         serversTransport: "kasm-insecure"
         servers:
-          - url: "https://{ip}:8888"
+          - url: "https://host.docker.internal:{host_port}"
 "#,
         token = token,
-        ip = container_ip,
+        host_port = host_port,
     );
     std::fs::write(&ws_path, ws_yaml).map_err(|e| format!("write {}: {}", ws_path.display(), e))?;
 
@@ -130,8 +130,8 @@ fn write_jupyter_route_to(dir: &PathBuf, token: &str, container_ip: &str) -> Res
     Ok(())
 }
 
-pub fn write_route(remote_type: &RemoteType, token: &str, container_ip: &str, password: &str) -> Result<(), String> {
-    write_route_to(&default_dynamic_dir(), remote_type, token, container_ip, password)
+pub fn write_route(remote_type: &RemoteType, token: &str, host_port: u16, password: &str) -> Result<(), String> {
+    write_route_to(&default_dynamic_dir(), remote_type, token, host_port, password)
 }
 
 fn delete_route_from(dir: &PathBuf, token: &str) -> Result<(), String> {
@@ -167,7 +167,7 @@ mod tests {
     #[test]
     fn write_creates_vnc_file() {
         let dir = temp_dir();
-        let result = write_vnc_route_to(&dir, "abc123", "172.17.0.2", "testpass");
+        let result = write_vnc_route_to(&dir, "abc123", 10000, "testpass");
         assert!(result.is_ok());
         assert!(dir.join("kasmvnc-abc123-ws.yml").exists());
         fs::remove_dir_all(&dir).unwrap();
@@ -176,10 +176,10 @@ mod tests {
     #[test]
     fn vnc_file_contains_websockify_rule() {
         let dir = temp_dir();
-        write_vnc_route_to(&dir, "tok1", "10.0.0.1", "testpass").unwrap();
+        write_vnc_route_to(&dir, "tok1", 10000, "testpass").unwrap();
         let content = fs::read_to_string(dir.join("kasmvnc-tok1-ws.yml")).unwrap();
         assert!(content.contains("PathPrefix(`/kasmvnc/tok1/websockify`)"));
-        assert!(content.contains("https://10.0.0.1:6901"));
+        assert!(content.contains("https://host.docker.internal:10000"));
         assert!(content.contains("kasm-insecure"));
         assert!(content.contains("web"));
         assert!(content.contains("kasmvnc-tok1-strip"));
@@ -192,10 +192,10 @@ mod tests {
     #[test]
     fn ttyd_file_contains_path_prefix() {
         let dir = temp_dir();
-        write_ttyd_route_to(&dir, "tok1", "10.0.0.1", "testpass").unwrap();
+        write_ttyd_route_to(&dir, "tok1", 10001, "testpass").unwrap();
         let content = fs::read_to_string(dir.join("ttyd-tok1-ws.yml")).unwrap();
         assert!(content.contains("PathPrefix(`/ttyd/tok1/`)"));
-        assert!(content.contains("https://10.0.0.1:7681"));
+        assert!(content.contains("https://host.docker.internal:10001"));
         assert!(content.contains("kasm-insecure"));
         assert!(content.contains("stripPrefix"));
         assert!(content.contains("/ttyd/tok1"));
@@ -208,10 +208,10 @@ mod tests {
     #[test]
     fn jupyter_file_contains_path_prefix() {
         let dir = temp_dir();
-        write_jupyter_route_to(&dir, "tok1", "10.0.0.1").unwrap();
+        write_jupyter_route_to(&dir, "tok1", 10002).unwrap();
         let content = fs::read_to_string(dir.join("jupyter-tok1-ws.yml")).unwrap();
         assert!(content.contains("PathPrefix(`/jupyter/tok1/`)"));
-        assert!(content.contains("https://10.0.0.1:8888"));
+        assert!(content.contains("https://host.docker.internal:10002"));
         assert!(content.contains("kasm-insecure"));
         assert!(!content.contains("stripPrefix"), "jupyter route should not strip prefix");
         assert!(content.contains("web"));
@@ -222,19 +222,19 @@ mod tests {
     #[test]
     fn write_overwrites_existing_files() {
         let dir = temp_dir();
-        write_vnc_route_to(&dir, "tok1", "10.0.0.1", "testpass").unwrap();
-        write_vnc_route_to(&dir, "tok1", "10.0.0.2", "testpass2").unwrap();
+        write_vnc_route_to(&dir, "tok1", 10010, "testpass").unwrap();
+        write_vnc_route_to(&dir, "tok1", 10020, "testpass2").unwrap();
         let content = fs::read_to_string(dir.join("kasmvnc-tok1-ws.yml")).unwrap();
-        assert!(content.contains("https://10.0.0.2:6901"));
+        assert!(content.contains("https://host.docker.internal:10020"));
         fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn delete_removes_all_type_files() {
         let dir = temp_dir();
-        write_vnc_route_to(&dir, "tok1", "10.0.0.1", "testpass").unwrap();
-        write_ttyd_route_to(&dir, "tok1", "10.0.0.1", "testpass").unwrap();
-        write_jupyter_route_to(&dir, "tok1", "10.0.0.1").unwrap();
+        write_vnc_route_to(&dir, "tok1", 10000, "testpass").unwrap();
+        write_ttyd_route_to(&dir, "tok1", 10001, "testpass").unwrap();
+        write_jupyter_route_to(&dir, "tok1", 10002).unwrap();
         assert!(dir.join("kasmvnc-tok1-ws.yml").exists());
         assert!(dir.join("ttyd-tok1-ws.yml").exists());
         assert!(dir.join("jupyter-tok1-ws.yml").exists());
@@ -256,8 +256,8 @@ mod tests {
     #[test]
     fn multiple_tokens_independent() {
         let dir = temp_dir();
-        write_vnc_route_to(&dir, "aaa", "10.0.0.1", "pw_a").unwrap();
-        write_ttyd_route_to(&dir, "bbb", "10.0.0.2", "testpass").unwrap();
+        write_vnc_route_to(&dir, "aaa", 10000, "pw_a").unwrap();
+        write_ttyd_route_to(&dir, "bbb", 10001, "testpass").unwrap();
         assert!(dir.join("kasmvnc-aaa-ws.yml").exists());
         assert!(dir.join("ttyd-bbb-ws.yml").exists());
         delete_route_from(&dir, "aaa").unwrap();
@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn vnc_file_has_auth_middleware() {
         let dir = temp_dir();
-        write_vnc_route_to(&dir, "tok1", "10.0.0.1", "testpass").unwrap();
+        write_vnc_route_to(&dir, "tok1", 10000, "testpass").unwrap();
         let content = fs::read_to_string(dir.join("kasmvnc-tok1-ws.yml")).unwrap();
         assert!(content.contains("kasmvnc-tok1-auth"));
         fs::remove_dir_all(&dir).unwrap();
@@ -287,7 +287,7 @@ mod tests {
     fn write_route_uses_default_dir() {
         let dir = default_dynamic_dir();
         fs::create_dir_all(&dir).ok();
-        let result = write_route(&RemoteType::KasmVnc, "test_default_dir_token", "10.0.0.3", "testpass");
+        let result = write_route(&RemoteType::KasmVnc, "test_default_dir_token", 10003, "testpass");
         assert!(result.is_ok());
         assert!(dir.join("kasmvnc-test_default_dir_token-ws.yml").exists());
         let _ = fs::remove_file(dir.join("kasmvnc-test_default_dir_token-ws.yml"));
@@ -304,7 +304,7 @@ mod tests {
 
     #[test]
     fn write_route_to_readonly_dir_fails() {
-        let result = write_route_to(&PathBuf::from("/proc"), &RemoteType::KasmVnc, "errtok", "10.0.0.1", "testpass");
+        let result = write_route_to(&PathBuf::from("/proc"), &RemoteType::KasmVnc, "errtok", 10004, "testpass");
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("write"), "error should mention write: {}", err);
@@ -314,14 +314,14 @@ mod tests {
     fn write_vnc_route_full_token_content() {
         let dir = temp_dir();
         let token = "fulltok123abc";
-        write_vnc_route_to(&dir, token, "172.17.0.5", "secret123").unwrap();
+        write_vnc_route_to(&dir, token, 10005, "secret123").unwrap();
 
         let ws = fs::read_to_string(dir.join(format!("kasmvnc-{}-ws.yml", token))).unwrap();
         assert!(ws.contains(&format!("kasmvnc/{}", token)));
         assert!(ws.contains("kasm-insecure"));
         assert!(ws.contains(&format!("kasmvnc-{}-auth", token)));
         assert!(ws.contains(&format!("kasmvnc-{}-strip", token)));
-        assert!(ws.contains("https://172.17.0.5:6901"));
+        assert!(ws.contains("https://host.docker.internal:10005"));
         assert!(ws.contains("entryPoints"));
         assert!(ws.contains("loadBalancer"));
         assert!(ws.contains("customRequestHeaders"));
@@ -333,7 +333,7 @@ mod tests {
     #[test]
     fn write_route_dispatches_vnc() {
         let dir = temp_dir();
-        let result = write_route_to(&dir, &RemoteType::KasmVnc, "disptok", "10.0.0.1", "testpass");
+        let result = write_route_to(&dir, &RemoteType::KasmVnc, "disptok", 10006, "testpass");
         assert!(result.is_ok());
         assert!(dir.join("kasmvnc-disptok-ws.yml").exists());
         fs::remove_dir_all(&dir).unwrap();
@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn write_route_dispatches_ttyd() {
         let dir = temp_dir();
-        let result = write_route_to(&dir, &RemoteType::Ttyd, "disptok", "10.0.0.1", "testpass");
+        let result = write_route_to(&dir, &RemoteType::Ttyd, "disptok", 10007, "testpass");
         assert!(result.is_ok());
         assert!(dir.join("ttyd-disptok-ws.yml").exists());
         fs::remove_dir_all(&dir).unwrap();
@@ -351,7 +351,7 @@ mod tests {
     #[test]
     fn write_route_dispatches_jupyter() {
         let dir = temp_dir();
-        let result = write_route_to(&dir, &RemoteType::Jupyter, "disptok", "10.0.0.1", "");
+        let result = write_route_to(&dir, &RemoteType::Jupyter, "disptok", 10008, "");
         assert!(result.is_ok());
         assert!(dir.join("jupyter-disptok-ws.yml").exists());
         fs::remove_dir_all(&dir).unwrap();
@@ -361,7 +361,7 @@ mod tests {
     fn write_vnc_route_long_token_truncated_in_log() {
         let dir = temp_dir();
         let long_token = "a".repeat(64);
-        let result = write_vnc_route_to(&dir, &long_token, "10.0.0.99", "testpass");
+        let result = write_vnc_route_to(&dir, &long_token, 10009, "testpass");
         assert!(result.is_ok());
         fs::remove_dir_all(&dir).unwrap();
     }

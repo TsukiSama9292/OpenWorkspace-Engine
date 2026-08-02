@@ -5,6 +5,7 @@ use axum::{
     Json, Router,
 };
 use serde::Deserialize;
+use std::collections::BTreeSet;
 use uuid::Uuid;
 
 use super::super::AppState;
@@ -80,6 +81,7 @@ fn instance_to_json(
         "owner_username": owner_username.unwrap_or(""),
         "owner_role": owner_role.unwrap_or("user"),
         "container_id": inst.container_id,
+        "host_port": inst.host_port,
         "status": inst.status,
         "access_token": inst.access_token,
         "access_password": inst.access_password,
@@ -394,7 +396,23 @@ async fn launch_instance(
 
     let remote_type: RemoteType = template.remote_type.parse().unwrap_or(RemoteType::KasmVnc);
 
-    let container_config = ContainerConfig {
+    let host_gateway_ip = state.settings.host_gateway_ip.clone();
+    let mut used_ports: BTreeSet<u16> = collect_used_host_ports(&instance_repo).await;
+    let mut host_port = match crate::host_port::allocate_host_port(
+        &used_ports,
+        state.settings.host_port_start,
+        state.settings.host_port_end,
+        &host_gateway_ip,
+    ) {
+        Some(port) => port,
+        None => {
+            let msg = "Host port pool exhausted".to_string();
+            instance_repo.update_status(instance.id, "error").await.ok();
+            return Ok(Json(launch_error_response(&state, instance, &template, &msg).await));
+        }
+    };
+
+    let mut container_config = ContainerConfig {
         image: template.image.clone(),
         cores: template.cores,
         memory: template.memory,
@@ -408,25 +426,67 @@ async fn launch_instance(
         runtime: Some(resolve_runtime(&template.container_runtime, &state.settings.container_runtime)),
         network_bandwidth_up_mbps: template.network_bandwidth_up_mbps,
         network_bandwidth_down_mbps: template.network_bandwidth_down_mbps,
+        host_port: Some(host_port),
+        host_gateway_ip: Some(host_gateway_ip.clone()),
     };
 
-    match state.docker
+    // Bounded retry on the (rare) race where another launch binds our probe-free
+    // port between allocation and the container bind: re-allocate skipping the
+    // lost port and retry up to 5 times. Each retry scans the pool *circularly*
+    // from a token-derived offset, so concurrent launches don't all re-pick the
+    // same lowest free port and re-collide.
+    let base_from = host_port_spread_base(
+        state.settings.host_port_start,
+        state.settings.host_port_end,
+        &instance.access_token,
+    );
+    let mut create_result = state.docker
         .create_container_from_template(&instance.name, instance.instance_number, &container_config, &instance.access_password, &instance.access_token)
-        .await
-    {
+        .await;
+    let mut retries = 0;
+    while retries < 5 {
+        match &create_result {
+            Err(e) if crate::host_port::is_port_conflict(e) => {
+                retries += 1;
+                used_ports.insert(host_port);
+                let from = base_from.wrapping_add(retries as u16);
+                match crate::host_port::allocate_host_port_from(
+                    &used_ports,
+                    state.settings.host_port_start,
+                    state.settings.host_port_end,
+                    &host_gateway_ip,
+                    from,
+                ) {
+                    Some(next) => {
+                        host_port = next;
+                        container_config.host_port = Some(next);
+                        create_result = state.docker
+                            .create_container_from_template(&instance.name, instance.instance_number, &container_config, &instance.access_password, &instance.access_token)
+                            .await;
+                    }
+                    None => break,
+                }
+            }
+            _ => break,
+        }
+    }
+
+    match create_result {
         Ok(container_id) => {
             instance_repo.update_container_id(instance.id, &container_id).await.ok();
+            instance_repo.update_host_port(instance.id, Some(host_port as i32)).await.map_err(|e| {
+                tracing::error!("Failed to commit host port {} for '{}': {}", host_port, instance.name, e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Failed to allocate host port"})),
+                )
+            })?;
             instance_repo.update_status(instance.id, "starting").await.ok();
 
-            match state.docker.get_container_ip(&container_id, &state.docker.network_name()).await {
-                Ok(ip) => {
-                    if let Err(e) = crate::route_writer::write_route(&remote_type, &instance.access_token, &ip, &instance.access_password) {
-                        tracing::error!("Failed to write Traefik VNC route: {}", e);
-                    }
-                    state.vnc_cache.insert(&instance.access_token, "starting");
-                }
-                Err(e) => tracing::error!("Failed to get container IP for Traefik route: {}", e),
+            if let Err(e) = crate::route_writer::write_route(&remote_type, &instance.access_token, host_port, &instance.access_password) {
+                tracing::error!("Failed to write Traefik VNC route: {}", e);
             }
+            state.vnc_cache.insert(&instance.access_token, "starting");
 
             tracing::info!(
                 "Container started for instance '{}' (container={})",
@@ -612,78 +672,57 @@ async fn start_instance(
     }
     let resolved_host_path = instance.resolved_volume_host_path.as_deref();
 
-    let new_container_id = match instance.container_id {
-        Some(ref cid) => {
-            match state.docker.inspect_container_state(cid).await {
-                Ok(Some(state_str)) => {
-                    if state_str.to_lowercase().contains("running") {
-                        tracing::info!("Container for '{}' already running, updating DB", instance.name);
-                    } else {
-                        tracing::info!("Starting stopped container for '{}' (id: {})", instance.name, &cid[..12]);
-                        state.docker.start_container_by_id(cid).await.map_err(|e| {
-                            tracing::error!("Failed to start container for '{}': {}", instance.name, e);
-                            (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(serde_json::json!({"error": "Failed to start container"})),
-                            )
-                        })?;
-
-                        // Docker recreates the veth pair on start, destroying any
-                        // prior qdisc — re-apply the template's bandwidth limit.
-                        if let Some(t) = template.as_ref() {
-                            if t.network_bandwidth_up_mbps > 0 || t.network_bandwidth_down_mbps > 0 {
-                                if let Err(e) = state.docker
-                                    .apply_bandwidth_limit(cid, t.network_bandwidth_up_mbps, t.network_bandwidth_down_mbps)
-                                    .await
-                                {
-                                    tracing::error!(
-                                        "Failed to apply bandwidth limit for '{}': {} (container keeps running without limit) — TODO: notify admin",
-                                        instance.name, e
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    Some(cid.clone())
+    // Migration backfill: a legacy instance created before the host-port pool
+    // has no allocation. Allocate one now and persist it so the route writer
+    // and container bind share the same port.
+    let host_port = match instance.host_port {
+        Some(p) => p as u16,
+        None => {
+            let used: BTreeSet<u16> = collect_used_host_ports(&instance_repo).await;
+            match crate::host_port::allocate_host_port(
+                &used,
+                state.settings.host_port_start,
+                state.settings.host_port_end,
+                &state.settings.host_gateway_ip,
+            ) {
+                Some(p) => {
+                    instance_repo.update_host_port(instance.id, Some(p as i32)).await.map_err(|e| {
+                        tracing::error!("Failed to commit host port {} for '{}': {}", p, instance.name, e);
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({"error": "Failed to allocate host port"})),
+                        )
+                    })?;
+                    p
                 }
-                _ => {
-                    tracing::warn!("Container for '{}' not found, creating new one", instance.name);
-                    let t = template.as_ref().ok_or((
+                None => {
+                    return Err((
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({"error": "Template not found for instance"})),
-                    ))?;
-                    Some(
-                        create_container_for_start(&state, t, &instance, &remote_type, resolved_host_path)
-                            .await?,
-                    )
+                        Json(serde_json::json!({"error": "Host port pool exhausted"})),
+                    ));
                 }
             }
         }
-        None => {
-            tracing::info!("No container for instance '{}', creating new one", instance.name);
-            let t = template.as_ref().ok_or((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Template not found for instance"})),
-            ))?;
-            Some(
-                create_container_for_start(&state, t, &instance, &remote_type, resolved_host_path)
-                    .await?,
-            )
-        }
     };
+
+    let (new_container_id, host_port) = ensure_container_running(
+        &state,
+        &template,
+        &instance,
+        &remote_type,
+        resolved_host_path,
+        &instance_repo,
+        host_port,
+    )
+    .await?;
 
     if let Some(ref cid) = new_container_id {
         instance_repo.update_container_id(instance.id, cid).await.ok();
 
-        match state.docker.get_container_ip(cid, &state.docker.network_name()).await {
-            Ok(ip) => {
-                if let Err(e) = crate::route_writer::write_route(&remote_type, &instance.access_token, &ip, &instance.access_password) {
-                    tracing::error!("Failed to write Traefik route: {}", e);
-                }
-                state.vnc_cache.insert(&instance.access_token, "starting");
-            }
-            Err(e) => tracing::error!("Failed to get container IP for Traefik route: {}", e),
+        if let Err(e) = crate::route_writer::write_route(&remote_type, &instance.access_token, host_port, &instance.access_password) {
+            tracing::error!("Failed to write Traefik route: {}", e);
         }
+        state.vnc_cache.insert(&instance.access_token, "starting");
     }
     instance_repo.update_status(instance.id, "starting").await.map_err(|e| {
         tracing::error!("Failed to update instance status: {}", e);
@@ -702,28 +741,39 @@ async fn start_instance(
     })))
 }
 
-/// Build the `ContainerConfig` and create the container for `instance`. For a
-/// persistent instance this also ensures the Volume declaration still exists
-/// (re-declaring a lost local-bind volume per spec §補充), so a plain named
-/// volume is never silently created by Docker instead.
-async fn create_container_for_start(
+/// All host ports currently allocated to non-deleted instances — the live set
+/// the pure allocator must not hand out again.
+async fn collect_used_host_ports(
+    instance_repo: &WorkspaceInstanceRepository<'_>,
+) -> BTreeSet<u16> {
+    instance_repo
+        .list_host_ports()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| p as u16)
+        .collect()
+}
+
+/// Circular-scan base port for a port-conflict retry: a token-derived offset
+/// into the pool so concurrent launches don't all retry the same lowest port.
+fn host_port_spread_base(start: u16, end: u16, token: &str) -> u16 {
+    let width = end as u32 - start as u32;
+    start + crate::host_port::spread_offset(token, width.max(1) as u16)
+}
+
+/// Build the `ContainerConfig` and create the container for `instance`. The
+/// persistent-volume ensure happens once in `create_container_with_port_retry`
+/// (idempotent) before any create attempt. Returns the raw Docker error string
+/// so callers can distinguish the port-conflict race.
+async fn build_and_create_container(
     state: &AppState,
     template: &WorkspaceTemplate,
     instance: &WorkspaceInstance,
     remote_type: &RemoteType,
     resolved_host_path: Option<&str>,
-) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
-    if let Some(host_path) = resolved_host_path {
-        let volume_name = persistent_volume_name(host_path);
-        state.docker.ensure_persistent_volume(host_path, &volume_name).await.map_err(|e| {
-            tracing::error!("Failed to ensure persistent volume for '{}': {}", instance.name, e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Failed to ensure persistent volume"})),
-            )
-        })?;
-    }
-
+    host_port: u16,
+) -> Result<String, String> {
     let container_config = ContainerConfig {
         image: template.image.clone(),
         cores: template.cores,
@@ -738,14 +788,255 @@ async fn create_container_for_start(
         runtime: Some(resolve_runtime(&template.container_runtime, &state.settings.container_runtime)),
         network_bandwidth_up_mbps: template.network_bandwidth_up_mbps,
         network_bandwidth_down_mbps: template.network_bandwidth_down_mbps,
+        host_port: Some(host_port),
+        host_gateway_ip: Some(state.settings.host_gateway_ip.clone()),
     };
-    state.docker.create_container_from_template(&instance.name, instance.instance_number, &container_config, &instance.access_password, &instance.access_token).await.map_err(|e| {
-        tracing::error!("Failed to create container for '{}': {}", instance.name, e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "Failed to create container"})),
-        )
-    })
+    state.docker.create_container_from_template(
+        &instance.name,
+        instance.instance_number,
+        &container_config,
+        &instance.access_password,
+        &instance.access_token,
+    ).await
+}
+
+/// Create `instance`'s container with a bounded retry on the port-conflict
+/// race (mirrors the launch path): each retry re-allocates the next free port
+/// scanning circularly from a token-derived offset. `to_remove` is an optional
+/// stale container to drop first so its name is free for re-creation.
+async fn create_container_with_port_retry<'a>(
+    state: &AppState,
+    template: &WorkspaceTemplate,
+    instance: &WorkspaceInstance,
+    remote_type: &RemoteType,
+    resolved_host_path: Option<&str>,
+    initial_port: u16,
+    used_ports: &mut BTreeSet<u16>,
+    to_remove: Option<&'a str>,
+) -> Result<(String, u16), (StatusCode, Json<serde_json::Value>)> {
+    let instance_repo = WorkspaceInstanceRepository::new(&state.db);
+    let base_from = host_port_spread_base(
+        state.settings.host_port_start,
+        state.settings.host_port_end,
+        &instance.access_token,
+    );
+    // Re-declare a lost local-bind Volume before creating (per spec §補充), so
+    // Docker never silently creates a plain named volume instead.
+    if let Some(host_path) = resolved_host_path {
+        let volume_name = persistent_volume_name(host_path);
+        state.docker
+            .ensure_persistent_volume(host_path, &volume_name)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to ensure persistent volume for '{}': {}", instance.name, e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Failed to ensure persistent volume"})),
+                )
+            })?;
+    }
+    let mut host_port = initial_port;
+    let mut retries = 0;
+    let mut to_remove = to_remove;
+    while retries < 5 {
+        if let Some(cid) = to_remove {
+            state.docker.remove_container_by_id(cid).await.map_err(|e| {
+                tracing::error!(
+                    "Failed to remove container '{}' during port-conflict recreate: {}",
+                    cid,
+                    e
+                );
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Failed to create container"})),
+                )
+            })?;
+            to_remove = None;
+        }
+        match build_and_create_container(state, template, instance, remote_type, resolved_host_path, host_port).await {
+            Ok(id) => {
+            instance_repo.update_host_port(instance.id, Some(host_port as i32)).await.map_err(|e| {
+                tracing::error!("Failed to commit host port {} for '{}': {}", host_port, instance.name, e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Failed to allocate host port"})),
+                )
+            })?;
+                return Ok((id, host_port));
+            }
+            Err(e) if crate::host_port::is_port_conflict(&e) => {
+                retries += 1;
+                used_ports.insert(host_port);
+                match crate::host_port::allocate_host_port_from(
+                    used_ports,
+                    state.settings.host_port_start,
+                    state.settings.host_port_end,
+                    &state.settings.host_gateway_ip,
+                    base_from.wrapping_add(retries as u16),
+                ) {
+                    Some(next) => host_port = next,
+                    None => {
+                        return Err((
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({"error": "Host port pool exhausted"})),
+                        ));
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to create container for '{}': {}", instance.name, e);
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Failed to create container"})),
+                ));
+            }
+        }
+    }
+    Err((
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({"error": "Failed to create container after repeated port conflicts"})),
+    ))
+}
+
+/// Ensure `instance` has a running container on `host_port`, handling all
+/// start-path shapes: already-running, stopped (plain restart, or recreate on
+/// a fresh port when a concurrent launch stole the freed port), missing
+/// container, and no container. Returns the container id (if any) and the
+/// final committed host port.
+async fn ensure_container_running(
+    state: &AppState,
+    template: &Option<WorkspaceTemplate>,
+    instance: &WorkspaceInstance,
+    remote_type: &RemoteType,
+    resolved_host_path: Option<&str>,
+    instance_repo: &WorkspaceInstanceRepository<'_>,
+    host_port: u16,
+) -> Result<(Option<String>, u16), (StatusCode, Json<serde_json::Value>)> {
+    let mut used_ports: BTreeSet<u16> = collect_used_host_ports(instance_repo).await;
+    used_ports.insert(host_port);
+    let base_from = host_port_spread_base(
+        state.settings.host_port_start,
+        state.settings.host_port_end,
+        &instance.access_token,
+    );
+
+    let mut current_port = host_port;
+    let container_id = match instance.container_id {
+        Some(ref cid) => match state.docker.inspect_container_state(cid).await {
+            Ok(Some(state_str)) if state_str.to_lowercase().contains("running") => {
+                tracing::info!("Container for '{}' already running, updating DB", instance.name);
+                Some(cid.clone())
+            }
+            Ok(Some(_)) => {
+                tracing::info!("Starting stopped container for '{}' (id: {})", instance.name, &cid[..12]);
+                match state.docker.start_container_by_id(cid).await {
+                    Ok(()) => {}
+                    Err(e) if crate::host_port::is_port_conflict(&e.to_string()) => {
+                        // The container's host port was freed on stop and a
+                        // concurrent launch bound it before this restart. Drop
+                        // the stale container and recreate it on a fresh port.
+                        tracing::warn!(
+                            "Port conflict restarting '{}': {}; re-creating on a fresh port",
+                            instance.name,
+                            e
+                        );
+                        let fresh = crate::host_port::allocate_host_port_from(
+                            &used_ports,
+                            state.settings.host_port_start,
+                            state.settings.host_port_end,
+                            &state.settings.host_gateway_ip,
+                            base_from.wrapping_add(1),
+                        )
+                        .ok_or((
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({"error": "Host port pool exhausted"})),
+                        ))?;
+                        let t = template.as_ref().ok_or((
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({"error": "Template not found for instance"})),
+                        ))?;
+                        let (new_id, new_port) = create_container_with_port_retry(
+                            state,
+                            t,
+                            instance,
+                            remote_type,
+                            resolved_host_path,
+                            fresh,
+                            &mut used_ports,
+                            Some(cid),
+                        )
+                        .await?;
+                        current_port = new_port;
+                        return Ok((Some(new_id), current_port));
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to start container for '{}': {}", instance.name, e);
+                        return Err((
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({"error": "Failed to start container"})),
+                        ));
+                    }
+                }
+                // Docker recreates the veth pair on start, destroying any
+                // prior qdisc — re-apply the template's bandwidth limit.
+                if let Some(t) = template.as_ref() {
+                    if t.network_bandwidth_up_mbps > 0 || t.network_bandwidth_down_mbps > 0 {
+                        if let Err(e) = state.docker
+                            .apply_bandwidth_limit(cid, t.network_bandwidth_up_mbps, t.network_bandwidth_down_mbps)
+                            .await
+                        {
+                            tracing::error!(
+                                "Failed to apply bandwidth limit for '{}': {} (container keeps running without limit) — TODO: notify admin",
+                                instance.name, e
+                            );
+                        }
+                    }
+                }
+                Some(cid.clone())
+            }
+            _ => {
+                tracing::warn!("Container for '{}' not found, creating new one", instance.name);
+                let t = template.as_ref().ok_or((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Template not found for instance"})),
+                ))?;
+                let (new_id, new_port) = create_container_with_port_retry(
+                    state,
+                    t,
+                    instance,
+                    remote_type,
+                    resolved_host_path,
+                    current_port,
+                    &mut used_ports,
+                    None,
+                )
+                .await?;
+                current_port = new_port;
+                return Ok((Some(new_id), current_port));
+            }
+        },
+        None => {
+            tracing::info!("No container for instance '{}', creating new one", instance.name);
+            let t = template.as_ref().ok_or((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Template not found for instance"})),
+            ))?;
+            let (new_id, new_port) = create_container_with_port_retry(
+                state,
+                t,
+                instance,
+                remote_type,
+                resolved_host_path,
+                current_port,
+                &mut used_ports,
+                None,
+            )
+            .await?;
+            current_port = new_port;
+            return Ok((Some(new_id), current_port));
+        }
+    };
+    Ok((container_id, current_port))
 }
 
 async fn stop_instance(
