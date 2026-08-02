@@ -4,10 +4,17 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The script is idempotent: skips already-satisfied steps (runsc installed, `runsc` runtime already registered).
-- [ ] Installs `runsc` to `/usr/local/bin/runsc` (host-appropriate architecture) when missing.
-- [ ] Merges a `runsc` runtime entry with `runtimeArgs: ["--net-raw", "--allow-packet-socket-write"]` into the Docker daemon config without overwriting existing keys, backing up the original file.
-- [ ] Reloads or restarts the Docker daemon to apply the change.
-- [ ] Wired into the same init flow as the existing host network provisioning.
+- [x] The script is idempotent: skips already-satisfied steps (runsc installed, `runsc` runtime already registered).
+- [x] Installs `runsc` to `/usr/local/bin/runsc` (host-appropriate architecture) when missing.
+- [x] Merges a `runsc` runtime entry with `runtimeArgs: ["--net-raw", "--allow-packet-socket-write"]` into the Docker daemon config without overwriting existing keys, backing up the original file.
+- [x] Reloads or restarts the Docker daemon to apply the change.
+- [x] Wired into the same init flow as the existing host network provisioning.
+
+## Notes
+
+- New `scripts/docker-runtime-gvisor.sh`: `host_arch()` (uname → gVisor GOARCH dir), `runsc_is_installed()`, `install_runsc()` (downloads official release for host arch), `merged_daemon_json()` (python3 JSON merge, tolerates missing/invalid file), `write_merged_daemon_json()` (backs up to `.bak` only once, skips when already applied), `reload_docker()` (systemctl reload, falls back to restart).
+- Sudo only applied when non-root; override env vars keep the merge testable without sudo/Docker/network (`DOCKER_DAEMON_JSON`, `RUNSC_INSTALL_DIR`, `RUNSC_VERSION`, `SKIP_RUNSC_INSTALL`, `SKIP_DAEMON_RELOAD`, `NO_SUDO`).
+- Wired into `pnpm run init` (package.json) alongside `docker-network.sh`.
+- Test: `scripts/test-docker-runtime-gvisor.sh` (RED → GREEN) — creates file when absent, preserves existing keys + backs up original, idempotent re-run is a byte-level no-op, runsc presence detection. All pass.
