@@ -16,3 +16,6 @@
 [submodule "references_repo/gvisor"]
 	path = references_repo/gvisor
 	url = https://github.com/google/gvisor
+[submodule "references_repo/docker-docs"]
+	path = references_repo/docker-docs
+	url = https://github.com/docker/docs.git

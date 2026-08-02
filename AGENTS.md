@@ -119,6 +119,8 @@ Never suppress a warning. Always fix the root cause.
 
 `references_repo/gvisor/` is a shallow (depth-1) clone of upstream gVisor (`runsc`), sparse-checked-out to only the `g3doc/` docs directory. Planned default container Runtime for instances — wire it up as the default runtime in compose/instance creation.
 
+`references_repo/docker-docs/` is a shallow (depth-1) clone of upstream Docker docs, sparse-checked-out to only the `content/` docs directory (reference for Docker compose/networking/custom-runtime docs).
+
 <!-- CODEGRAPH_START -->
 ## CodeGraph
 
