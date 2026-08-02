@@ -202,8 +202,6 @@ async fn test_launch_docker_create_fails() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Err("Docker create failed".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Err("no ip".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -239,8 +237,6 @@ async fn test_launch_retries_on_port_conflict_with_new_port() {
                     }
                 })
             });
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -280,8 +276,6 @@ async fn test_start_recreates_on_port_conflict() {
                     }
                 })
             });
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
         m.expect_inspect_container_state()
             .returning(|_| Box::pin(async { Ok(Some("exited".to_string())) }));
         m.expect_start_container_by_id()
@@ -318,8 +312,6 @@ async fn test_start_docker_start_fails() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
         m.expect_inspect_container_state()
             .returning(|_| Box::pin(async { Ok(Some("exited".to_string())) }));
         m.expect_start_container_by_id()
@@ -345,8 +337,6 @@ async fn test_start_docker_create_after_inspect_fails() {
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Err("create failed".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
         m.expect_inspect_container_state()
             .returning(|_| Box::pin(async { Err(docker_err("not found")) }));
     }).await;
@@ -370,8 +360,6 @@ async fn test_start_docker_create_new_fails() {
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Err("new create failed".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -389,8 +377,6 @@ async fn test_pause_docker_pause_fails() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
         m.expect_pause_container_by_id()
             .returning(|_| Box::pin(async { Err(docker_err("pause failed")) }));
     }).await;
@@ -410,8 +396,6 @@ async fn test_unpause_docker_unpause_fails() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
         m.expect_unpause_container_by_id()
             .returning(|_| Box::pin(async { Err(docker_err("unpause failed")) }));
     }).await;
@@ -433,8 +417,6 @@ async fn test_launch_success() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("real-container-id-12345678".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.5".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -455,8 +437,6 @@ async fn test_stop_paused_instance_unpauses_first() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
         m.expect_unpause_container_by_id()
             .returning(|_| Box::pin(async { Ok(()) }));
         m.expect_stop_container_by_id()
@@ -479,8 +459,6 @@ async fn test_stop_container_error_still_updates_db() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
         m.expect_stop_container_by_id()
             .returning(|_| Box::pin(async { Err(docker_err("stop failed")) }));
     }).await;
@@ -501,8 +479,6 @@ async fn test_delete_container_remove_fails() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
         m.expect_stop_container_by_id()
             .returning(|_| Box::pin(async { Ok(()) }));
         m.expect_remove_container_by_id()
@@ -523,8 +499,6 @@ async fn test_start_container_already_running() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
         m.expect_inspect_container_state()
             .returning(|_| Box::pin(async { Ok(Some("running".to_string())) }));
     }).await;
@@ -545,8 +519,6 @@ async fn test_start_inspect_fails_recreates_container() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
         m.expect_inspect_container_state()
             .returning(|_| Box::pin(async { Err(docker_err("not found")) }));
     }).await;
@@ -567,8 +539,6 @@ async fn test_pause_success() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
         m.expect_pause_container_by_id()
             .returning(|_| Box::pin(async { Ok(()) }));
     }).await;
@@ -595,8 +565,6 @@ async fn test_unpause_success() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
         m.expect_unpause_container_by_id()
             .returning(|_| Box::pin(async { Ok(()) }));
     }).await;
@@ -621,8 +589,6 @@ async fn test_stop_clears_started_at() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
         m.expect_stop_container_by_id()
             .returning(|_| Box::pin(async { Ok(()) }));
     }).await;
@@ -649,8 +615,6 @@ async fn test_start_stopped_container_success() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
         m.expect_inspect_container_state()
             .returning(|_| Box::pin(async { Ok(Some("exited".to_string())) }));
         m.expect_start_container_by_id()
@@ -835,8 +799,6 @@ async fn test_start_stopped_container_applies_bandwidth() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
         m.expect_inspect_container_state()
             .returning(|_| Box::pin(async { Ok(Some("exited".to_string())) }));
         m.expect_start_container_by_id()
@@ -870,8 +832,6 @@ async fn test_start_recreate_success() {
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("new-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
         m.expect_inspect_container_state()
             .returning(|_| Box::pin(async { Err(docker_err("not found")) }));
     }).await;
@@ -885,27 +845,6 @@ async fn test_start_recreate_success() {
     assert_eq!(body["status"], "starting");
 }
 
-// ── Test 17: launch_instance — get_container_ip fails, still returns running (line 180) ──
-
-#[tokio::test]
-async fn test_launch_get_ip_fails_still_succeeds() {
-    let ctx = MockContext::new(|m| {
-        m.expect_create_container_from_template()
-            .returning(|_, _, _, _, _| Box::pin(async { Ok("real-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Err("no ip available".to_string()) }));
-    }).await;
-
-    let token = ctx.login_admin().await;
-    let (config_id, _) = create_config_and_instance(&ctx, &token, "launch-ip-fail").await;
-
-    let resp = ctx.post_auth("/api/instances", &serde_json::json!({
-        "template_id": config_id
-    }), &token).await;
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["instance"]["status"], "starting");
-}
-
 // ── Test 18: delete_instance — no container, just deletes (lines 263-264) ──
 
 #[tokio::test]
@@ -913,8 +852,6 @@ async fn test_delete_no_container() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -932,8 +869,6 @@ async fn test_stop_no_container() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -952,8 +887,6 @@ async fn test_list_instances() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -972,8 +905,6 @@ async fn test_get_instance() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -993,8 +924,6 @@ async fn test_start_already_running_conflict() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1014,8 +943,6 @@ async fn test_stop_already_stopped_conflict() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1035,8 +962,6 @@ async fn test_pause_not_running_conflict() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1056,8 +981,6 @@ async fn test_unpause_not_paused_conflict() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1077,8 +1000,6 @@ async fn test_start_no_container_id_success() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("brand-new-container".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.9".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1097,8 +1018,6 @@ async fn test_delete_with_container_success() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
         m.expect_stop_container_by_id()
             .returning(|_| Box::pin(async { Ok(()) }));
         m.expect_remove_container_by_id()
@@ -1119,8 +1038,6 @@ async fn test_delete_with_container_already_removed() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
         m.expect_stop_container_by_id()
             .returning(|_| Box::pin(async { Err(docker_404()) }));
         m.expect_remove_container_by_id()
@@ -1141,8 +1058,6 @@ async fn test_pause_no_container_conflict() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1162,8 +1077,6 @@ async fn test_unpause_no_container_conflict() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1182,8 +1095,6 @@ async fn test_launch_instance_forwards_runsc_runtime() {
         m.expect_create_container_from_template()
             .withf(|_, _, config, _, _| config.runtime == Some("runsc".to_string()))
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1207,8 +1118,6 @@ async fn test_launch_instance_defaults_to_settings_runtime() {
         m.expect_create_container_from_template()
             .withf(|_, _, config, _, _| config.runtime == Some("docker".to_string()))
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1232,8 +1141,6 @@ async fn test_heartbeat_sets_last_seen_at() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1258,8 +1165,6 @@ async fn test_heartbeat_requires_auth() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1279,8 +1184,6 @@ async fn test_heartbeat_forbidden_for_non_owner() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let admin_token = ctx.login_admin().await;
@@ -1318,8 +1221,6 @@ async fn test_heartbeat_unknown_instance() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1338,8 +1239,6 @@ async fn test_unpause_sets_last_seen_at() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
         m.expect_unpause_container_by_id()
             .returning(|_| Box::pin(async { Ok(()) }));
     }).await;
@@ -1366,8 +1265,6 @@ async fn test_pause_clears_last_seen_at() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
         m.expect_pause_container_by_id()
             .returning(|_| Box::pin(async { Ok(()) }));
     }).await;
@@ -1394,8 +1291,6 @@ async fn test_stop_clears_last_seen_at() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
         m.expect_stop_container_by_id()
             .returning(|_| Box::pin(async { Ok(()) }));
     }).await;
@@ -1440,8 +1335,6 @@ async fn test_keep_time_deadline_running_instance() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1474,8 +1367,6 @@ async fn test_keep_time_deadline_null_when_not_running() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1494,8 +1385,6 @@ async fn test_keep_time_null_when_template_unconfigured() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1514,8 +1403,6 @@ async fn test_keep_time_seconds_in_instance_json() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1540,8 +1427,6 @@ async fn test_heartbeat_refreshes_keep_time_deadline() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1606,8 +1491,6 @@ async fn test_launch_use_persistent_resolves_server_side() {
             });
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1642,8 +1525,6 @@ async fn test_launch_legacy_mount_persistent_maps_to_use() {
             .returning(|_, _| Box::pin(async { Ok(()) }));
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1673,9 +1554,6 @@ async fn test_launch_second_persistent_same_template_and_owner_conflicts() {
         m.expect_create_container_from_template()
             .times(2)
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .times(2)
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1721,9 +1599,6 @@ async fn test_launch_persistent_conflict_is_per_owner() {
         m.expect_create_container_from_template()
             .times(2)
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .times(2)
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1757,8 +1632,6 @@ async fn test_launch_null_persistent_root_degrades_to_no_persistent() {
             .never();
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1796,8 +1669,6 @@ async fn test_reset_persistent_removes_then_prepares() {
             });
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1845,8 +1716,6 @@ async fn test_reset_persistent_no_remove_for_plain_use() {
             });
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1874,9 +1743,6 @@ async fn test_reset_persistent_with_existing_instance_conflicts() {
         m.expect_create_container_from_template()
             .times(1)
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .times(1)
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -1904,8 +1770,6 @@ async fn test_delete_persistent_instance_preserves_volume() {
             .returning(|_, _| Box::pin(async { Ok(()) }));
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
         m.expect_stop_container_by_id()
             .returning(|_| Box::pin(async { Ok(()) }));
         m.expect_remove_container_by_id()
@@ -2045,8 +1909,6 @@ async fn test_reset_replaces_broken_error_instance() {
             .returning(|_, _| Box::pin(async { Err("first attempt failed".to_string()) }));
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
         let log = log_for_mock.clone();
         m.expect_remove_persistent_volume()
             .returning(move |host_path, volume_name| {
@@ -2121,8 +1983,6 @@ async fn test_start_backfills_resolved_path_and_ensures_volume() {
                 captured.lock().unwrap().push(config.persistent_volume_name.clone());
                 Box::pin(async { Ok("fake-container-id".to_string()) })
             });
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;
@@ -2171,8 +2031,6 @@ async fn test_start_redeclares_missing_volume_on_restart() {
             });
         m.expect_create_container_from_template()
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
-        m.expect_get_container_ip()
-            .returning(|_, _| Box::pin(async { Ok("172.17.0.2".to_string()) }));
     }).await;
 
     let token = ctx.login_admin().await;

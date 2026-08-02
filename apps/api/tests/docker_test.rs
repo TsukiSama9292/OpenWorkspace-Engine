@@ -191,23 +191,6 @@ async fn test_create_container_publishes_host_port() {
 }
 
 #[tokio::test]
-async fn test_get_container_ip() {
-    let client = setup().await;
-    let name = format!("ow_test_docker_ip_{}", std::process::id());
-
-    let id = client.create_container(&name, "busybox:1").await.unwrap();
-
-    match client.get_container_ip(&id, "ow-test").await {
-        Ok(ip) => {
-            assert!(!ip.is_empty());
-            assert!(ip.starts_with("172.") || ip.starts_with("10.") || ip.starts_with("192.168."),
-                "unexpected IP format: {}", ip);
-        }
-        Err(_) => {}
-    }
-}
-
-#[tokio::test]
 async fn test_create_container_from_template() {
     use openworkspace_api::docker::ContainerConfig;
 
@@ -507,17 +490,6 @@ async fn test_create_container_from_template_with_shm_size_and_network_mode() {
 }
 
 #[tokio::test]
-async fn test_get_container_ip_wrong_network() {
-    let client = setup().await;
-    let name = format!("ow_test_docker_ip_wrong_{}", std::process::id());
-
-    let id = client.create_container(&name, "busybox:1").await.unwrap();
-
-    let result = client.get_container_ip(&id, "nonexistent-network-12345").await;
-    assert!(result.is_err());
-}
-
-#[tokio::test]
 async fn test_inspect_container_state_after_remove() {
     let client = setup().await;
     let name = format!("ow_test_docker_inspect_gone_{}", std::process::id());
@@ -712,13 +684,6 @@ async fn test_inspect_container_state_running() {
 
     let state = client.inspect_container_state(&id).await.unwrap();
     assert_eq!(state.as_deref(), Some("running"));
-}
-
-#[tokio::test]
-async fn test_get_container_ip_empty_container() {
-    let client = setup().await;
-    let result = client.get_container_ip("nonexistent_container_id_12345", "ow-test").await;
-    assert!(result.is_err());
 }
 
 #[tokio::test]

@@ -4,8 +4,16 @@
 
 **Blocked by:** 01 — Port-Pool Networking for Instances, 02 — Stop/Start/Delete/Health on the Port-Pool Topology
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] No reference to container-IP lookup remains anywhere in the API (both feature gates compile with zero warnings).
-- [ ] All mock expectations and real-Docker integration tests that asserted IP-based routing/probing are updated or removed.
-- [ ] Launch, start, delete, and health flows run end-to-end with the mock suite green after the deletion.
+- [x] No reference to container-IP lookup remains anywhere in the API (both feature gates compile with zero warnings).
+- [x] All mock expectations and real-Docker integration tests that asserted IP-based routing/probing are updated or removed.
+- [x] Launch, start, delete, and health flows run end-to-end with the mock suite green after the deletion.
+
+## Notes
+
+- Deleted `get_container_ip` trait method + its `network_name` parameter and `DockerClient::get_container_ip` impl (`src/docker.rs`, −25).
+- Removed all 60 `expect_get_container_ip` mock blocks across `instances_mock_test.rs` / `health_worker_test.rs`.
+- Removed the 3 real-Docker `get_container_ip` tests in `docker_test.rs` and the now-obsolete `test_launch_get_ip_fails_still_succeeds`.
+- `network_name()`/`with_network` kept: still used by the real `DockerClient` create path.
+- Verification: `scripts/check.sh` clean (both gates), `scripts/run_tests.sh` = **423 passed, 0 skipped** on two consecutive runs.

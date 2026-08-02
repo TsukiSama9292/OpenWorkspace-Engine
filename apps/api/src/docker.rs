@@ -171,12 +171,6 @@ pub trait DockerService: Send + Sync {
         container_id: &str,
     ) -> Result<(), bollard::errors::Error>;
 
-    async fn get_container_ip(
-        &self,
-        container_id: &str,
-        network_name: &str,
-    ) -> Result<String, String>;
-
     /// Apply per-instance network bandwidth limits (Mbps, `0` = unlimited).
     /// Egress on the container's `eth0` is shaped for upload; egress on the
     /// host-side veth (the container's ingress) is shaped for download.
@@ -771,25 +765,6 @@ impl DockerService for DockerClient {
         container_id: &str,
     ) -> Result<(), bollard::errors::Error> {
         self.docker.unpause_container(container_id).await
-    }
-
-    async fn get_container_ip(
-        &self,
-        container_id: &str,
-        network_name: &str,
-    ) -> Result<String, String> {
-        let info = self
-            .docker
-            .inspect_container(container_id, None)
-            .await
-            .map_err(|e| format!("inspect failed: {}", e))?;
-
-        info.network_settings
-            .and_then(|ns| ns.networks)
-            .and_then(|networks| networks.get(network_name).cloned())
-            .and_then(|net| net.ip_address)
-            .filter(|ip| !ip.is_empty())
-            .ok_or_else(|| format!("no IP on network '{}' for container {}", network_name, &container_id[..12]))
     }
 
     async fn apply_bandwidth_limit(
