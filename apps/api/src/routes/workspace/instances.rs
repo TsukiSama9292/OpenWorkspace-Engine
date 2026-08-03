@@ -14,6 +14,8 @@ use crate::auth::{AuthUser, Role};
 use crate::db::{UserRepository, WorkspaceTemplate, WorkspaceTemplateRepository, WorkspaceInstance, WorkspaceInstanceRepository};
 use crate::docker::{ContainerConfig, RemoteType};
 use crate::persistent_volume::{persistent_volume_name, resolve_persistent_host_path, resolve_persistent_host_path_opt};
+use crate::quota::{QuotaOverride, QuotaScope, QuotaViolation};
+use crate::quota_activation::{ActivationError, ActivationKind, ActivationRequest, LaunchPayload};
 use chrono::{DateTime, Utc};
 
 pub fn routes() -> Router<AppState> {
@@ -116,7 +118,7 @@ async fn can_manage_instance(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-    let owner_role = Role::from_str(&owner.3).ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let owner_role = Role::from_str(&owner.role).ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(auth.role.can_manage_instance(&owner_role))
 }
 
@@ -183,8 +185,8 @@ async fn list_instances(
     for inst in &instances {
         if !owner_usernames.contains_key(&inst.owner_id) {
             if let Ok(Some(user)) = user_repo.find_by_id(inst.owner_id).await {
-                owner_usernames.insert(inst.owner_id, user.1);
-                owner_roles.insert(inst.owner_id, user.3);
+                owner_usernames.insert(inst.owner_id, user.username);
+                owner_roles.insert(inst.owner_id, user.role);
             }
         }
     }
@@ -220,8 +222,8 @@ async fn launch_error_response(
     instance.status = "error".to_string();
     let user_repo = UserRepository::new(&state.db);
     let owner = user_repo.find_by_id(instance.owner_id).await.ok().flatten();
-    let owner_username = owner.as_ref().map(|u| u.1.as_str());
-    let owner_role = owner.as_ref().map(|u| u.3.as_str());
+    let owner_username = owner.as_ref().map(|u| u.username.as_str());
+    let owner_role = owner.as_ref().map(|u| u.role.as_str());
     serde_json::json!({
         "instance": instance_to_json(
             &instance,
@@ -235,6 +237,51 @@ async fn launch_error_response(
             Some(&template.keep_time_action),
         ),
         "docker_error": docker_error,
+    })
+}
+
+/// The structured `409` body for a quota rejection (spec §10): a short
+/// human-readable message plus the machine-readable `quota` object. The
+/// `quota` field is present only on quota rejections.
+fn quota_rejection_json(violation: &QuotaViolation) -> serde_json::Value {
+    use QuotaScope::*;
+    let message = match violation.scope {
+        UserInstance => format!(
+            "Per-user instance limit reached (active: {}, limit: {})",
+            violation.current, violation.limit
+        ),
+        HostInstance => format!(
+            "Host instance limit reached (active: {}, limit: {})",
+            violation.current, violation.limit
+        ),
+        UserCpu => format!(
+            "Per-user CPU quota exceeded (active: {}, requested: {}, limit: {})",
+            violation.current, violation.requested, violation.limit
+        ),
+        UserRam => format!(
+            "Per-user RAM quota exceeded (active: {}, requested: {}, limit: {})",
+            violation.current, violation.requested, violation.limit
+        ),
+        HostDedicatedCpu => format!(
+            "Host dedicated CPU pool exhausted (active: {}, requested: {}, limit: {})",
+            violation.current, violation.requested, violation.limit
+        ),
+        HostDedicatedRam => format!(
+            "Host dedicated RAM pool exhausted (active: {}, requested: {}, limit: {})",
+            violation.current, violation.requested, violation.limit
+        ),
+        HostSharedCpu => format!(
+            "Host shared CPU fuse exceeded (active: {}, requested: {}, limit: {})",
+            violation.current, violation.requested, violation.limit
+        ),
+        HostSharedRam => format!(
+            "Host shared RAM fuse exceeded (active: {}, requested: {}, limit: {})",
+            violation.current, violation.requested, violation.limit
+        ),
+    };
+    serde_json::json!({
+        "error": message,
+        "quota": violation,
     })
 }
 
@@ -297,60 +344,63 @@ async fn launch_instance(
         None
     };
 
-    let mut replace_broken = false;
-    if resolved_path.is_some() {
-        let existing = instance_repo
-            .find_persistent_by_template_and_owner(input.template_id, auth.user_id)
-            .await
-            .map_err(|e| {
-                tracing::error!(
-                    "Failed to check for existing persistent instance (template={}, owner={}): {}",
-                    input.template_id,
-                    auth.user_id,
-                    e
-                );
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": "Failed to launch instance"})),
-                )
-            })?;
-        match existing {
-            Some(existing) if existing.status != "error" => {
-                return Err((
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({
-                        "error": "An instance with persistent storage already exists for this template and user"
-                    })),
-                ));
-            }
-            Some(existing) => {
-                // A prior launch failed (status `error`) and never became a real
-                // tenant, so it can be replaced. Drop its stale record to keep
-                // the one-persistent-instance invariant, then wipe + re-prepare.
-                tracing::warn!(
-                    "Replacing broken persistent instance {} (template={}, owner={})",
-                    existing.id,
-                    input.template_id,
-                    auth.user_id
-                );
-                instance_repo.delete(existing.id).await.ok();
-                replace_broken = true;
-            }
-            None => {}
-        }
-    }
-
+    // Run the quota pre-flight and reserve the instance atomically (spec
+    // Decision 1/3): the persistent-uniqueness rule and the reservation commit
+    // in one transaction serialized by the user-row lock, so a rejection
+    // leaves no DB row behind. The auto-name is derived together with
+    // `instance_number` inside the helper.
     let mount = resolved_path.is_some();
-    let instance = instance_repo
-        .launch(input.template_id, auth.user_id, &template.name, mount, resolved_path.as_deref())
+    let user = user_repo
+        .find_by_id(auth.user_id)
         .await
         .map_err(|e| {
-            tracing::error!("Failed to launch instance (template={}, owner={}): {}", input.template_id, auth.user_id, e);
+            tracing::error!("Failed to find user {}: {}", auth.user_id, e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "Failed to launch instance"})),
             )
-        })?;
+        })?
+        .ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Failed to launch instance"})),
+        ))?;
+    let activation_request = ActivationRequest {
+        kind: ActivationKind::Launch(LaunchPayload {
+            mount_persistent: mount,
+            resolved_volume_host_path: resolved_path.clone(),
+        }),
+        template: &template,
+        user_id: auth.user_id,
+        role: auth.role.clone(),
+        user_overrides: QuotaOverride {
+            instance_limit: user.instance_limit,
+            max_cpu_cores: user.max_cpu_cores,
+            max_ram_bytes: user.max_ram_bytes,
+        },
+    };
+    let reservation = match crate::quota_activation::activate(&state.db, &activation_request).await {
+        Ok(reservation) => reservation,
+        Err(ActivationError::Quota(violation)) => {
+            return Err((StatusCode::CONFLICT, Json(quota_rejection_json(&violation))));
+        }
+        Err(ActivationError::Conflict(message)) => {
+            return Err((StatusCode::CONFLICT, Json(serde_json::json!({ "error": message }))));
+        }
+        Err(ActivationError::Db(e)) => {
+            tracing::error!(
+                "Failed to activate launch (template={}, owner={}): {}",
+                input.template_id,
+                auth.user_id,
+                e
+            );
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Failed to launch instance"})),
+            ));
+        }
+    };
+    let instance = reservation.instance;
+    let replace_broken = reservation.replaced_broken;
 
     // Prepare the persistent volume only after the DB record exists, so a
     // helper/volume failure leaves a visible `error` Instance (DB record kept,
@@ -516,8 +566,8 @@ async fn launch_instance(
             inst.container_id = Some(container_id);
             inst.status = "starting".to_string();
             let owner = user_repo.find_by_id(inst.owner_id).await.ok().flatten();
-            let owner_username = owner.as_ref().map(|u| u.1.as_str());
-            let owner_role = owner.as_ref().map(|u| u.3.as_str());
+            let owner_username = owner.as_ref().map(|u| u.username.as_str());
+            let owner_role = owner.as_ref().map(|u| u.role.as_str());
             Ok(Json(serde_json::json!({ "instance": instance_to_json(&inst, Some(&template.name), Some(&template.remote_type), owner_username, owner_role, template.max_run_seconds, Some(&template.timeout_action), template.keep_time_seconds, Some(&template.keep_time_action)) })))
         }
         Err(e) => {
@@ -561,8 +611,8 @@ async fn get_instance(
     let keep_time_action = template.as_ref().map(|t| t.keep_time_action.clone());
 
     let owner = user_repo.find_by_id(instance.owner_id).await.ok().flatten();
-    let owner_username = owner.as_ref().map(|u| u.1.as_str());
-    let owner_role = owner.as_ref().map(|u| u.3.as_str());
+    let owner_username = owner.as_ref().map(|u| u.username.as_str());
+    let owner_role = owner.as_ref().map(|u| u.role.as_str());
 
     Ok(Json(serde_json::json!({ "instance": instance_to_json(&instance, template_name.as_deref(), remote_type.as_deref(), owner_username, owner_role, max_run_seconds, timeout_action.as_deref(), keep_time_seconds, keep_time_action.as_deref()) })))
 }
@@ -633,6 +683,7 @@ async fn start_instance(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let instance_repo = WorkspaceInstanceRepository::new(&state.db);
     let template_repo = WorkspaceTemplateRepository::new(&state.db);
+    let user_repo = UserRepository::new(&state.db);
 
     let mut instance = instance_repo
         .find_by_id(id)
@@ -672,7 +723,74 @@ async fn start_instance(
         ));
     }
 
-    let template = template_repo.find_by_id(instance.template_id).await.ok().flatten();
+    // Re-run the quota pre-flight: a restart re-consumes the quota the
+    // instance released while `stopped` (spec Decision 1), so it is gated
+    // exactly like a launch. A rejection returns a structured `409` and leaves
+    // the instance `stopped`.
+    let template = template_repo
+        .find_by_id(instance.template_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to find template {}: {}", instance.template_id, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Internal error"})),
+            )
+        })?
+        .ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Template not found for instance"})),
+        ))?;
+    let owner = user_repo
+        .find_by_id(instance.owner_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to find owner {}: {}", instance.owner_id, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Internal error"})),
+            )
+        })?
+        .ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Internal error"})),
+        ))?;
+    let owner_role = crate::auth::Role::from_str(&owner.role).ok_or((
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({"error": "Internal error"})),
+    ))?;
+    let activation_request = ActivationRequest {
+        kind: ActivationKind::Restart { instance_id: instance.id },
+        template: &template,
+        // The restarted instance consumes quota from its owner, not from the
+        // acting user (an Admin/Manager may be managing someone else's).
+        user_id: instance.owner_id,
+        role: owner_role,
+        user_overrides: QuotaOverride {
+            instance_limit: owner.instance_limit,
+            max_cpu_cores: owner.max_cpu_cores,
+            max_ram_bytes: owner.max_ram_bytes,
+        },
+    };
+    if let Err(e) = crate::quota_activation::activate(&state.db, &activation_request).await {
+        return match e {
+            ActivationError::Quota(violation) => {
+                Err((StatusCode::CONFLICT, Json(quota_rejection_json(&violation))))
+            }
+            ActivationError::Conflict(message) => {
+                Err((StatusCode::CONFLICT, Json(serde_json::json!({ "error": message }))))
+            }
+            ActivationError::Db(e) => {
+                tracing::error!("Failed to activate restart (instance={}): {}", id, e);
+                Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Internal error"})),
+                ))
+            }
+        };
+    }
+
+    let template = Some(template);
     let remote_type: RemoteType = template.as_ref().map(|t| t.remote_type.parse().ok()).flatten().unwrap_or(RemoteType::KasmVnc);
 
     // Migration backfill: a legacy `mount_persistent = true` instance may have
@@ -723,16 +841,18 @@ async fn start_instance(
                 &state.settings.host_gateway_ip,
             ) {
                 Some(p) => {
-                    instance_repo.update_host_port(instance.id, Some(p as i32)).await.map_err(|e| {
+                    if let Err(e) = instance_repo.update_host_port(instance.id, Some(p as i32)).await {
                         tracing::error!("Failed to commit host port {} for '{}': {}", p, instance.name, e);
-                        (
+                        instance_repo.update_status(instance.id, "stopped").await.ok();
+                        return Err((
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(serde_json::json!({"error": "Failed to allocate host port"})),
-                        )
-                    })?;
+                        ));
+                    }
                     p
                 }
                 None => {
+                    instance_repo.update_status(instance.id, "stopped").await.ok();
                     return Err((
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(serde_json::json!({"error": "Host port pool exhausted"})),
@@ -742,7 +862,7 @@ async fn start_instance(
         }
     };
 
-    let (new_container_id, host_port) = ensure_container_running(
+    let (new_container_id, host_port) = match ensure_container_running(
         &state,
         &template,
         &instance,
@@ -751,7 +871,16 @@ async fn start_instance(
         &instance_repo,
         host_port,
     )
-    .await?;
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            // The quota gate reserved the instance as `starting`; an infra
+            // failure must roll it back to `stopped` so the user can retry.
+            instance_repo.update_status(instance.id, "stopped").await.ok();
+            return Err(e);
+        }
+    };
 
     if let Some(ref cid) = new_container_id {
         instance_repo.update_container_id(instance.id, cid).await.ok();

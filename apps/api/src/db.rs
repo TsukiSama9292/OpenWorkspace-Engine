@@ -2,6 +2,10 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, In
 use sea_orm::sea_query::{Expr, OnConflict};
 use uuid::Uuid;
 
+/// Instance statuses that count toward quota accounting — the Active Set
+/// (spec Decision 2). Anything else (`stopped`, `error`) is inactive.
+pub const ACTIVE_STATUSES: [&str; 3] = ["running", "starting", "paused"];
+
 fn generate_access_token() -> String {
     Uuid::new_v4().as_simple().to_string()
 }
@@ -50,6 +54,9 @@ pub mod user {
         pub username: String,
         pub password_hash: String,
         pub role: String,
+        pub instance_limit: Option<i32>,
+        pub max_cpu_cores: Option<i32>,
+        pub max_ram_bytes: Option<i64>,
         pub created_at: DateTimeUtc,
         pub updated_at: DateTimeUtc,
     }
@@ -99,6 +106,7 @@ pub mod workspace_template {
         pub keep_time_seconds: Option<i64>,
         pub keep_time_action: String,
         pub docker_in_instance: bool,
+        pub allocation_mode: String,
         pub created_at: DateTimeUtc,
         pub updated_at: DateTimeUtc,
     }
@@ -251,6 +259,7 @@ pub struct WorkspaceTemplate {
     pub keep_time_seconds: Option<i64>,
     pub keep_time_action: String,
     pub docker_in_instance: bool,
+    pub allocation_mode: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -280,6 +289,7 @@ impl From<workspace_template::Model> for WorkspaceTemplate {
             keep_time_seconds: m.keep_time_seconds,
             keep_time_action: m.keep_time_action,
             docker_in_instance: m.docker_in_instance,
+            allocation_mode: m.allocation_mode,
             created_at: m.created_at,
             updated_at: m.updated_at,
         }
@@ -331,6 +341,23 @@ impl From<workspace_instance::Model> for WorkspaceInstance {
 
 // ── User Repository ───────────────────────────────────────────
 
+/// A user row as returned by the repository read queries: the identity and
+/// role columns plus the per-user quota override columns. This replaces the
+/// former positional tuples, whose element order and count differed per query
+/// (`find_by_username` omitted `created_at`, `list_all` omitted
+/// `password_hash`).
+#[derive(Debug, Clone)]
+pub struct UserRecord {
+    pub id: Uuid,
+    pub username: String,
+    pub password_hash: String,
+    pub role: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub instance_limit: Option<i32>,
+    pub max_cpu_cores: Option<i32>,
+    pub max_ram_bytes: Option<i64>,
+}
+
 pub struct UserRepository<'a> {
     pub db: &'a DatabaseConnection,
 }
@@ -357,21 +384,35 @@ impl<'a> UserRepository<'a> {
     pub async fn find_by_username(
         &self,
         username: &str,
-    ) -> Result<Option<(Uuid, String, String, String)>, sea_orm::DbErr> {
+    ) -> Result<Option<UserRecord>, sea_orm::DbErr> {
         let model = user::Entity::find()
             .filter(user::Column::Username.eq(username))
             .one(self.db)
             .await?;
-        Ok(model.map(|m| (m.id, m.username, m.password_hash, m.role)))
+        Ok(model.map(|m| UserRecord {
+            id: m.id,
+            username: m.username,
+            password_hash: m.password_hash,
+            role: m.role,
+            created_at: m.created_at,
+            instance_limit: m.instance_limit,
+            max_cpu_cores: m.max_cpu_cores,
+            max_ram_bytes: m.max_ram_bytes,
+        }))
     }
 
-    pub async fn find_by_id(
-        &self,
-        id: Uuid,
-    ) -> Result<Option<(Uuid, String, String, String, chrono::DateTime<chrono::Utc>)>, sea_orm::DbErr>
-    {
+    pub async fn find_by_id(&self, id: Uuid) -> Result<Option<UserRecord>, sea_orm::DbErr> {
         let model = user::Entity::find_by_id(id).one(self.db).await?;
-        Ok(model.map(|m| (m.id, m.username, m.password_hash, m.role, m.created_at)))
+        Ok(model.map(|m| UserRecord {
+            id: m.id,
+            username: m.username,
+            password_hash: m.password_hash,
+            role: m.role,
+            created_at: m.created_at,
+            instance_limit: m.instance_limit,
+            max_cpu_cores: m.max_cpu_cores,
+            max_ram_bytes: m.max_ram_bytes,
+        }))
     }
 
     pub async fn create(
@@ -392,16 +433,23 @@ impl<'a> UserRepository<'a> {
         Ok(id)
     }
 
-    pub async fn list_all(
-        &self,
-    ) -> Result<Vec<(Uuid, String, String, chrono::DateTime<chrono::Utc>)>, sea_orm::DbErr> {
+    pub async fn list_all(&self) -> Result<Vec<UserRecord>, sea_orm::DbErr> {
         let models = user::Entity::find()
             .order_by_asc(user::Column::CreatedAt)
             .all(self.db)
             .await?;
         Ok(models
             .into_iter()
-            .map(|m| (m.id, m.username, m.role, m.created_at))
+            .map(|m| UserRecord {
+                id: m.id,
+                username: m.username,
+                password_hash: m.password_hash,
+                role: m.role,
+                created_at: m.created_at,
+                instance_limit: m.instance_limit,
+                max_cpu_cores: m.max_cpu_cores,
+                max_ram_bytes: m.max_ram_bytes,
+            })
             .collect())
     }
 
@@ -416,6 +464,9 @@ impl<'a> UserRepository<'a> {
         username: Option<&str>,
         password_hash: Option<&str>,
         role: Option<&str>,
+        instance_limit: Option<Option<i32>>,
+        max_cpu_cores: Option<Option<i32>>,
+        max_ram_bytes: Option<Option<i64>>,
     ) -> Result<bool, sea_orm::DbErr> {
         let existing = user::Entity::find_by_id(id)
             .one(self.db)
@@ -432,6 +483,18 @@ impl<'a> UserRepository<'a> {
         }
         if let Some(r) = role {
             model.role = Set(r.to_string());
+        }
+        // The outer Option means "field present in the request"; the inner
+        // Option is the column value, where None writes NULL (restore the
+        // role default) and Some writes the per-user override.
+        if let Some(v) = instance_limit {
+            model.instance_limit = Set(v);
+        }
+        if let Some(v) = max_cpu_cores {
+            model.max_cpu_cores = Set(v);
+        }
+        if let Some(v) = max_ram_bytes {
+            model.max_ram_bytes = Set(v);
         }
 
         model.update(self.db).await?;
@@ -452,6 +515,60 @@ impl<'a> WorkspaceTemplateRepository<'a> {
 
     pub async fn create(
         &self,
+        name: &str,
+        description: Option<&str>,
+        owner_id: Uuid,
+        image: &str,
+        cores: i32,
+        memory: i64,
+        gpu_count: i32,
+        docker_registry: Option<&str>,
+        remote_type: &str,
+        container_runtime: &str,
+        run_config: &serde_json::Value,
+        exec_config: &serde_json::Value,
+        volume_mappings: &serde_json::Value,
+        persistent_storage_path: Option<&str>,
+        max_run_seconds: Option<i64>,
+        timeout_action: &str,
+        network_bandwidth_up_mbps: i32,
+        network_bandwidth_down_mbps: i32,
+        keep_time_seconds: Option<i64>,
+        keep_time_action: &str,
+        docker_in_instance: bool,
+    ) -> Result<WorkspaceTemplate, sea_orm::DbErr> {
+        self.create_with_allocation_mode(
+            "shared",
+            name,
+            description,
+            owner_id,
+            image,
+            cores,
+            memory,
+            gpu_count,
+            docker_registry,
+            remote_type,
+            container_runtime,
+            run_config,
+            exec_config,
+            volume_mappings,
+            persistent_storage_path,
+            max_run_seconds,
+            timeout_action,
+            network_bandwidth_up_mbps,
+            network_bandwidth_down_mbps,
+            keep_time_seconds,
+            keep_time_action,
+            docker_in_instance,
+        )
+        .await
+    }
+
+    /// Create a template with an explicit `allocation_mode`. The plain `create`
+    /// delegates here with `"shared"` so existing callers keep their behavior.
+    pub async fn create_with_allocation_mode(
+        &self,
+        allocation_mode: &str,
         name: &str,
         description: Option<&str>,
         owner_id: Uuid,
@@ -498,6 +615,7 @@ impl<'a> WorkspaceTemplateRepository<'a> {
             keep_time_seconds: Set(keep_time_seconds),
             keep_time_action: Set(keep_time_action.to_string()),
             docker_in_instance: Set(docker_in_instance),
+            allocation_mode: Set(allocation_mode.to_string()),
             ..Default::default()
         };
         let inserted = model.insert(self.db).await?;
@@ -534,9 +652,77 @@ impl<'a> WorkspaceTemplateRepository<'a> {
         Ok(count as i64)
     }
 
+    /// Whether the template has any active instance (running, starting, or
+    /// paused). Changing a template's `allocation_mode` while active instances
+    /// exist is rejected by the routes, keeping per-mode accounting consistent.
+    pub async fn has_active_instances(&self, template_id: Uuid) -> Result<bool, sea_orm::DbErr> {
+        let count = workspace_instance::Entity::find()
+            .filter(workspace_instance::Column::TemplateId.eq(template_id))
+            .filter(workspace_instance::Column::Status.is_in(ACTIVE_STATUSES))
+            .count(self.db)
+            .await?;
+        Ok(count > 0)
+    }
+
     pub async fn update(
         &self,
         id: Uuid,
+        name: &str,
+        description: Option<&str>,
+        image: &str,
+        cores: i32,
+        memory: i64,
+        gpu_count: i32,
+        docker_registry: Option<&str>,
+        remote_type: &str,
+        container_runtime: &str,
+        run_config: &serde_json::Value,
+        exec_config: &serde_json::Value,
+        volume_mappings: &serde_json::Value,
+        persistent_storage_path: Option<&str>,
+        max_run_seconds: Option<i64>,
+        timeout_action: &str,
+        network_bandwidth_up_mbps: i32,
+        network_bandwidth_down_mbps: i32,
+        keep_time_seconds: Option<i64>,
+        keep_time_action: &str,
+        docker_in_instance: bool,
+    ) -> Result<bool, sea_orm::DbErr> {
+        self.update_with_allocation_mode(
+            id,
+            None,
+            name,
+            description,
+            image,
+            cores,
+            memory,
+            gpu_count,
+            docker_registry,
+            remote_type,
+            container_runtime,
+            run_config,
+            exec_config,
+            volume_mappings,
+            persistent_storage_path,
+            max_run_seconds,
+            timeout_action,
+            network_bandwidth_up_mbps,
+            network_bandwidth_down_mbps,
+            keep_time_seconds,
+            keep_time_action,
+            docker_in_instance,
+        )
+        .await
+    }
+
+    /// Update a template, optionally changing its `allocation_mode`. When
+    /// `allocation_mode` is `None` the column is left untouched; `Some(mode)`
+    /// overwrites it. The plain `update` delegates here with `None` so existing
+    /// callers keep their behavior and never silently reset the mode.
+    pub async fn update_with_allocation_mode(
+        &self,
+        id: Uuid,
+        allocation_mode: Option<&str>,
         name: &str,
         description: Option<&str>,
         image: &str,
@@ -580,6 +766,10 @@ impl<'a> WorkspaceTemplateRepository<'a> {
             keep_time_seconds: Set(keep_time_seconds),
             keep_time_action: Set(keep_time_action.to_string()),
             docker_in_instance: Set(docker_in_instance),
+            allocation_mode: match allocation_mode {
+                Some(mode) => Set(mode.to_string()),
+                None => sea_orm::NotSet,
+            },
             ..Default::default()
         })
         .filter(workspace_template::Column::Id.eq(id))

@@ -35,6 +35,7 @@ const template: Template = {
   network_bandwidth_up_mbps: 100,
   network_bandwidth_down_mbps: 50,
   docker_in_instance: true,
+  allocation_mode: 'shared',
   run_config: {
     hostname: 'devbox',
     dns: ['8.8.8.8', '1.1.1.1'],
@@ -70,6 +71,7 @@ const populatedState: TemplateFormState = {
   bandwidthUpMbps: 50,
   bandwidthDownMbps: 25,
   dockerInInstance: true,
+  allocationMode: 'shared',
   envVars: [{ key: 'FOO', value: 'bar' }],
   execCommand: 'bash',
   volumeMappings: [{ host: '/h', container: '/c' }],
@@ -97,6 +99,7 @@ describe('template-form', () => {
       expect(state.keepTimeSeconds).toBeNull();
       expect(state.keepTimeAction).toBe('pause');
       expect(state.dockerInInstance).toBe(false);
+      expect(state.allocationMode).toBe('shared');
       expect(state.envVars).toEqual([{ key: '', value: '' }]);
       expect(state.volumeMappings).toEqual([{ host: '', container: '' }]);
     });
@@ -138,7 +141,8 @@ describe('template-form', () => {
           keep_time_action: 'stop',
           network_bandwidth_up_mbps: 50,
           network_bandwidth_down_mbps: 25,
-          docker_in_instance: true
+          docker_in_instance: true,
+          allocation_mode: 'shared'
         })
       }));
     });
@@ -170,7 +174,8 @@ describe('template-form', () => {
           keep_time_action: 'pause',
           network_bandwidth_up_mbps: 0,
           network_bandwidth_down_mbps: 0,
-          docker_in_instance: false
+          docker_in_instance: false,
+          allocation_mode: 'shared'
         })
       }));
     });
@@ -240,6 +245,16 @@ describe('template-form', () => {
       expect(body.keep_time_seconds).toBe(600);
       expect(body.keep_time_action).toBe('stop');
     });
+
+    it('sends the dedicated allocation mode when selected', async () => {
+      const mockFetch = vi.fn().mockResolvedValue(jsonResponse({ template: { id: 'tpl-new' } }));
+      vi.stubGlobal('fetch', mockFetch);
+
+      await submitTemplate({ ...createInitialFormState(), name: 'X', allocationMode: 'dedicated' });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+      expect(body.allocation_mode).toBe('dedicated');
+    });
   });
 
   describe('formStateFromTemplate', () => {
@@ -267,6 +282,7 @@ describe('template-form', () => {
         bandwidthUpMbps: 100,
         bandwidthDownMbps: 50,
         dockerInInstance: true,
+        allocationMode: 'shared',
         envVars: [
           { key: 'FOO', value: 'bar' },
           { key: 'EMPTY', value: '' }
@@ -319,6 +335,17 @@ describe('template-form', () => {
       const state = formStateFromTemplate({ ...template, keep_time_seconds: null, keep_time_action: 'pause' });
       expect(state.keepTimeSeconds).toBeNull();
       expect(state.keepTimeAction).toBe('pause');
+    });
+
+    it('maps a dedicated allocation mode into editable form state', () => {
+      const state = formStateFromTemplate({ ...template, allocation_mode: 'dedicated' });
+      expect(state.allocationMode).toBe('dedicated');
+    });
+
+    it('defaults a missing allocation mode to shared', () => {
+      const { allocation_mode, ...rest } = template;
+      const state = formStateFromTemplate(rest as Template);
+      expect(state.allocationMode).toBe('shared');
     });
   });
 
@@ -389,7 +416,8 @@ describe('template-form', () => {
           keep_time_action: 'stop',
           network_bandwidth_up_mbps: 50,
           network_bandwidth_down_mbps: 25,
-          docker_in_instance: true
+          docker_in_instance: true,
+          allocation_mode: 'shared'
         })
       }));
     });

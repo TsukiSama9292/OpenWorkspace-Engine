@@ -19,7 +19,7 @@ async fn create_db_instance(ctx: &TestContext, template_name: &str, status: &str
         .await
         .unwrap()
         .expect("admin user missing")
-        .0;
+        .id;
     let repo = openworkspace_api::db::WorkspaceInstanceRepository::new(&db);
     let instance = repo
         .launch(

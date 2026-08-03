@@ -47,6 +47,7 @@ fn template_to_json(template: &WorkspaceTemplate, instance_count: i64) -> serde_
         "network_bandwidth_up_mbps": template.network_bandwidth_up_mbps,
         "network_bandwidth_down_mbps": template.network_bandwidth_down_mbps,
         "docker_in_instance": template.docker_in_instance,
+        "allocation_mode": template.allocation_mode,
         "instance_count": instance_count,
         "created_at": template.created_at,
         "updated_at": template.updated_at,
@@ -91,6 +92,8 @@ struct CreateTemplateRequest {
     network_bandwidth_down_mbps: i32,
     #[serde(default)]
     docker_in_instance: bool,
+    #[serde(default = "default_allocation_mode")]
+    allocation_mode: String,
 }
 
 #[derive(Deserialize)]
@@ -124,6 +127,8 @@ struct UpdateTemplateRequest {
     network_bandwidth_down_mbps: i32,
     #[serde(default)]
     docker_in_instance: bool,
+    #[serde(default)]
+    allocation_mode: Option<String>,
 }
 
 fn default_image() -> String {
@@ -147,6 +152,22 @@ fn default_timeout_action() -> String {
 
 fn default_keep_time_action() -> String {
     "pause".to_string()
+}
+
+fn default_allocation_mode() -> String {
+    "shared".to_string()
+}
+
+fn validate_allocation_mode(
+    allocation_mode: &str,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if !matches!(allocation_mode, "shared" | "dedicated") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "allocation_mode must be one of: shared, dedicated"})),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_auto_sleep(
@@ -262,9 +283,18 @@ async fn create_template(
     validate_auto_sleep(input.max_run_seconds, &input.timeout_action)?;
     validate_keep_time(input.keep_time_seconds, &input.keep_time_action)?;
     validate_bandwidth(input.network_bandwidth_up_mbps, input.network_bandwidth_down_mbps)?;
+    validate_allocation_mode(&input.allocation_mode)?;
+
+    if input.allocation_mode == "dedicated" && !auth.is_admin() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Only admin can create dedicated templates"})),
+        ));
+    }
 
     let template = repo
-        .create(
+        .create_with_allocation_mode(
+            &input.allocation_mode,
             &input.name,
             input.description.as_deref(),
             auth.user_id,
@@ -329,29 +359,66 @@ async fn update_template(
     Path(id): Path<Uuid>,
     auth: AuthUser,
     Json(input): Json<UpdateTemplateRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let repo = WorkspaceTemplateRepository::new(&state.db);
 
     let existing = repo
         .find_by_id(id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(|_| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Failed to find template"})),
+        ))?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Template not found"})),
+        ))?;
 
     if !auth.role.can_manage_templates() && existing.owner_id != auth.user_id {
-        return Err(StatusCode::FORBIDDEN);
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Forbidden"})),
+        ));
     }
 
-    validate_auto_sleep(input.max_run_seconds, &input.timeout_action)
-        .map_err(|(status, _)| status)?;
-    validate_keep_time(input.keep_time_seconds, &input.keep_time_action)
-        .map_err(|(status, _)| status)?;
-    validate_bandwidth(input.network_bandwidth_up_mbps, input.network_bandwidth_down_mbps)
-        .map_err(|(status, _)| status)?;
+    validate_auto_sleep(input.max_run_seconds, &input.timeout_action)?;
+    validate_keep_time(input.keep_time_seconds, &input.keep_time_action)?;
+    validate_bandwidth(input.network_bandwidth_up_mbps, input.network_bandwidth_down_mbps)?;
+
+    if let Some(mode) = &input.allocation_mode {
+        validate_allocation_mode(mode)?;
+
+        if mode == "dedicated" && !auth.is_admin() {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": "Only admin can set a template to dedicated mode"})),
+            ));
+        }
+
+        if *mode != existing.allocation_mode
+            && repo
+                .has_active_instances(id)
+                .await
+                .map_err(|_| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({"error": "Failed to check active instances"})),
+                    )
+                })?
+        {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "Cannot change allocation_mode while the template has active instances"
+                })),
+            ));
+        }
+    }
 
     let updated = repo
-        .update(
+        .update_with_allocation_mode(
             id,
+            input.allocation_mode.as_deref(),
             &input.name,
             input.description.as_deref(),
             &input.image,
@@ -374,17 +441,33 @@ async fn update_template(
             input.docker_in_instance,
         )
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Failed to update template"})),
+            )
+        })?;
 
     if !updated {
-        return Err(StatusCode::NOT_FOUND);
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Template not found"})),
+        ));
     }
 
     let template = repo
         .find_by_id(id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Failed to find template"})),
+            )
+        })?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Template not found"})),
+        ))?;
 
     let count = repo.count_instances(id).await.unwrap_or(0);
 

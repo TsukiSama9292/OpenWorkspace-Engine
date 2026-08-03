@@ -67,7 +67,7 @@ impl WorkerTestContext {
             .await
             .unwrap()
             .unwrap();
-        let admin_id = admin.0;
+        let admin_id = admin.id;
 
         WorkerTestContext { db, admin_id, db_name }
     }

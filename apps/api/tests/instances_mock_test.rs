@@ -179,6 +179,16 @@ impl MockContext {
             .await
             .unwrap()
     }
+
+    async fn put_auth(&self, path: &str, body: &serde_json::Value, token: &str) -> reqwest::Response {
+        self.client
+            .put(format!("{}{}", self.base_url, path))
+            .header("Cookie", format!("ow_token={}", token))
+            .json(body)
+            .send()
+            .await
+            .unwrap()
+    }
 }
 
 async fn create_config_and_instance(ctx: &MockContext, token: &str, name: &str) -> (String, String) {
@@ -1020,7 +1030,7 @@ async fn test_start_backfills_host_port_before_create() {
 
     let admin = openworkspace_api::db::UserRepository::new(&ctx.db)
         .find_by_username("admin").await.unwrap().unwrap();
-    let admin_id = admin.0;
+    let admin_id = admin.id;
     let repo = WorkspaceInstanceRepository::new(&ctx.db);
     let instance = repo.launch(template_uuid, admin_id, "legacy-instance", false, None).await.unwrap();
     assert!(instance.host_port.is_none(), "legacy row has no host_port");
@@ -1789,7 +1799,7 @@ async fn admin_user_id(ctx: &MockContext) -> String {
         .await
         .unwrap()
         .expect("admin user must exist");
-    admin.0.to_string()
+    admin.id.to_string()
 }
 
 #[tokio::test]
@@ -2393,4 +2403,267 @@ async fn test_start_ensure_volume_failure_returns_500() {
     assert_eq!(resp.status(), 500);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["error"], "Failed to ensure persistent volume");
+}
+
+// ── Ticket 06: quota pre-flight gating of launch & start ─────────
+
+/// Create a `user`-role account with a per-user instance-limit override, via
+/// the admin API. Returns the new user's id.
+async fn create_quota_user(
+    ctx: &MockContext,
+    admin_token: &str,
+    username: &str,
+    instance_limit: i32,
+) -> String {
+    let create = ctx.post_auth("/api/users", &serde_json::json!({
+        "username": username,
+        "password": "password123",
+        "role": "user",
+    }), admin_token).await;
+    assert_eq!(create.status(), 200, "failed to create quota user");
+    let user_id = create.json::<serde_json::Value>().await.unwrap()["user"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let set = ctx.put_auth(&format!("/api/users/{}", user_id), &serde_json::json!({
+        "instance_limit": instance_limit,
+    }), admin_token).await;
+    assert_eq!(set.status(), 200, "failed to set quota override");
+    user_id
+}
+
+/// Create a template only (no launch), returning its id.
+async fn create_template_only(ctx: &MockContext, token: &str, name: &str) -> String {
+    let resp = ctx.post_auth("/api/templates", &serde_json::json!({
+        "name": name, "image": "busybox:1"
+    }), token).await;
+    resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn test_launch_rejected_by_quota_returns_409_and_leaves_no_row() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .times(1)
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    }).await;
+
+    let admin_token = ctx.login_admin().await;
+    let template_id = create_template_only(&ctx, &admin_token, "quota-launch").await;
+    create_quota_user(&ctx, &admin_token, "quota_user", 1).await;
+    let user_token = ctx.login_user("quota_user", "password123").await;
+
+    // The user's first launch fits the instance limit of 1.
+    let first = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+    }), &user_token).await;
+    assert_eq!(first.status(), 200, "body: {:?}", first.text().await);
+
+    // The second launch is refused fail-fast with the structured quota body.
+    let second = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+    }), &user_token).await;
+    assert_eq!(second.status(), 409);
+    let body: serde_json::Value = second.json().await.unwrap();
+    assert_eq!(body["quota"]["scope"], "user_instance");
+    assert_eq!(body["quota"]["current"], 1);
+    assert_eq!(body["quota"]["limit"], 1);
+    assert_eq!(body["quota"]["requested"], 1);
+    assert!(body["error"].as_str().unwrap().contains("instance limit"));
+
+    // The rejected launch created no DB row: only the first instance exists.
+    let list = ctx.get_auth("/api/instances", &user_token).await;
+    let list_body: serde_json::Value = list.json().await.unwrap();
+    assert_eq!(list_body["instances"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn test_start_rejected_by_quota_leaves_instance_stopped() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .times(2)
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    }).await;
+
+    let admin_token = ctx.login_admin().await;
+    let template_id = create_template_only(&ctx, &admin_token, "quota-restart").await;
+    create_quota_user(&ctx, &admin_token, "restart_user", 1).await;
+    let user_token = ctx.login_user("restart_user", "password123").await;
+
+    // Launch A (active), then stop it: A releases its instance-count slot.
+    let a = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+    }), &user_token).await;
+    assert_eq!(a.status(), 200, "body: {:?}", a.text().await);
+    let a_id = a.json::<serde_json::Value>().await.unwrap()["instance"]["id"]
+        .as_str().unwrap().to_string();
+    set_instance_status(&ctx.db, &a_id, "stopped", Some("fake-container-id")).await;
+
+    // Launch B: reuses the slot A released, so B becomes the active one.
+    let b = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+    }), &user_token).await;
+    assert_eq!(b.status(), 200, "body: {:?}", b.text().await);
+
+    // Restarting A would push the user past the limit: 409, and A stays stopped.
+    let restart = ctx.post_auth(&format!("/api/instances/{}/start", a_id), &serde_json::json!({}), &user_token).await;
+    assert_eq!(restart.status(), 409);
+    let body: serde_json::Value = restart.json().await.unwrap();
+    assert_eq!(body["quota"]["scope"], "user_instance");
+    assert_eq!(body["quota"]["current"], 1);
+
+    let inst = ctx.get_auth(&format!("/api/instances/{}", a_id), &user_token).await;
+    let inst_body: serde_json::Value = inst.json().await.unwrap();
+    assert_eq!(inst_body["instance"]["status"], "stopped");
+}
+
+#[tokio::test]
+async fn test_start_infra_failure_rolls_back_to_stopped() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .times(1)
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_inspect_container_state()
+            .returning(|_| Box::pin(async { Ok(Some("exited".to_string())) }));
+        m.expect_start_container_by_id()
+            .returning(|_| Box::pin(async { Err(docker_err("start failed")) }));
+    }).await;
+
+    let admin_token = ctx.login_admin().await;
+    let template_id = create_template_only(&ctx, &admin_token, "rollback-start").await;
+    create_quota_user(&ctx, &admin_token, "rollback_user", 1).await;
+    let user_token = ctx.login_user("rollback_user", "password123").await;
+
+    let a = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+    }), &user_token).await;
+    assert_eq!(a.status(), 200, "body: {:?}", a.text().await);
+    let a_id = a.json::<serde_json::Value>().await.unwrap()["instance"]["id"]
+        .as_str().unwrap().to_string();
+    set_instance_status(&ctx.db, &a_id, "stopped", Some("fake-container-id")).await;
+
+    // The quota gate passes, but the Docker start fails: the reservation must
+    // roll the instance back to `stopped` so the user can retry.
+    let restart = ctx.post_auth(&format!("/api/instances/{}/start", a_id), &serde_json::json!({}), &user_token).await;
+    assert_eq!(restart.status(), 500);
+
+    let inst = ctx.get_auth(&format!("/api/instances/{}", a_id), &user_token).await;
+    let inst_body: serde_json::Value = inst.json().await.unwrap();
+    assert_eq!(inst_body["instance"]["status"], "stopped");
+}
+
+#[tokio::test]
+async fn test_user_launch_infra_failure_marks_error_and_keeps_record() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .times(1)
+            .returning(|_, _, _, _, _| Box::pin(async { Err("Docker create failed".to_string()) }));
+        m.expect_create_container_from_template()
+            .times(1)
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    }).await;
+
+    let admin_token = ctx.login_admin().await;
+    let template_id = create_template_only(&ctx, &admin_token, "err-retry").await;
+    create_quota_user(&ctx, &admin_token, "err_user", 1).await;
+    let user_token = ctx.login_user("err_user", "password123").await;
+
+    // Infra failure after the quota gate: the launch is marked `error` and the
+    // DB record is kept (visible for the user, spec §1).
+    let first = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+    }), &user_token).await;
+    assert_eq!(first.status(), 200, "body: {:?}", first.text().await);
+    let first_body: serde_json::Value = first.json().await.unwrap();
+    assert_eq!(first_body["instance"]["status"], "error");
+    assert_eq!(first_body["docker_error"], "Docker create failed");
+
+    // An `error` record is inactive, so it holds no quota: a retry succeeds.
+    let second = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+    }), &user_token).await;
+    assert_eq!(second.status(), 200, "body: {:?}", second.text().await);
+    let second_body: serde_json::Value = second.json().await.unwrap();
+    assert_eq!(second_body["instance"]["status"], "starting");
+}
+
+#[tokio::test]
+async fn test_admin_restart_accounts_against_owner_quota() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .times(2)
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    }).await;
+
+    let admin_token = ctx.login_admin().await;
+    let template_id = create_template_only(&ctx, &admin_token, "owner-quota").await;
+    create_quota_user(&ctx, &admin_token, "owner_user", 1).await;
+    let owner_token = ctx.login_user("owner_user", "password123").await;
+
+    // Owner launches A (active), then it is stopped, freeing its slot.
+    let a = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+    }), &owner_token).await;
+    assert_eq!(a.status(), 200, "body: {:?}", a.text().await);
+    let a_id = a.json::<serde_json::Value>().await.unwrap()["instance"]["id"]
+        .as_str().unwrap().to_string();
+    set_instance_status(&ctx.db, &a_id, "stopped", Some("fake-container-id")).await;
+
+    // Owner launches B, reusing the slot: B is now the active instance.
+    let b = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+    }), &owner_token).await;
+    assert_eq!(b.status(), 200, "body: {:?}", b.text().await);
+
+    // The Admin restarts A. Quota is counted for the *owner* (at its limit),
+    // so this is refused with the user's quota body — not 500, and not a
+    // success driven by the Admin's own (exempt) limits.
+    let restart = ctx.post_auth(&format!("/api/instances/{}/start", a_id), &serde_json::json!({}), &admin_token).await;
+    assert_eq!(restart.status(), 409);
+    let body: serde_json::Value = restart.json().await.unwrap();
+    assert_eq!(body["quota"]["scope"], "user_instance");
+    assert_eq!(body["quota"]["current"], 1);
+    assert_eq!(body["quota"]["limit"], 1);
+
+    let inst = ctx.get_auth(&format!("/api/instances/{}", a_id), &admin_token).await;
+    let inst_body: serde_json::Value = inst.json().await.unwrap();
+    assert_eq!(inst_body["instance"]["status"], "stopped");
+}
+
+#[tokio::test]
+async fn test_persistent_uniqueness_inside_tx_leaves_no_new_row() {
+    let ctx = MockContext::new(|m| {
+        m.expect_prepare_persistent_volume()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        m.expect_create_container_from_template()
+            .times(1)
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let template_id = create_persistent_template(&ctx, &token, "persist-tx", Some("/mnt/ow_dir")).await;
+
+    let first = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "persistence": "use_persistent",
+    }), &token).await;
+    assert_eq!(first.status(), 200, "body: {:?}", first.text().await);
+
+    // The second persistent launch for the same (template, owner) is refused
+    // by the in-transaction uniqueness check.
+    let second = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "persistence": "use_persistent",
+    }), &token).await;
+    assert_eq!(second.status(), 409);
+    let body: serde_json::Value = second.json().await.unwrap();
+    assert!(body["error"].as_str().unwrap().contains("persistent storage already exists"));
+
+    // The transaction rolled back: exactly the first instance remains.
+    let list = ctx.get_auth("/api/instances", &token).await;
+    let list_body: serde_json::Value = list.json().await.unwrap();
+    let instances = list_body["instances"].as_array().unwrap();
+    assert_eq!(instances.len(), 1, "the conflicting launch must not leave a row behind");
+    assert_eq!(instances[0]["mount_persistent"], true);
 }

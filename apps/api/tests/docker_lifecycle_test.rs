@@ -591,7 +591,7 @@ async fn test_launch_persistent_resolves_path_server_side() {
         .unwrap()
         .expect("admin user must exist");
     drop(db);
-    let expected_path = format!("/tmp/ow_test_root/{}/{}", name, admin.0);
+    let expected_path = format!("/tmp/ow_test_root/{}/{}", name, admin.id);
 
     let resp = ctx
         .post("/api/instances", &serde_json::json!({

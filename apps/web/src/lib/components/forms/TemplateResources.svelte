@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { TimeoutAction } from '$lib/templates/template-form';
+  import type { TemplateAllocationMode } from '$lib/types';
 
   interface Props {
     cores: number;
@@ -11,6 +12,8 @@
     timeoutAction: TimeoutAction;
     keepTimeSeconds: number | null;
     keepTimeAction: TimeoutAction;
+    allocationMode: TemplateAllocationMode;
+    canAllocateDedicated: boolean;
   }
 
   let {
@@ -22,7 +25,9 @@
     maxRunSeconds = $bindable(),
     timeoutAction = $bindable(),
     keepTimeSeconds = $bindable(),
-    keepTimeAction = $bindable()
+    keepTimeAction = $bindable(),
+    allocationMode = $bindable(),
+    canAllocateDedicated
   }: Props = $props();
 
   const STORAGE_HINT = '/data/persistent';
@@ -83,6 +88,33 @@
     if (n !== null) keepTimeSeconds = n;
   }
 </script>
+
+<div class="grid grid-cols-2 gap-3">
+  <label class={labelClass}>
+    <span class={spanClass}>Allocation Mode</span>
+    <select
+      class={inputClass}
+      bind:value={allocationMode}
+      disabled={!canAllocateDedicated && allocationMode === 'dedicated'}
+      data-testid="allocation-mode-select"
+    >
+      <option value="shared">shared</option>
+      {#if canAllocateDedicated || allocationMode === 'dedicated'}
+        <option value="dedicated">dedicated</option>
+      {/if}
+    </select>
+  </label>
+  <div class={labelClass}>
+    <span class={spanClass}>Mode Notes</span>
+    {#if canAllocateDedicated}
+      <span class="text-xs text-surface-400">Dedicated templates reserve their own isolated resource share per instance.</span>
+    {:else if allocationMode === 'dedicated'}
+      <span class="text-xs text-surface-400">This template was set to dedicated mode by an admin and cannot be changed here.</span>
+    {:else}
+      <span class="text-xs text-surface-400">Only admins can set dedicated mode.</span>
+    {/if}
+  </div>
+</div>
 
 <div class="grid grid-cols-3 gap-3">
   <label class={labelClass}>

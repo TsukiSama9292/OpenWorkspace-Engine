@@ -64,5 +64,22 @@ describe('launchInstance', () => {
 
     const result = await launchInstance('tpl-1', 'use_persistent');
     expect(result.error).toBe('persistent storage already exists');
+    expect(result.quota).toBeUndefined();
+  });
+
+  it('surfaces the quota payload on a 409 quota rejection', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      text: () => Promise.resolve(JSON.stringify({
+        error: 'Per-user instance limit reached (active: 2, limit: 2)',
+        quota: { scope: 'user_instance', current: 2, limit: 2, requested: 1 }
+      }))
+    }));
+
+    const result = await launchInstance('tpl-1');
+    expect(result.error).toBe('Per-user instance limit reached (active: 2, limit: 2)');
+    expect(result.quota).toEqual({ scope: 'user_instance', current: 2, limit: 2, requested: 1 });
+    expect(result.instance).toBeUndefined();
   });
 });

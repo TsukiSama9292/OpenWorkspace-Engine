@@ -34,7 +34,7 @@ async fn me(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     Ok(Json(serde_json::json!({
-        "user": { "id": user.0, "username": user.1, "role": user.3, "created_at": user.4 }
+        "user": { "id": user.id, "username": user.username, "role": user.role, "created_at": user.created_at }
     })))
 }
 

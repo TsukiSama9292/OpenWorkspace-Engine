@@ -59,6 +59,62 @@ describe('api client', () => {
     expect(result.data).toBeUndefined();
   });
 
+  it('surfaces the quota payload on a 409 quota rejection', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      text: () => Promise.resolve(JSON.stringify({
+        error: 'Per-user instance limit reached (active: 2, limit: 2)',
+        quota: { scope: 'user_instance', current: 2, limit: 2, requested: 1 }
+      }))
+    }));
+
+    const result = await api.post('/instances');
+    expect(result.error).toBe('Per-user instance limit reached (active: 2, limit: 2)');
+    expect(result.status).toBe(409);
+    expect(result.quota).toEqual({ scope: 'user_instance', current: 2, limit: 2, requested: 1 });
+  });
+
+  it('falls back to a plain error for a 409 without a quota body', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      text: () => Promise.resolve(JSON.stringify({ error: 'Instance is already running' }))
+    }));
+
+    const result = await api.post('/instances/x/start');
+    expect(result.error).toBe('Instance is already running');
+    expect(result.status).toBe(409);
+    expect(result.quota).toBeUndefined();
+  });
+
+  it('falls back to a plain error for a 403 without a quota body', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      text: () => Promise.resolve(JSON.stringify({ error: 'Forbidden' }))
+    }));
+
+    const result = await api.put('/templates/x');
+    expect(result.error).toBe('Forbidden');
+    expect(result.quota).toBeUndefined();
+  });
+
+  it('ignores an invalid quota body', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      text: () => Promise.resolve(JSON.stringify({
+        error: 'bad',
+        quota: { scope: 'bogus', current: 2, limit: 2, requested: 1 }
+      }))
+    }));
+
+    const result = await api.post('/instances');
+    expect(result.error).toBe('bad');
+    expect(result.quota).toBeUndefined();
+  });
+
   it('returns error on network failure', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network error')));
 

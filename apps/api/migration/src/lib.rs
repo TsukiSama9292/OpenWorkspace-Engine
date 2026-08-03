@@ -15,6 +15,9 @@ mod m20260731_000011_add_network_bandwidth;
 mod m20260801_000012_add_keep_time;
 mod m20260801_000013_add_host_port;
 mod m20260802_000014_add_docker_in_instance;
+mod m20260803_000015_add_system_settings;
+mod m20260803_000016_add_user_quota_columns;
+mod m20260803_000017_add_template_allocation_mode;
 
 pub struct Migrator;
 
@@ -36,6 +39,9 @@ impl MigratorTrait for Migrator {
             Box::new(m20260801_000012_add_keep_time::Migration),
             Box::new(m20260801_000013_add_host_port::Migration),
             Box::new(m20260802_000014_add_docker_in_instance::Migration),
+            Box::new(m20260803_000015_add_system_settings::Migration),
+            Box::new(m20260803_000016_add_user_quota_columns::Migration),
+            Box::new(m20260803_000017_add_template_allocation_mode::Migration),
         ]
     }
 }

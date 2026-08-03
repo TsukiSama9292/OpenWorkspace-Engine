@@ -375,6 +375,11 @@ pub trait DockerService: Send + Sync {
     /// List the networks Docker currently knows (name + first IPv4 IPAM
     /// subnet), enough for the subnet allocator to compute the in-use set.
     async fn list_networks(&self) -> Result<Vec<NetworkInfo>, String>;
+
+    /// Total host CPU cores / RAM bytes as reported by the Docker daemon
+    /// (`docker info`) — the host totals, not the API container's cgroup
+    /// limits. Used to seed `system_settings` on first startup.
+    async fn host_capacity(&self) -> Result<crate::system_settings::HostCapacity, String>;
 }
 
 pub fn is_container_not_found(err: &bollard::errors::Error) -> bool {
@@ -1034,6 +1039,26 @@ impl DockerService for DockerClient {
                 subnet: first_ipv4_subnet(&network),
             })
             .collect())
+    }
+
+    async fn host_capacity(&self) -> Result<crate::system_settings::HostCapacity, String> {
+        let info = self
+            .docker
+            .info()
+            .await
+            .map_err(|e| format!("docker info failed: {}", e))?;
+        let cpu_cores = info.ncpu.unwrap_or(0);
+        let ram_bytes = info.mem_total.unwrap_or(0);
+        if cpu_cores <= 0 || ram_bytes <= 0 {
+            return Err(format!(
+                "docker info reported invalid host capacity (ncpu={}, mem_total={})",
+                cpu_cores, ram_bytes
+            ));
+        }
+        Ok(crate::system_settings::HostCapacity {
+            cpu_cores: cpu_cores as i32,
+            ram_bytes,
+        })
     }
 
     async fn has_session_connection(

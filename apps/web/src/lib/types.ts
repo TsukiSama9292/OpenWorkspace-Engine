@@ -10,6 +10,8 @@ export type RemoteType = 'kasmvnc' | 'ttyd' | 'jupyter';
 
 export type TimeoutAction = 'remove' | 'stop' | 'pause';
 
+export type TemplateAllocationMode = 'shared' | 'dedicated';
+
 export interface Template {
   id: string;
   name: string;
@@ -29,6 +31,7 @@ export interface Template {
   network_bandwidth_up_mbps: number;
   network_bandwidth_down_mbps: number;
   docker_in_instance: boolean;
+  allocation_mode: TemplateAllocationMode;
   run_config: Record<string, unknown>;
   exec_config: Record<string, unknown>;
   volume_mappings: Record<string, string>;
@@ -70,7 +73,26 @@ export interface VncSettings {
   scaleViewport: boolean;
 }
 
+export type QuotaScope =
+  | 'user_instance'
+  | 'user_cpu'
+  | 'user_ram'
+  | 'host_instance'
+  | 'host_dedicated_cpu'
+  | 'host_dedicated_ram'
+  | 'host_shared_cpu'
+  | 'host_shared_ram';
+
+export interface QuotaPayload {
+  scope: QuotaScope;
+  current: number;
+  limit: number;
+  requested: number;
+}
+
 export interface ApiResult<T> {
   data?: T;
   error?: string;
+  status?: number;
+  quota?: QuotaPayload;
 }

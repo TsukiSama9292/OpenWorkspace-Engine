@@ -1,4 +1,5 @@
-import type { ApiResult } from '$lib/types';
+import type { ApiResult, QuotaPayload } from '$lib/types';
+import { isQuotaPayload } from '$lib/quota';
 
 const BASE = '/api';
 
@@ -18,14 +19,17 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     try {
       data = text ? JSON.parse(text) : null;
     } catch {
-      return { error: `Server error (${res.status})` };
+      return { error: `Server error (${res.status})`, status: res.status };
     }
 
     if (!res.ok) {
-      const msg = (data && typeof data === 'object' && 'error' in data)
-        ? (data as { error: string }).error
+      const payload = (data && typeof data === 'object') ? (data as Record<string, unknown>) : null;
+      const msg = payload && typeof payload.error === 'string'
+        ? payload.error
         : `Request failed (${res.status})`;
-      return { error: msg };
+      const quota: QuotaPayload | undefined =
+        payload && isQuotaPayload(payload.quota) ? payload.quota : undefined;
+      return { error: msg, status: res.status, quota };
     }
 
     return { data: data as T };

@@ -73,10 +73,10 @@ async fn user_seed_admin_creates_admin() {
 
     let user = repo.find_by_username("admin").await.unwrap();
     assert!(user.is_some());
-    let (id, username, _hash, role) = user.unwrap();
-    assert_eq!(username, "admin");
-    assert_eq!(role, "admin");
-    assert!(!id.is_nil());
+    let u = user.unwrap();
+    assert_eq!(u.username, "admin");
+    assert_eq!(u.role, "admin");
+    assert!(!u.id.is_nil());
 }
 
 #[tokio::test]
@@ -100,11 +100,11 @@ async fn user_create_and_find_by_id() {
 
     let found = repo.find_by_id(id).await.unwrap();
     assert!(found.is_some());
-    let (found_id, username, password_hash, role, _created_at) = found.unwrap();
-    assert_eq!(found_id, id);
-    assert_eq!(username, "alice");
-    assert_eq!(password_hash, "hash123");
-    assert_eq!(role, "user");
+    let u = found.unwrap();
+    assert_eq!(u.id, id);
+    assert_eq!(u.username, "alice");
+    assert_eq!(u.password_hash, "hash123");
+    assert_eq!(u.role, "user");
 }
 
 #[tokio::test]
@@ -126,7 +126,7 @@ async fn user_list_all() {
 
     let users = repo.list_all().await.unwrap();
     assert_eq!(users.len(), 2);
-    let names: Vec<&str> = users.iter().map(|u| u.1.as_str()).collect();
+    let names: Vec<&str> = users.iter().map(|u| u.username.as_str()).collect();
     assert!(names.contains(&"user1"));
     assert!(names.contains(&"user2"));
 }
@@ -169,7 +169,7 @@ async fn config_create_and_find() {
         .create(
             "my-config",
             Some("A test config"),
-            admin.0,
+            admin.id,
             "ubuntu:22.04",
             4,
             8_589_934_592,
@@ -215,15 +215,15 @@ async fn config_list_by_owner() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     template_repo
-        .create("cfg1", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("cfg1", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
     template_repo
-        .create("cfg2", None, admin.0, "img:2", 2, 2048, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("cfg2", None, admin.id, "img:2", 2, 2048, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
 
-    let configs = template_repo.list_by_owner(admin.0).await.unwrap();
+    let configs = template_repo.list_by_owner(admin.id).await.unwrap();
     assert_eq!(configs.len(), 2);
 }
 
@@ -237,7 +237,7 @@ async fn config_list_all() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     template_repo
-        .create("cfg1", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("cfg1", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
 
@@ -255,7 +255,7 @@ async fn config_update() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("old-name", None, admin.0, "old:img", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("old-name", None, admin.id, "old:img", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
 
@@ -308,7 +308,7 @@ async fn config_delete() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("del", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("del", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
 
@@ -337,14 +337,14 @@ async fn config_count_instances() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("counted", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("counted", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
 
     assert_eq!(template_repo.count_instances(config.id).await.unwrap(), 0);
 
-    instance_repo.launch(config.id, admin.0, "counted", false, None).await.unwrap();
-    instance_repo.launch(config.id, admin.0, "counted", false, None).await.unwrap();
+    instance_repo.launch(config.id, admin.id, "counted", false, None).await.unwrap();
+    instance_repo.launch(config.id, admin.id, "counted", false, None).await.unwrap();
 
     assert_eq!(template_repo.count_instances(config.id).await.unwrap(), 2);
 }
@@ -359,7 +359,7 @@ async fn config_create_with_container_runtime() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("runsc-cfg", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "runsc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("runsc-cfg", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "runsc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
     assert_eq!(config.container_runtime, "runsc");
@@ -378,7 +378,7 @@ async fn config_update_container_runtime() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("runtime-up", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("runtime-up", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
     assert_eq!(config.container_runtime, "docker");
@@ -403,7 +403,7 @@ async fn config_default_docker_in_instance_false() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("dini-default", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("dini-default", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
     assert!(!config.docker_in_instance);
@@ -422,7 +422,7 @@ async fn config_create_with_docker_in_instance() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("dini-true", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "runsc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", true)
+        .create("dini-true", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "runsc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", true)
         .await
         .unwrap();
     assert!(config.docker_in_instance);
@@ -441,7 +441,7 @@ async fn config_update_docker_in_instance() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("dini-up", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("dini-up", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
     assert!(!config.docker_in_instance);
@@ -466,7 +466,7 @@ async fn config_create_and_update_network_bandwidth() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("bw", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 100, 50, None, "pause", false)
+        .create("bw", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 100, 50, None, "pause", false)
         .await
         .unwrap();
     assert_eq!(config.network_bandwidth_up_mbps, 100);
@@ -500,17 +500,17 @@ async fn instance_launch_and_find() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("inst-cfg", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("inst-cfg", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
 
     let inst = instance_repo
-        .launch(config.id, admin.0, "inst-cfg", true, Some("/host/data"))
+        .launch(config.id, admin.id, "inst-cfg", true, Some("/host/data"))
         .await
         .unwrap();
 
     assert_eq!(inst.template_id, config.id);
-    assert_eq!(inst.owner_id, admin.0);
+    assert_eq!(inst.owner_id, admin.id);
     assert_eq!(inst.status, "stopped");
     assert!(inst.container_id.is_none());
     assert!(inst.mount_persistent);
@@ -534,13 +534,13 @@ async fn instance_launch_auto_increments_number() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("multi", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("multi", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
 
-    let i1 = instance_repo.launch(config.id, admin.0, "multi", false, None).await.unwrap();
-    let i2 = instance_repo.launch(config.id, admin.0, "multi", false, None).await.unwrap();
-    let i3 = instance_repo.launch(config.id, admin.0, "multi", false, None).await.unwrap();
+    let i1 = instance_repo.launch(config.id, admin.id, "multi", false, None).await.unwrap();
+    let i2 = instance_repo.launch(config.id, admin.id, "multi", false, None).await.unwrap();
+    let i3 = instance_repo.launch(config.id, admin.id, "multi", false, None).await.unwrap();
 
     assert_eq!(i1.instance_number, 1);
     assert_eq!(i2.instance_number, 2);
@@ -561,11 +561,11 @@ async fn instance_find_by_access_token() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("vnc-cfg", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("vnc-cfg", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
 
-    let inst = instance_repo.launch(config.id, admin.0, "vnc-cfg", false, None).await.unwrap();
+    let inst = instance_repo.launch(config.id, admin.id, "vnc-cfg", false, None).await.unwrap();
 
     let found = instance_repo.find_by_access_token(&inst.access_token).await.unwrap();
     assert!(found.is_some());
@@ -589,17 +589,17 @@ async fn instance_list_by_owner() {
     let bob = user_repo.find_by_username("bob").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("list-cfg", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("list-cfg", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
 
-    instance_repo.launch(config.id, admin.0, "list-cfg", false, None).await.unwrap();
-    instance_repo.launch(config.id, bob.0, "list-cfg", false, None).await.unwrap();
+    instance_repo.launch(config.id, admin.id, "list-cfg", false, None).await.unwrap();
+    instance_repo.launch(config.id, bob.id, "list-cfg", false, None).await.unwrap();
 
-    let admin_instances = instance_repo.list_by_owner(admin.0).await.unwrap();
+    let admin_instances = instance_repo.list_by_owner(admin.id).await.unwrap();
     assert_eq!(admin_instances.len(), 1);
 
-    let bob_instances = instance_repo.list_by_owner(bob.0).await.unwrap();
+    let bob_instances = instance_repo.list_by_owner(bob.id).await.unwrap();
     assert_eq!(bob_instances.len(), 1);
 }
 
@@ -614,12 +614,12 @@ async fn instance_list_all() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("all-cfg", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("all-cfg", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
 
-    instance_repo.launch(config.id, admin.0, "all-cfg", false, None).await.unwrap();
-    instance_repo.launch(config.id, admin.0, "all-cfg", false, None).await.unwrap();
+    instance_repo.launch(config.id, admin.id, "all-cfg", false, None).await.unwrap();
+    instance_repo.launch(config.id, admin.id, "all-cfg", false, None).await.unwrap();
 
     let all = instance_repo.list_all().await.unwrap();
     assert_eq!(all.len(), 2);
@@ -636,11 +636,11 @@ async fn instance_update_status() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("status-cfg", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("status-cfg", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
 
-    let inst = instance_repo.launch(config.id, admin.0, "status-cfg", false, None).await.unwrap();
+    let inst = instance_repo.launch(config.id, admin.id, "status-cfg", false, None).await.unwrap();
     assert_eq!(inst.status, "stopped");
 
     let updated = instance_repo.update_status(inst.id, "running").await.unwrap();
@@ -661,11 +661,11 @@ async fn instance_update_container_id() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("cid-cfg", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("cid-cfg", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
 
-    let inst = instance_repo.launch(config.id, admin.0, "cid-cfg", false, None).await.unwrap();
+    let inst = instance_repo.launch(config.id, admin.id, "cid-cfg", false, None).await.unwrap();
     assert!(inst.container_id.is_none());
 
     instance_repo.update_container_id(inst.id, "abc123def456").await.unwrap();
@@ -685,11 +685,11 @@ async fn instance_delete() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("del-cfg", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("del-cfg", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
 
-    let inst = instance_repo.launch(config.id, admin.0, "del-cfg", false, None).await.unwrap();
+    let inst = instance_repo.launch(config.id, admin.id, "del-cfg", false, None).await.unwrap();
 
     let deleted = instance_repo.delete(inst.id).await.unwrap();
     assert!(deleted);
@@ -790,17 +790,17 @@ async fn instance_list_by_template() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let cfg1 = template_repo
-        .create("lbc1", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("lbc1", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
     let cfg2 = template_repo
-        .create("lbc2", None, admin.0, "img:2", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("lbc2", None, admin.id, "img:2", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
 
-    instance_repo.launch(cfg1.id, admin.0, "lbc1", false, None).await.unwrap();
-    instance_repo.launch(cfg1.id, admin.0, "lbc1", false, None).await.unwrap();
-    instance_repo.launch(cfg2.id, admin.0, "lbc2", false, None).await.unwrap();
+    instance_repo.launch(cfg1.id, admin.id, "lbc1", false, None).await.unwrap();
+    instance_repo.launch(cfg1.id, admin.id, "lbc1", false, None).await.unwrap();
+    instance_repo.launch(cfg2.id, admin.id, "lbc2", false, None).await.unwrap();
 
     let list1 = instance_repo.list_by_template(cfg1.id).await.unwrap();
     assert_eq!(list1.len(), 2);
@@ -824,7 +824,7 @@ async fn instance_list_by_template_empty() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let cfg = template_repo
-        .create("lbc-empty", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("lbc-empty", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
 
@@ -872,6 +872,7 @@ fn config_model_from_converts_all_fields() {
         keep_time_seconds: Some(1800),
         keep_time_action: "pause".to_string(),
         docker_in_instance: false,
+        allocation_mode: "shared".to_string(),
         created_at: now,
         updated_at: now,
     };
@@ -898,6 +899,7 @@ fn config_model_from_converts_all_fields() {
     assert_eq!(config.network_bandwidth_down_mbps, 50);
     assert_eq!(config.keep_time_seconds, Some(1800));
     assert_eq!(config.keep_time_action, "pause");
+    assert_eq!(config.allocation_mode, "shared");
 }
 
 #[test]
@@ -925,6 +927,7 @@ fn config_model_from_null_optionals() {
         keep_time_seconds: None,
         keep_time_action: "remove".to_string(),
         docker_in_instance: false,
+        allocation_mode: "shared".to_string(),
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };
@@ -964,6 +967,7 @@ fn config_model_from_container_runtime_runsc() {
         keep_time_seconds: None,
         keep_time_action: "remove".to_string(),
         docker_in_instance: false,
+        allocation_mode: "shared".to_string(),
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };
@@ -1057,11 +1061,11 @@ async fn instance_update_container_id_success() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("cid-success", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("cid-success", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
 
-    let inst = instance_repo.launch(config.id, admin.0, "cid-success", false, None).await.unwrap();
+    let inst = instance_repo.launch(config.id, admin.id, "cid-success", false, None).await.unwrap();
 
     let updated = instance_repo.update_container_id(inst.id, "new_container_999").await.unwrap();
     assert!(updated);
@@ -1081,11 +1085,11 @@ async fn instance_update_status_success() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("status-success", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("status-success", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
 
-    let inst = instance_repo.launch(config.id, admin.0, "status-success", false, None).await.unwrap();
+    let inst = instance_repo.launch(config.id, admin.id, "status-success", false, None).await.unwrap();
     assert_eq!(inst.status, "stopped");
 
     let updated = instance_repo.update_status(inst.id, "running").await.unwrap();
@@ -1112,11 +1116,11 @@ async fn instance_update_started_at_success() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("started-at-cfg", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("started-at-cfg", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
 
-    let inst = instance_repo.launch(config.id, admin.0, "started-at-cfg", false, None).await.unwrap();
+    let inst = instance_repo.launch(config.id, admin.id, "started-at-cfg", false, None).await.unwrap();
     assert!(inst.started_at.is_none());
 
     let now = chrono::Utc::now();
@@ -1145,14 +1149,14 @@ async fn instance_list_running_with_started_at() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("lrsa-cfg", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("lrsa-cfg", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
 
-    let a = instance_repo.launch(config.id, admin.0, "lrsa", false, None).await.unwrap();
-    let b = instance_repo.launch(config.id, admin.0, "lrsa", false, None).await.unwrap();
-    let c = instance_repo.launch(config.id, admin.0, "lrsa", false, None).await.unwrap();
-    let d = instance_repo.launch(config.id, admin.0, "lrsa", false, None).await.unwrap();
+    let a = instance_repo.launch(config.id, admin.id, "lrsa", false, None).await.unwrap();
+    let b = instance_repo.launch(config.id, admin.id, "lrsa", false, None).await.unwrap();
+    let c = instance_repo.launch(config.id, admin.id, "lrsa", false, None).await.unwrap();
+    let d = instance_repo.launch(config.id, admin.id, "lrsa", false, None).await.unwrap();
 
     instance_repo.update_status(a.id, "running").await.unwrap();
     instance_repo.update_status(b.id, "running").await.unwrap();
@@ -1184,12 +1188,12 @@ async fn instance_host_port_commit_list_and_clear() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("hp-cfg", None, admin.0, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .create("hp-cfg", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
         .await
         .unwrap();
 
-    let a = instance_repo.launch(config.id, admin.0, "hp", false, None).await.unwrap();
-    let b = instance_repo.launch(config.id, admin.0, "hp", false, None).await.unwrap();
+    let a = instance_repo.launch(config.id, admin.id, "hp", false, None).await.unwrap();
+    let b = instance_repo.launch(config.id, admin.id, "hp", false, None).await.unwrap();
 
     assert!(instance_repo.list_host_ports().await.unwrap().is_empty());
 

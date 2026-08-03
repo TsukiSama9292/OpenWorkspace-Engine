@@ -34,13 +34,13 @@ async fn login(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
-    let valid = verify(&input.password, &user.2).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let valid = verify(&input.password, &user.password_hash).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     if !valid {
         return Err(StatusCode::UNAUTHORIZED);
     }
 
-    let role = Role::from_str(&user.3).ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-    let token = create_token(&user.0, &role, &state.settings.jwt_secret)?;
+    let role = Role::from_str(&user.role).ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let token = create_token(&user.id, &role, &state.settings.jwt_secret)?;
 
     let mut headers = axum::http::HeaderMap::new();
     set_cookie(&mut headers, &token);
@@ -48,7 +48,7 @@ async fn login(
     Ok((
         headers,
         Json(serde_json::json!({
-            "user": { "id": user.0, "username": user.1, "role": user.3 }
+            "user": { "id": user.id, "username": user.username, "role": user.role }
         })),
     ))
 }

@@ -27,6 +27,13 @@ describe('TemplatePanel', () => {
     expect(screen.getByText('Create Template')).toBeTruthy();
   });
 
+  it('hides the dedicated allocation option for non-admins', () => {
+    const { container } = render(TemplatePanel, { props: panelProps() });
+    const select = container.querySelector<HTMLSelectElement>('[data-testid="allocation-mode-select"]');
+    expect(select).toBeTruthy();
+    expect(Array.from(select!.options).map((o) => o.value)).toEqual(['shared']);
+  });
+
   it('drops the form and shows the list when leaving the editor view', async () => {
     const { rerender } = render(TemplatePanel, { props: panelProps() });
     await rerender({ view: { tab: 'templates', editor: 'list' } });

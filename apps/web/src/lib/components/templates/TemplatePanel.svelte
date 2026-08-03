@@ -5,6 +5,7 @@
   import { loadTemplate, submitTemplate, updateTemplate, createInitialFormState, DEFAULT_IMAGES, type TemplateFormState } from '$lib/templates/template-form';
   import { isTemplatesEditor, serializeDashboardHash, createDirtySnapshot, isFormDirty, confirmDiscardChanges, type DashboardView } from '$lib/templates/dashboard-view';
   import type { Template } from '$lib/types';
+  import { isAdmin } from '$lib/stores/auth';
   import TemplateBasics from '$lib/components/forms/TemplateBasics.svelte';
   import TemplateResources from '$lib/components/forms/TemplateResources.svelte';
   import TemplateAdvanced from '$lib/components/forms/TemplateAdvanced.svelte';
@@ -150,7 +151,7 @@
     {:else if form}
       <form class="flex flex-col gap-4" onsubmit={onSubmit}>
         <TemplateBasics bind:name={form.name} bind:description={form.description} bind:image={form.image} bind:remoteType={form.remoteType} />
-        <TemplateResources bind:cores={form.cores} bind:ramGb={form.ramGb} bind:gpuCount={form.gpuCount} bind:dockerRegistry={form.dockerRegistry} bind:persistentStoragePath={form.persistentStoragePath} bind:maxRunSeconds={form.maxRunSeconds} bind:timeoutAction={form.timeoutAction} bind:keepTimeSeconds={form.keepTimeSeconds} bind:keepTimeAction={form.keepTimeAction} />
+        <TemplateResources bind:cores={form.cores} bind:ramGb={form.ramGb} bind:gpuCount={form.gpuCount} bind:dockerRegistry={form.dockerRegistry} bind:persistentStoragePath={form.persistentStoragePath} bind:maxRunSeconds={form.maxRunSeconds} bind:timeoutAction={form.timeoutAction} bind:keepTimeSeconds={form.keepTimeSeconds} bind:keepTimeAction={form.keepTimeAction} bind:allocationMode={form.allocationMode} canAllocateDedicated={$isAdmin} />
 
         <button type="button" class="text-sm text-surface-400 hover:text-surface-100 bg-transparent border-none cursor-pointer text-left p-0" onclick={() => { if (form) form.showAdvanced = !form.showAdvanced; }}>
           {form.showAdvanced ? '▾ Hide Advanced' : '▸ Show Advanced'}

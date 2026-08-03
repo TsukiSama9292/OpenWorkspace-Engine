@@ -10,7 +10,11 @@
   import { auth, isManager } from '$lib/stores/auth';
   import { api } from '$lib/api/client';
   import { wrapperUrl, formatRemaining, remainingMs } from '$lib/countdown/countdown';
-  import type { Template, Instance, Role } from '$lib/types';
+  import { formatMemory } from '$lib/utils/format';
+  import { emptyQuotaForm, quotaFormFromUser, buildQuotaOverrides, type UserQuotaForm, type UserRow } from '$lib/users/user-quota';
+  import AdminSettings from '$lib/components/AdminSettings.svelte';
+  import QuotaModal from '$lib/components/quota/QuotaModal.svelte';
+  import type { Template, Instance, Role, QuotaPayload } from '$lib/types';
 
   let sidebarOpen = $state(false);
   let view = $state<DashboardView>({ tab: 'instances' });
@@ -20,6 +24,7 @@
   let configs = $state<Template[]>([]);
   let instances = $state<Instance[]>([]);
   let loading = $state(true);
+  let quotaNotice = $state<{ error: string; quota: QuotaPayload } | null>(null);
 
   let launchModal = $state<{ open: boolean; config: Template | null }>({ open: false, config: null });
   let launchTarget = $state<'current' | 'tab'>('current');
@@ -33,11 +38,13 @@
   let isAdmin = $derived($auth?.role === 'admin');
   let canManage = $derived($isManager);
 
-  let users = $state<{ id: string; username: string; role: string; created_at: string }[]>([]);
+  type UserFormFields = { username: string; password: string; role: string } & UserQuotaForm;
+
+  let users = $state<UserRow[]>([]);
   let usersLoading = $state(false);
   let showUserModal = $state(false);
-  let editingUser = $state<{ id: string; username: string; role: string } | null>(null);
-  let userForm = $state<{ username: string; password: string; role: string }>({ username: '', password: '', role: 'user' });
+  let editingUser = $state<UserRow | null>(null);
+  let userForm = $state<UserFormFields>({ username: '', password: '', role: 'user', ...emptyQuotaForm() });
   let userFormError = $state('');
 
   function navigateToHash(hash: string) {
@@ -103,7 +110,7 @@
     if (users.length > 0 || usersLoading) return;
     usersLoading = true;
     const { api } = await import('$lib/api/client');
-    const res = await api.get<{ users: { id: string; username: string; role: string; created_at: string }[] }>('/users');
+    const res = await api.get<{ users: UserRow[] }>('/users');
     users = res.data?.users ?? [];
     usersLoading = false;
   }
@@ -142,7 +149,12 @@
     if (!launchModal.config) return;
     const result = await launchInstance(launchModal.config.id, launchPersistence);
     if (result.error) {
-      alert(result.error);
+      if (result.quota) {
+        launchModal = { open: false, config: null };
+        quotaNotice = { error: result.error, quota: result.quota };
+      } else {
+        alert(result.error);
+      }
       return;
     }
     const inst = result.instance;
@@ -181,6 +193,10 @@
 
   async function onAction(inst: Instance, action: 'start' | 'stop' | 'pause' | 'unpause') {
     const result = await performAction(inst.id, action);
+    if (result.quota) {
+      quotaNotice = { error: result.error ?? '', quota: result.quota };
+      return;
+    }
     if (result.status) {
       instances = instances.map(i => i.id === inst.id ? { ...i, status: result.status! } : i);
     }
@@ -236,9 +252,9 @@
     return true;
   }
 
-  function openEditUser(user: { id: string; username: string; role: string }) {
+  function openEditUser(user: UserRow) {
     editingUser = user;
-    userForm = { username: user.username, password: '', role: user.role };
+    userForm = { username: user.username, password: '', role: user.role, ...quotaFormFromUser(user) };
     showUserModal = true;
     userFormError = '';
   }
@@ -249,11 +265,17 @@
 
     if (editingUser) {
       const editingId = editingUser.id;
-      const body: Record<string, string> = {};
+      const body: Record<string, string | number | null> = {};
       if (userForm.username) body.username = userForm.username;
       if (userForm.password) body.password = userForm.password;
       if (userForm.role) body.role = userForm.role;
-      const res = await api.put<{ user: { id: string; username: string; role: string; created_at: string } }>(`/users/${editingId}`, body);
+      if (isAdmin) {
+        const overrides = buildQuotaOverrides(userForm);
+        body.instance_limit = overrides.instance_limit;
+        body.max_cpu_cores = overrides.max_cpu_cores;
+        body.max_ram_bytes = overrides.max_ram_bytes;
+      }
+      const res = await api.put<{ user: UserRow }>(`/users/${editingId}`, body);
       if (res.error) {
         userFormError = res.error;
         return;
@@ -267,7 +289,7 @@
         userFormError = 'Username and password are required';
         return;
       }
-      const res = await api.post<{ user: { id: string; username: string; role: string; created_at: string } }>('/users', {
+      const res = await api.post<{ user: UserRow }>('/users', {
         username: userForm.username,
         password: userForm.password,
         role: userForm.role,
@@ -282,7 +304,7 @@
     }
     showUserModal = false;
     editingUser = null;
-    userForm = { username: '', password: '', role: 'user' };
+    userForm = { username: '', password: '', role: 'user', ...emptyQuotaForm() };
   }
 
   async function onDeleteUser(user: { id: string; username: string }) {
@@ -395,6 +417,9 @@
         <span class="settings-label">License</span>
         <span class="settings-value">Apache 2.0 &mdash; Open Source</span>
       </div>
+      {#if isAdmin}
+        <AdminSettings />
+      {/if}
     </div>
   {/if}
 
@@ -432,6 +457,12 @@
     </div>
   {/if}
 
+  <QuotaModal
+    error={quotaNotice?.error ?? ''}
+    quota={quotaNotice?.quota ?? null}
+    onclose={() => quotaNotice = null}
+  />
+
   {#if showUserModal}
     <div class="modal-overlay" onclick={() => { showUserModal = false; editingUser = null; }} role="presentation"></div>
     <div class="modal-card">
@@ -455,6 +486,20 @@
             {/if}
           </select>
         </div>
+        {#if editingUser && isAdmin}
+          <div class="modal-field">
+            <label for="user-instance-limit" class="modal-label">Instance Limit (empty = role default)</label>
+            <input id="user-instance-limit" class="modal-input" type="number" min="0" step="1" bind:value={userForm.instance_limit} />
+          </div>
+          <div class="modal-field">
+            <label for="user-max-cpu" class="modal-label">Max CPU Cores (empty = role default)</label>
+            <input id="user-max-cpu" class="modal-input" type="number" min="0" step="1" bind:value={userForm.max_cpu_cores} />
+          </div>
+          <div class="modal-field">
+            <label for="user-max-ram" class="modal-label">Max RAM Bytes (empty = role default)</label>
+            <input id="user-max-ram" class="modal-input" type="number" min="0" step="1" bind:value={userForm.max_ram_bytes} />
+          </div>
+        {/if}
         {#if userFormError}
           <div class="error-badge">{userFormError}</div>
         {/if}
@@ -645,6 +690,7 @@
                 <tr>
                   <th>Username</th>
                   <th>Role</th>
+                  <th>Quota</th>
                   <th>Created</th>
                   <th>Actions</th>
                 </tr>
@@ -658,6 +704,15 @@
                     </td>
                     <td>
                       <span class="status-badge {user.role === 'admin' ? 'dot-active' : ''}">{user.role}</span>
+                    </td>
+                    <td class="td-quota">
+                      {#if user.quota_exempt}
+                        <span class="status-badge dot-active">Exempt</span>
+                      {:else}
+                        <span class="td-quota-text">
+                          {user.effective_instance_limit} inst · {user.effective_max_cpu_cores} cores · {formatMemory(user.effective_max_ram_bytes)}
+                        </span>
+                      {/if}
                     </td>
                     <td class="td-date">{new Date(user.created_at).toLocaleDateString()}</td>
                     <td class="td-actions">

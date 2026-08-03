@@ -1,3 +1,4 @@
+mod admin_settings;
 mod auth;
 mod proxy;
 mod users;
@@ -30,6 +31,7 @@ pub fn api_routes() -> Router<AppState> {
         .route("/health", axum::routing::get(|| async { axum::Json(serde_json::json!({ "status": "ok" })) }))
         .merge(auth::routes())
         .merge(users::routes())
+        .merge(admin_settings::routes())
         .merge(workspace::routes())
         .merge(proxy::routes())
 }

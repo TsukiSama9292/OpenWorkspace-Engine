@@ -1,4 +1,4 @@
-import type { Instance } from '$lib/types';
+import type { Instance, QuotaPayload } from '$lib/types';
 import { api } from '$lib/api/client';
 import { goto } from '$app/navigation';
 
@@ -12,9 +12,9 @@ const STATUS_MAP: Record<string, Instance['status']> = {
 export async function performAction(
   instanceId: string,
   action: string,
-): Promise<{ error?: string; status?: Instance['status'] }> {
+): Promise<{ error?: string; status?: Instance['status']; quota?: QuotaPayload }> {
   const res = await api.post(`/instances/${instanceId}/${action}`);
-  if (res.error) return { error: res.error };
+  if (res.error) return { error: res.error, quota: res.quota };
   return { status: STATUS_MAP[action] };
 }
 

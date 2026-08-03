@@ -75,6 +75,17 @@ async fn main() {
         .expect("Failed to connect to Docker");
     let docker: Arc<dyn DockerService> = Arc::new(docker_client);
 
+    // Seed the `system_settings` singleton (host capacity + global policy
+    // knobs) from docker-detected host capacity / env overrides. Fail-open:
+    // detection failures and DB errors only log — the API still boots.
+    if let Err(e) = openworkspace_api::system_settings::seed_from_host(&db, docker.as_ref()).await
+    {
+        tracing::warn!(
+            "Failed to seed system_settings from host capacity: {} (continuing with existing row)",
+            e
+        );
+    }
+
     let state = AppState {
         db,
         docker,
