@@ -81,7 +81,6 @@ async fn main() {
         vnc_cache: vnc_cache.clone(),
         settings: settings.clone(),
         network_lock: Arc::new(tokio::sync::Mutex::new(())),
-        port_pool: Arc::new(tokio::sync::Mutex::new(Default::default())),
     };
 
     // ── Spawn health worker ──

@@ -94,6 +94,7 @@ impl TestContext {
             host_port_end: 20000,
             instance_net_base: "10.200.0.0/16".to_string(),
             instance_dns: "8.8.8.8,1.1.1.1".to_string(),
+            port_lock_dir: String::new(),
         };
 
         UserRepository::new(&db)
@@ -112,7 +113,6 @@ impl TestContext {
             vnc_cache,
             settings: settings.clone(),
             network_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
-            port_pool: std::sync::Arc::new(tokio::sync::Mutex::new(Default::default())),
         };
 
         let cors = tower_http::cors::CorsLayer::new()

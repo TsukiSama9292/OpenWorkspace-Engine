@@ -15,6 +15,7 @@ use crate::auth::AuthUser;
 use crate::db::{PolicyRepository, PersistentVolumeRepository, UserRepository, WorkspaceTemplate, WorkspaceTemplateRepository, WorkspaceInstance, WorkspaceInstanceRepository};
 use crate::docker::{ContainerConfig, RemoteType};
 use crate::effective_context::PreflightReject;
+use crate::host_port::ReservedPort;
 use crate::persistent_volume::{persistent_volume_name, resolve_persistent_host_path, resolve_persistent_host_path_opt};
 use chrono::{DateTime, Utc};
 
@@ -568,20 +569,24 @@ async fn launch_instance(
 
     let host_gateway_ip = state.settings.host_gateway_ip.clone();
     let mut used_ports: BTreeSet<u16> = collect_used_host_ports(&instance_repo).await;
-    let mut host_port = match allocate_and_reserve_port(
+    let mut host_port;
+    let mut reservation;
+    let allocated = match allocate_and_reserve_port(
         &state,
         &used_ports,
         state.settings.host_port_start,
     )
     .await
     {
-        Some(port) => port,
+        Some(r) => r,
         None => {
             let msg = "Host port pool exhausted".to_string();
             instance_repo.update_status(instance.id, "error").await.ok();
             return Ok(Json(launch_error_response(&state, instance, &template, &msg).await));
         }
     };
+    host_port = allocated.port;
+    reservation = Some(allocated);
 
     // Ensure the instance's dedicated `/30` network before the container create
     // (spec §5: allocate host port → ensure instance network → create container).
@@ -591,7 +596,7 @@ async fn launch_instance(
     let network = match ensure_instance_network(&state, &instance).await {
         Ok(network) => network,
         Err(msg) => {
-            release_reserved_port(&state, host_port).await;
+            drop(reservation.take());
             instance_repo.update_status(instance.id, "error").await.ok();
             return Ok(Json(launch_error_response(&state, instance, &template, &msg).await));
         }
@@ -636,13 +641,14 @@ async fn launch_instance(
         match &create_result {
             Err(e) if crate::host_port::is_port_conflict(e) => {
                 retries += 1;
-                release_reserved_port(&state, host_port).await;
+                drop(reservation.take());
                 used_ports.insert(host_port);
                 let from = base_from.wrapping_add(retries as u16);
                 match allocate_and_reserve_port(&state, &used_ports, from).await {
                     Some(next) => {
-                        host_port = next;
-                        container_config.host_port = Some(next);
+                        host_port = next.port;
+                        reservation = Some(next);
+                        container_config.host_port = Some(host_port);
                         create_result = state.docker
                             .create_container_from_template(&instance.name, instance.instance_number, &container_config, &instance.access_password, &instance.access_token)
                             .await;
@@ -659,13 +665,13 @@ async fn launch_instance(
             instance_repo.update_container_id(instance.id, &container_id).await.ok();
             if let Err(e) = instance_repo.update_host_port(instance.id, Some(host_port as i32)).await {
                 tracing::error!("Failed to commit host port {} for '{}': {}", host_port, instance.name, e);
-                release_reserved_port(&state, host_port).await;
+                drop(reservation.take());
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({"error": "Failed to allocate host port"})),
                 ));
             }
-            release_reserved_port(&state, host_port).await;
+            drop(reservation.take());
             instance_repo.update_status(instance.id, "starting").await.ok();
 
             if let Err(e) = crate::route_writer::write_route(&remote_type, &instance.access_token, host_port, &instance.access_password) {
@@ -697,7 +703,7 @@ async fn launch_instance(
             Ok(Json(serde_json::json!({ "instance": instance_to_json(&inst, Some(&template.name), Some(&template.remote_type), owner_username, &owner_group_ids, owner_tier, template.max_run_seconds, Some(&template.timeout_action), template.keep_time_seconds, Some(&template.keep_time_action)) })))
         }
         Err(e) => {
-            release_reserved_port(&state, host_port).await;
+            drop(reservation.take());
             tracing::warn!(
                 "Failed to create container for instance '{}': {} (DB record kept)",
                 instance.name,
@@ -982,39 +988,48 @@ async fn start_instance(
     let resolved_host_path = instance.resolved_volume_host_path.as_deref();
 
     // Migration backfill: a legacy instance created before the host-port pool
-    // has no allocation. Allocate one now and persist it so the route writer
-    // and container bind share the same port.
-    let host_port = match instance.host_port {
-        Some(p) => p as u16,
-        None => {
-            let used: BTreeSet<u16> = collect_used_host_ports(&instance_repo).await;
-            match crate::host_port::allocate_host_port(
-                &used,
-                state.settings.host_port_start,
-                state.settings.host_port_end,
-                &state.settings.host_gateway_ip,
-            ) {
-                Some(p) => {
-                    if let Err(e) = instance_repo.update_host_port(instance.id, Some(p as i32)).await {
-                        tracing::error!("Failed to commit host port {} for '{}': {}", p, instance.name, e);
-                        instance_repo.update_status(instance.id, "stopped").await.ok();
-                        return Err((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(serde_json::json!({"error": "Failed to allocate host port"})),
-                        ));
-                    }
-                    p
-                }
-                None => {
+    // has no allocation. Allocate one under the flock registry now and persist
+    // it so the route writer and container bind share the same port. A committed
+    // port is re-flocked best-effort for the window (it cannot be picked by the
+    // allocator of a same-DB peer; a cross-DB holder simply makes the restart
+    // proceed without a reservation and lets the retry absorb the collision).
+    let (host_port, host_port_reservation): (u16, Option<ReservedPort>) =
+        match instance.host_port.map(|p| p as u16) {
+            Some(p) => {
+                let lock_dir = crate::host_port::resolve_lock_dir(&state.settings.port_lock_dir);
+                let reservation = lock_dir
+                    .and_then(|dir| crate::host_port::acquire_lock(&dir, p))
+                    .map(|lock| ReservedPort { port: p, lock });
+                (p, reservation)
+            }
+            None => {
+                let used: BTreeSet<u16> = collect_used_host_ports(&instance_repo).await;
+                let allocated =
+                    match allocate_and_reserve_port(&state, &used, state.settings.host_port_start)
+                        .await
+                    {
+                        Some(r) => r,
+                        None => {
+                            instance_repo.update_status(instance.id, "stopped").await.ok();
+                            return Err((
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(serde_json::json!({"error": "Host port pool exhausted"})),
+                            ));
+                        }
+                    };
+                let p = allocated.port;
+                if let Err(e) = instance_repo.update_host_port(instance.id, Some(p as i32)).await {
+                    drop(allocated);
+                    tracing::error!("Failed to commit host port {} for '{}': {}", p, instance.name, e);
                     instance_repo.update_status(instance.id, "stopped").await.ok();
                     return Err((
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({"error": "Host port pool exhausted"})),
+                        Json(serde_json::json!({"error": "Failed to allocate host port"})),
                     ));
                 }
+                (p, Some(allocated))
             }
-        }
-    };
+        };
 
     let (new_container_id, host_port) = match ensure_container_running(
         &state,
@@ -1024,6 +1039,7 @@ async fn start_instance(
         resolved_host_path,
         &instance_repo,
         host_port,
+        host_port_reservation,
     )
     .await
     {
@@ -1080,34 +1096,30 @@ async fn collect_used_host_ports(
         .collect()
 }
 
-/// Allocate a host port under `state.port_pool`, skipping DB-used,
-/// already-reserved, and probe-busy ports, and reserve it for the caller's
-/// create → start → DB-commit window. The caller must release it exactly once
-/// via `release_reserved_port` once the port is committed to the DB or
-/// abandoned. Returns `None` when the pool is exhausted.
+/// Allocate a host port under the flock registry, skipping DB-used ports:
+/// resolve the shared lock directory, then take a non-blocking `flock` on each
+/// candidate (winner) before the TCP probe. Returns the reservation handle —
+/// the port is owned by the caller until the handle is dropped.
 async fn allocate_and_reserve_port(
     state: &AppState,
     used_ports: &BTreeSet<u16>,
     from: u16,
-) -> Option<u16> {
-    let mut pool = state.port_pool.lock().await;
-    let mut view = used_ports.clone();
-    view.extend(pool.reserved());
-    let port = crate::host_port::allocate_host_port_from(
-        &view,
+) -> Option<ReservedPort> {
+    let Some(lock_dir) = crate::host_port::resolve_lock_dir(&state.settings.port_lock_dir) else {
+        tracing::error!(
+            "No usable host-port lock directory; allocation fails closed (settings={})",
+            state.settings.port_lock_dir
+        );
+        return None;
+    };
+    crate::host_port::try_allocate_port(
+        used_ports,
         state.settings.host_port_start,
         state.settings.host_port_end,
         &state.settings.host_gateway_ip,
         from,
-    )?;
-    pool.reserve(port);
-    Some(port)
-}
-
-/// Drop the in-process reservation for `port` (no-op if it was never reserved,
-/// e.g. a port already committed to the DB by a previous lifecycle).
-async fn release_reserved_port(state: &AppState, port: u16) {
-    state.port_pool.lock().await.release(port);
+        &lock_dir,
+    )
 }
 
 /// Reduce a Docker network's IPv4 subnet CIDR to its aligned `/30` network
@@ -1274,6 +1286,7 @@ async fn create_container_with_port_retry<'a>(
     remote_type: &RemoteType,
     resolved_host_path: Option<&str>,
     initial_port: u16,
+    initial_reservation: Option<ReservedPort>,
     used_ports: &mut BTreeSet<u16>,
     to_remove: Option<&'a str>,
     network_name: &str,
@@ -1284,6 +1297,7 @@ async fn create_container_with_port_retry<'a>(
         state.settings.host_port_end,
         &instance.access_token,
     );
+    let mut reservation = initial_reservation;
     // Re-declare a lost local-bind Volume before creating (per spec §補充), so
     // Docker never silently creates a plain named volume instead.
     if let Some(host_path) = resolved_host_path {
@@ -1294,7 +1308,7 @@ async fn create_container_with_port_retry<'a>(
             .await
         {
             tracing::error!("Failed to ensure persistent volume for '{}': {}", instance.name, e);
-            release_reserved_port(state, initial_port).await;
+            drop(reservation.take());
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "Failed to ensure persistent volume"})),
@@ -1312,7 +1326,7 @@ async fn create_container_with_port_retry<'a>(
                     cid,
                     e
                 );
-                release_reserved_port(state, host_port).await;
+                drop(reservation.take());
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({"error": "Failed to create container"})),
@@ -1324,21 +1338,24 @@ async fn create_container_with_port_retry<'a>(
             Ok(id) => {
                 if let Err(e) = instance_repo.update_host_port(instance.id, Some(host_port as i32)).await {
                     tracing::error!("Failed to commit host port {} for '{}': {}", host_port, instance.name, e);
-                    release_reserved_port(state, host_port).await;
+                    drop(reservation.take());
                     return Err((
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(serde_json::json!({"error": "Failed to allocate host port"})),
                     ));
                 }
-                release_reserved_port(state, host_port).await;
+                drop(reservation.take());
                 return Ok((id, host_port));
             }
             Err(e) if crate::host_port::is_port_conflict(&e) => {
                 retries += 1;
-                release_reserved_port(state, host_port).await;
+                drop(reservation.take());
                 used_ports.insert(host_port);
                 match allocate_and_reserve_port(state, used_ports, base_from.wrapping_add(retries as u16)).await {
-                    Some(next) => host_port = next,
+                    Some(next) => {
+                        host_port = next.port;
+                        reservation = Some(next);
+                    }
                     None => {
                         return Err((
                             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1348,7 +1365,7 @@ async fn create_container_with_port_retry<'a>(
                 }
             }
             Err(e) => {
-                release_reserved_port(state, host_port).await;
+                drop(reservation.take());
                 tracing::error!("Failed to create container for '{}': {}", instance.name, e);
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -1357,7 +1374,7 @@ async fn create_container_with_port_retry<'a>(
             }
         }
     }
-    release_reserved_port(state, host_port).await;
+    drop(reservation.take());
     Err((
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(serde_json::json!({"error": "Failed to create container after repeated port conflicts"})),
@@ -1377,7 +1394,9 @@ async fn ensure_container_running(
     resolved_host_path: Option<&str>,
     instance_repo: &WorkspaceInstanceRepository<'_>,
     host_port: u16,
+    host_port_reservation: Option<ReservedPort>,
 ) -> Result<(Option<String>, u16), (StatusCode, Json<serde_json::Value>)> {
+    let mut reservation = host_port_reservation;
     // Ensure the instance's dedicated `/30` network exists before any restart
     // or recreate (spec §5). Idempotent: an unchanged restart reuses the same
     // network and subnet, and a pre-existing instance created before this
@@ -1385,6 +1404,7 @@ async fn ensure_container_running(
     let network = match ensure_instance_network(state, instance).await {
         Ok(network) => network,
         Err(e) => {
+            drop(reservation.take());
             tracing::error!("Failed to ensure network for instance '{}': {}", instance.name, e);
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1431,6 +1451,7 @@ async fn ensure_container_running(
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(serde_json::json!({"error": "Host port pool exhausted"})),
                         ))?;
+                        drop(reservation.take());
                         let t = template.as_ref().ok_or((
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(serde_json::json!({"error": "Template not found for instance"})),
@@ -1441,7 +1462,8 @@ async fn ensure_container_running(
                             instance,
                             remote_type,
                             resolved_host_path,
-                            fresh,
+                            fresh.port,
+                            Some(fresh),
                             &mut used_ports,
                             Some(cid),
                             &network,
@@ -1451,6 +1473,7 @@ async fn ensure_container_running(
                         return Ok((Some(new_id), current_port));
                     }
                     Err(e) => {
+                        drop(reservation.take());
                         tracing::error!("Failed to start container for '{}': {}", instance.name, e);
                         return Err((
                             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1488,6 +1511,7 @@ async fn ensure_container_running(
                     remote_type,
                     resolved_host_path,
                     current_port,
+                    reservation,
                     &mut used_ports,
                     None,
                     &network,
@@ -1510,6 +1534,7 @@ async fn ensure_container_running(
                 remote_type,
                 resolved_host_path,
                 current_port,
+                reservation,
                 &mut used_ports,
                 None,
                 &network,

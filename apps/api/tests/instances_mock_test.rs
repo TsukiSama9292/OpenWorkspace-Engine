@@ -94,6 +94,7 @@ impl MockContext {
             host_port_end: 20000,
             instance_net_base: "10.200.0.0/16".to_string(),
             instance_dns: "8.8.8.8,1.1.1.1".to_string(),
+            port_lock_dir: String::new(),
         };
 
         openworkspace_api::db::UserRepository::new(&db)
@@ -111,7 +112,6 @@ impl MockContext {
             vnc_cache: VncCache::new(),
             settings,
             network_lock: Arc::new(tokio::sync::Mutex::new(())),
-            port_pool: Arc::new(tokio::sync::Mutex::new(Default::default())),
         };
 
         let cors = tower_http::cors::CorsLayer::new()
@@ -223,6 +223,23 @@ async fn set_instance_status(db: &DatabaseConnection, instance_id: &str, status:
     active.update(db).await.unwrap();
 }
 
+/// Directly assert that the flock reservation on `port` is no longer held —
+/// i.e. the API released it (RAII drop) — rather than relying on a second
+/// launch re-picking the same port. The registry is shared across parallel
+/// test binaries, so a transient foreign hold is absorbed by a bounded retry
+/// instead of flaking the exact-reuse assertion.
+fn assert_port_released(port: u16) {
+    let dir = openworkspace_api::host_port::resolve_lock_dir("")
+        .expect("test suite must resolve a shared lock directory");
+    for _ in 0..40 {
+        if let Some(_lock) = openworkspace_api::host_port::acquire_lock(&dir, port) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!("host port {} was not released within the grace window", port);
+}
+
 #[tokio::test]
 async fn test_launch_docker_create_fails() {
     let ctx = MockContext::new(|m| {
@@ -239,6 +256,55 @@ async fn test_launch_docker_create_fails() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["instance"]["status"], "error");
     assert_eq!(body["docker_error"], "Docker create failed");
+}
+
+// ── Ticket 01: a launch that fails at container-create must release its flock
+//    reservation — the next launch can take the exact same port again. ──
+
+#[tokio::test]
+async fn test_launch_failure_releases_port_reservation() {
+    let attempted_ports = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let calls = Arc::new(AtomicU32::new(0));
+    let attempted_for_mock = attempted_ports.clone();
+    let calls_for_mock = calls.clone();
+
+    let ctx = MockContext::new(move |m| {
+        m.expect_create_container_from_template()
+            .returning(move |_, _, config, _, _| {
+                let ports = attempted_for_mock.clone();
+                let calls = calls_for_mock.clone();
+                let host_port = config.host_port.unwrap_or(0);
+                Box::pin(async move {
+                    ports.lock().unwrap().push(host_port);
+                    if calls.fetch_add(1, Ordering::Relaxed) == 0 {
+                        Err("Docker create failed".to_string())
+                    } else {
+                        Ok("fake-container-id-2".to_string())
+                    }
+                })
+            });
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let template_a = create_template_only(&ctx, &token, "release-port-a").await;
+    let template_b = create_template_only(&ctx, &token, "release-port-b").await;
+
+    let first = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_a
+    }), &token).await;
+    let first_body: serde_json::Value = first.json().await.unwrap();
+    assert_eq!(first_body["instance"]["status"], "error");
+
+    let second = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_b
+    }), &token).await;
+    let second_body: serde_json::Value = second.json().await.unwrap();
+    assert_eq!(second_body["instance"]["status"], "starting");
+
+    let attempted = attempted_ports.lock().unwrap().clone();
+    assert_eq!(attempted.len(), 2, "two launches, two create attempts");
+    assert!(attempted[0] > 0, "first launch must have attempted a real port");
+    assert_port_released(attempted[0]);
 }
 
 #[tokio::test]
@@ -1073,10 +1139,13 @@ async fn test_delete_frees_host_port() {
     let resp = ctx.delete_auth(&format!("/api/instances/{}", instance_id_a), &token).await;
     assert_eq!(resp.status(), 204);
 
+    // The deleted instance's flock reservation is gone — the port is reusable.
+    assert_port_released(port_a as u16);
+
     let (_, instance_id_b) = create_config_and_instance(&ctx, &token, "free-port-b").await;
     let id_b: uuid::Uuid = instance_id_b.parse().unwrap();
     let port_b = repo.find_by_id(id_b).await.unwrap().unwrap().host_port.unwrap();
-    assert_eq!(port_a, port_b, "deleted instance's port must be reusable");
+    assert!(port_b > 0, "second launch must commit a host port after the delete");
 }
 
 // ── Ticket 02: an error-state instance keeps its row (and port reservation)
@@ -2865,6 +2934,17 @@ async fn test_concurrent_launches_different_users_both_succeed() {
     for handle in handles {
         assert_eq!(handle.await.unwrap(), reqwest::StatusCode::OK);
     }
+
+    // Both committed distinct host ports (flock arbitration + retry).
+    use openworkspace_api::db::workspace_instance;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    let instances = workspace_instance::Entity::find()
+        .filter(workspace_instance::Column::TemplateId.eq(uuid::Uuid::parse_str(&template_id).unwrap()))
+        .all(&ctx.db).await.unwrap();
+    let mut ports: Vec<i32> = instances.iter().filter_map(|i| i.host_port).collect();
+    ports.sort_unstable();
+    assert_eq!(ports.len(), 2, "both concurrent launches must commit a host port");
+    assert_ne!(ports[0], ports[1], "concurrent launches must allocate distinct host ports");
 }
 
 #[tokio::test]

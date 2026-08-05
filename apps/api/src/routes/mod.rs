@@ -25,14 +25,6 @@ pub struct AppState {
     /// process; cross-process races are still absorbed by the bounded
     /// re-allocate retry in `launch_instance`.
     pub network_lock: Arc<tokio::sync::Mutex<()>>,
-    /// Serializes host-port allocation in this process. Concurrent launches must
-    /// never hand the same probe-free port to two containers whose bind only
-    /// happens at `start` — the loser would sit `created` with a leaked runsc
-    /// sandbox. The pool tracks ports reserved for the allocate→create→start→
-    /// DB-commit window (see `host_port::PortPool`); production runs a single
-    /// API process, so the reservation covers the in-process race, while
-    /// cross-process collisions are absorbed by the port-conflict retry.
-    pub port_pool: Arc<tokio::sync::Mutex<crate::host_port::PortPool>>,
 }
 
 pub fn api_routes() -> Router<AppState> {

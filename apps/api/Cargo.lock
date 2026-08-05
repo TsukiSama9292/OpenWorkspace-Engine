@@ -1876,6 +1876,7 @@ dependencies = [
  "postgres",
  "rand 0.8.7",
  "reqwest",
+ "rustix",
  "sea-orm",
  "serde",
  "serde_json",

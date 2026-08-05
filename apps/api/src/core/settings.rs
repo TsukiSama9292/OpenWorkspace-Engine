@@ -12,6 +12,10 @@ pub struct Settings {
     pub host_port_end: u16,
     pub instance_net_base: String,
     pub instance_dns: String,
+    /// Host-port lock directory for cross-process flock arbitration, from the
+    /// `PORT_LOCK_DIR` env var. Empty = unset: resolution falls through to the
+    /// per-UID runtime-dir / tmp chain.
+    pub port_lock_dir: String,
 }
 
 impl Settings {
@@ -71,6 +75,7 @@ impl Settings {
             instance_net_base,
             instance_dns: get("OW_INSTANCE_DNS")
                 .unwrap_or_else(|| "8.8.8.8,1.1.1.1".to_string()),
+            port_lock_dir: get("PORT_LOCK_DIR").unwrap_or_default(),
         })
     }
 
@@ -102,6 +107,7 @@ mod tests {
             host_port_end: 20000,
             instance_net_base: "10.200.0.0/16".to_string(),
             instance_dns: "8.8.8.8,1.1.1.1".to_string(),
+            port_lock_dir: String::new(),
         };
         assert_eq!(settings.bind_address(), "0.0.0.0:3000");
     }
@@ -121,6 +127,7 @@ mod tests {
             host_port_end: 20000,
             instance_net_base: "10.200.0.0/16".to_string(),
             instance_dns: "8.8.8.8,1.1.1.1".to_string(),
+            port_lock_dir: String::new(),
         };
         assert_eq!(settings.bind_address(), "127.0.0.1:8080");
     }
@@ -140,6 +147,7 @@ mod tests {
             host_port_end: 20000,
             instance_net_base: "10.200.0.0/16".to_string(),
             instance_dns: "8.8.8.8,1.1.1.1".to_string(),
+            port_lock_dir: String::new(),
         };
         let debug = format!("{:?}", settings);
         assert!(debug.contains("Settings"));
@@ -161,6 +169,7 @@ mod tests {
             host_port_end: 20000,
             instance_net_base: "10.200.0.0/16".to_string(),
             instance_dns: "8.8.8.8,1.1.1.1".to_string(),
+            port_lock_dir: String::new(),
         };
         let cloned = settings.clone();
         assert_eq!(settings.database_url, cloned.database_url);
@@ -220,6 +229,18 @@ mod tests {
         assert_eq!(settings.host_gateway_ip, "172.17.0.1");
         assert_eq!(settings.host_port_start, 10000);
         assert_eq!(settings.host_port_end, 20000);
+        assert_eq!(settings.port_lock_dir, "");
+    }
+
+    #[test]
+    fn test_port_lock_dir_custom_value() {
+        let settings = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://localhost/test"),
+            ("JWT_SECRET", "test"),
+            ("PORT_LOCK_DIR", "/var/lib/ow-ports"),
+        ]))
+        .unwrap();
+        assert_eq!(settings.port_lock_dir, "/var/lib/ow-ports");
     }
 
     #[test]
