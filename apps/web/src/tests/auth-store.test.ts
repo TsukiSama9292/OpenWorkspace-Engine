@@ -1,6 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { get } from 'svelte/store';
-import { auth, isAuthenticated, isAdmin, isManager } from '$lib/stores/auth';
+import {
+  auth,
+  isAuthenticated,
+  isAdmin,
+  canCreateTemplate,
+  canManageUsers,
+  canManageGroupInstances,
+  canManageDocker,
+  canManageRegistry,
+  effectiveMaxInstances,
+  allowedTemplateIds
+} from '$lib/stores/auth';
+import type { EffectiveContext } from '$lib/types';
 
 vi.mock('$lib/api/client', () => ({
   api: {
@@ -12,33 +24,54 @@ vi.mock('$lib/api/client', () => ({
 import { api } from '$lib/api/client';
 const mockApi = vi.mocked(api);
 
+function context(overrides: Partial<EffectiveContext> = {}): EffectiveContext {
+  return {
+    user_id: 'u1',
+    username: 'alice',
+    is_admin: false,
+    tier: 0,
+    can_create_template: false,
+    can_manage_users: false,
+    can_manage_group_instances: false,
+    can_manage_docker: false,
+    can_manage_registry: false,
+    effective_max_instances: 4,
+    allowed_template_ids: ['t1', 't2'],
+    group_ids: ['g1'],
+    direct_max_instances: null,
+    ...overrides
+  };
+}
+
 describe('auth store', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     auth.logout();
   });
 
-  it('starts unauthenticated', () => {
+  it('starts unauthenticated with defaulted helpers', () => {
     expect(get(auth)).toBeNull();
     expect(get(isAuthenticated)).toBe(false);
     expect(get(isAdmin)).toBe(false);
-    expect(get(isManager)).toBe(false);
+    expect(get(canCreateTemplate)).toBe(false);
+    expect(get(canManageUsers)).toBe(false);
+    expect(get(canManageGroupInstances)).toBe(false);
+    expect(get(canManageDocker)).toBe(false);
+    expect(get(canManageRegistry)).toBe(false);
+    expect(get(effectiveMaxInstances)).toBe(0);
+    expect(get(allowedTemplateIds)).toEqual([]);
   });
 
-  it('login sets user on success', async () => {
-    mockApi.post.mockResolvedValue({
-      data: { user: { id: '1', username: 'admin', role: 'admin' } }
-    });
+  it('login populates the store from the { context } envelope', async () => {
+    mockApi.post.mockResolvedValue({ data: { context: context() } });
 
-    const result = await auth.login('admin', 'pass');
+    const result = await auth.login('alice', 'pass');
     expect(result).toBe(true);
-    expect(get(auth)).toEqual({ id: '1', username: 'admin', role: 'admin' });
+    expect(get(auth)).toEqual(context());
     expect(get(isAuthenticated)).toBe(true);
-    expect(get(isAdmin)).toBe(true);
-    expect(get(isManager)).toBe(true);
   });
 
-  it('login returns false on failure', async () => {
+  it('login returns false on failure and leaves the store null', async () => {
     mockApi.post.mockResolvedValue({ error: 'Invalid credentials' });
 
     const result = await auth.login('wrong', 'pass');
@@ -47,9 +80,9 @@ describe('auth store', () => {
     expect(get(isAuthenticated)).toBe(false);
   });
 
-  it('logout clears user', async () => {
-    mockApi.post.mockResolvedValue({ data: { user: { id: '1', username: 'admin', role: 'admin' } } });
-    await auth.login('admin', 'pass');
+  it('logout clears the store', async () => {
+    mockApi.post.mockResolvedValue({ data: { context: context() } });
+    await auth.login('alice', 'pass');
     expect(get(isAuthenticated)).toBe(true);
 
     mockApi.post.mockResolvedValue({});
@@ -58,18 +91,15 @@ describe('auth store', () => {
     expect(get(isAuthenticated)).toBe(false);
   });
 
-  it('check sets user when authenticated', async () => {
-    mockApi.get.mockResolvedValue({
-      data: { user: { id: '2', username: 'user', role: 'user' } }
-    });
+  it('check populates the store from /auth/me', async () => {
+    mockApi.get.mockResolvedValue({ data: { context: context({ username: 'bob' }) } });
 
     await auth.check();
-    expect(get(auth)).toEqual({ id: '2', username: 'user', role: 'user' });
-    expect(get(isAdmin)).toBe(false);
-    expect(get(isManager)).toBe(false);
+    expect(get(auth)).toEqual(context({ username: 'bob' }));
+    expect(get(isAuthenticated)).toBe(true);
   });
 
-  it('check clears user when not authenticated', async () => {
+  it('check clears the store when /auth/me fails', async () => {
     mockApi.get.mockResolvedValue({ error: 'Not found' });
 
     await auth.check();
@@ -77,28 +107,41 @@ describe('auth store', () => {
     expect(get(isAuthenticated)).toBe(false);
   });
 
-  it('manager login sets isManager true, isAdmin false', async () => {
-    mockApi.post.mockResolvedValue({
-      data: { user: { id: '3', username: 'manager', role: 'manager' } }
+  it('derives each flag helper from its own flag', async () => {
+    mockApi.get.mockResolvedValue({
+      data: { context: context({ can_manage_users: true, can_create_template: true }) }
     });
+    await auth.check();
 
-    const result = await auth.login('manager', 'pass');
-    expect(result).toBe(true);
-    expect(get(auth)).toEqual({ id: '3', username: 'manager', role: 'manager' });
-    expect(get(isAuthenticated)).toBe(true);
+    expect(get(canManageUsers)).toBe(true);
+    expect(get(canCreateTemplate)).toBe(true);
+    expect(get(canManageGroupInstances)).toBe(false);
+    expect(get(canManageDocker)).toBe(false);
+    expect(get(canManageRegistry)).toBe(false);
     expect(get(isAdmin)).toBe(false);
-    expect(get(isManager)).toBe(true);
   });
 
-  it('user login sets isManager false', async () => {
-    mockApi.post.mockResolvedValue({
-      data: { user: { id: '4', username: 'user', role: 'user' } }
-    });
+  it('is_admin bypasses every flag helper', async () => {
+    mockApi.get.mockResolvedValue({ data: { context: context({ is_admin: true, tier: 2 }) } });
+    await auth.check();
 
-    const result = await auth.login('user', 'pass');
-    expect(result).toBe(true);
-    expect(get(isAuthenticated)).toBe(true);
-    expect(get(isAdmin)).toBe(false);
-    expect(get(isManager)).toBe(false);
+    expect(get(isAdmin)).toBe(true);
+    expect(get(canCreateTemplate)).toBe(true);
+    expect(get(canManageUsers)).toBe(true);
+    expect(get(canManageGroupInstances)).toBe(true);
+    expect(get(canManageDocker)).toBe(true);
+    expect(get(canManageRegistry)).toBe(true);
+  });
+
+  it('derives effective_max_instances and the allowed template ids', async () => {
+    mockApi.get.mockResolvedValue({
+      data: {
+        context: context({ effective_max_instances: 6, allowed_template_ids: ['t1', 't3', 't4'] })
+      }
+    });
+    await auth.check();
+
+    expect(get(effectiveMaxInstances)).toBe(6);
+    expect(get(allowedTemplateIds)).toEqual(['t1', 't3', 't4']);
   });
 });

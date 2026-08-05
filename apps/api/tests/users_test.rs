@@ -116,15 +116,11 @@ async fn test_delete_user_forbidden_for_non_admin() {
     assert_eq!(resp.status(), 403);
 }
 
-const USER_DEFAULT_RAM: u64 = 8 * 1024 * 1024 * 1024;
-const MANAGER_DEFAULT_RAM: u64 = 32 * 1024 * 1024 * 1024;
-
-async fn create_user_via_admin(ctx: &TestContext, username: &str, role: &str) -> String {
+async fn create_user_via_admin(ctx: &TestContext, username: &str) -> String {
     let resp = ctx
         .post("/api/users", &serde_json::json!({
             "username": username,
             "password": "pass123",
-            "role": role,
         }))
         .await;
     assert_eq!(resp.status(), 200);
@@ -135,227 +131,44 @@ async fn create_user_via_admin(ctx: &TestContext, username: &str, role: &str) ->
 }
 
 #[tokio::test]
-async fn test_user_role_defaults_effective_quota() {
+async fn test_manager_can_manage_user() {
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
-    let user_id = create_user_via_admin(&ctx, "default_quota_user", "user").await;
-    let resp = ctx.get(&format!("/api/users/{}", user_id)).await;
+    let manager_id = create_user_via_admin(&ctx, "manage_manager").await;
+    let target_id = create_user_via_admin(&ctx, "manage_target").await;
+
+    // A manager is a user holding `can_manage_users` via group membership.
+    let resp = ctx.post("/api/groups", &serde_json::json!({
+        "name": "user-mgrs",
+        "description": null,
+        "can_manage_users": true,
+        "max_instances": 2,
+        "template_ids": [],
+    })).await;
     assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let user = &body["user"];
-    assert_eq!(user["instance_limit"], serde_json::Value::Null);
-    assert_eq!(user["max_cpu_cores"], serde_json::Value::Null);
-    assert_eq!(user["max_ram_bytes"], serde_json::Value::Null);
-    assert_eq!(user["effective_instance_limit"], 2);
-    assert_eq!(user["effective_max_cpu_cores"], 4);
-    assert_eq!(
-        user["effective_max_ram_bytes"].as_u64().unwrap(),
-        USER_DEFAULT_RAM
-    );
-    assert_eq!(user["quota_exempt"], false);
-}
-
-#[tokio::test]
-async fn test_manager_role_defaults_effective_quota() {
-    let ctx = TestContext::new().await;
-    ctx.login_admin().await;
-
-    let manager_id = create_user_via_admin(&ctx, "default_quota_manager", "manager").await;
-    let resp = ctx.get(&format!("/api/users/{}", manager_id)).await;
-    assert_eq!(resp.status(), 200);
-    let user = &resp.json::<serde_json::Value>().await.unwrap()["user"];
-    assert_eq!(user["effective_instance_limit"], 5);
-    assert_eq!(user["effective_max_cpu_cores"], 12);
-    assert_eq!(
-        user["effective_max_ram_bytes"].as_u64().unwrap(),
-        MANAGER_DEFAULT_RAM
-    );
-    assert_eq!(user["quota_exempt"], false);
-}
-
-#[tokio::test]
-async fn test_admin_is_quota_exempt() {
-    let ctx = TestContext::new().await;
-    ctx.login_admin().await;
-
-    let resp = ctx.get("/api/users").await;
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let admin = body["users"]
-        .as_array()
+    let group_id = resp.json::<serde_json::Value>().await.unwrap()["group"]["id"]
+        .as_str()
         .unwrap()
-        .iter()
-        .find(|u| u["username"] == "admin")
-        .unwrap();
-    assert_eq!(admin["quota_exempt"], true);
-}
+        .to_string();
 
-#[tokio::test]
-async fn test_admin_sets_quota_overrides() {
-    let ctx = TestContext::new().await;
-    ctx.login_admin().await;
+    let resp = ctx.put(&format!("/api/users/{}", manager_id), &serde_json::json!({
+        "group_ids": [group_id],
+    })).await;
+    assert_eq!(resp.status(), 200);
 
-    let user_id = create_user_via_admin(&ctx, "override_user", "user").await;
+    ctx.login_user("manage_manager", "pass123").await;
 
+    // `can_manage_users` lets a manager update a user's name/password.
     let resp = ctx
         .put(
-            &format!("/api/users/{}", user_id),
-            &serde_json::json!({
-                "instance_limit": 7,
-                "max_cpu_cores": 9,
-                "max_ram_bytes": 10737418240_i64,
-            }),
+            &format!("/api/users/{}", target_id),
+            &serde_json::json!({ "username": "manage_target_renamed" }),
         )
         .await;
     assert_eq!(resp.status(), 200, "update failed: {:?}", resp.text().await);
-    let user = &resp.json::<serde_json::Value>().await.unwrap()["user"];
-    assert_eq!(user["instance_limit"], 7);
-    assert_eq!(user["max_cpu_cores"], 9);
-    assert_eq!(user["max_ram_bytes"].as_u64().unwrap(), 10737418240);
-    assert_eq!(user["effective_instance_limit"], 7);
-    assert_eq!(user["effective_max_cpu_cores"], 9);
-    assert_eq!(user["effective_max_ram_bytes"].as_u64().unwrap(), 10737418240);
-    assert_eq!(user["quota_exempt"], false);
-
-    // Persisted: a fresh GET reflects the override.
-    let resp = ctx.get(&format!("/api/users/{}", user_id)).await;
-    let user = &resp.json::<serde_json::Value>().await.unwrap()["user"];
-    assert_eq!(user["instance_limit"], 7);
-    assert_eq!(user["max_ram_bytes"].as_u64().unwrap(), 10737418240);
-}
-
-#[tokio::test]
-async fn test_null_restores_role_default_quota() {
-    let ctx = TestContext::new().await;
-    ctx.login_admin().await;
-
-    let user_id = create_user_via_admin(&ctx, "null_restore_user", "user").await;
-
-    ctx.put(
-        &format!("/api/users/{}", user_id),
-        &serde_json::json!({
-            "instance_limit": 7,
-            "max_cpu_cores": 9,
-            "max_ram_bytes": 10737418240_i64,
-        }),
-    )
-    .await;
-
-    let resp = ctx
-        .put(
-            &format!("/api/users/{}", user_id),
-            &serde_json::json!({
-                "instance_limit": null,
-                "max_cpu_cores": null,
-                "max_ram_bytes": null,
-            }),
-        )
-        .await;
-    assert_eq!(resp.status(), 200, "restore failed: {:?}", resp.text().await);
-    let user = &resp.json::<serde_json::Value>().await.unwrap()["user"];
-    assert_eq!(user["instance_limit"], serde_json::Value::Null);
-    assert_eq!(user["max_cpu_cores"], serde_json::Value::Null);
-    assert_eq!(user["max_ram_bytes"], serde_json::Value::Null);
-    assert_eq!(user["effective_instance_limit"], 2);
-    assert_eq!(user["effective_max_cpu_cores"], 4);
     assert_eq!(
-        user["effective_max_ram_bytes"].as_u64().unwrap(),
-        USER_DEFAULT_RAM
+        resp.json::<serde_json::Value>().await.unwrap()["user"]["username"],
+        "manage_target_renamed"
     );
-}
-
-#[tokio::test]
-async fn test_regular_user_cannot_set_own_quota() {
-    let ctx = TestContext::new().await;
-    ctx.login_admin().await;
-
-    let user_id = create_user_via_admin(&ctx, "cannot_set_quota", "user").await;
-    ctx.login_user("cannot_set_quota", "pass123").await;
-
-    let resp = ctx
-        .put(
-            &format!("/api/users/{}", user_id),
-            &serde_json::json!({ "instance_limit": 10 }),
-        )
-        .await;
-    assert_eq!(resp.status(), 403);
-}
-
-#[tokio::test]
-async fn test_manager_cannot_set_quota() {
-    let ctx = TestContext::new().await;
-    ctx.login_admin().await;
-
-    create_user_via_admin(&ctx, "quota_manager", "manager").await;
-    let target_id = create_user_via_admin(&ctx, "quota_target", "user").await;
-
-    ctx.login_user("quota_manager", "pass123").await;
-
-    let resp = ctx
-        .put(
-            &format!("/api/users/{}", target_id),
-            &serde_json::json!({ "max_cpu_cores": 6 }),
-        )
-        .await;
-    assert_eq!(resp.status(), 403);
-
-    // The manager can still manage the user (name/role) — just not quotas.
-    let resp = ctx
-        .put(
-            &format!("/api/users/{}", target_id),
-            &serde_json::json!({ "role": "user" }),
-        )
-        .await;
-    assert_eq!(resp.status(), 200);
-}
-
-#[tokio::test]
-async fn test_quota_override_partial_update_keeps_other_columns() {
-    let ctx = TestContext::new().await;
-    ctx.login_admin().await;
-
-    let user_id = create_user_via_admin(&ctx, "partial_quota_user", "user").await;
-
-    ctx.put(
-        &format!("/api/users/{}", user_id),
-        &serde_json::json!({
-            "instance_limit": 7,
-            "max_cpu_cores": 9,
-            "max_ram_bytes": 10737418240_i64,
-        }),
-    )
-    .await;
-
-    // Update only instance_limit: the other overrides must survive.
-    let resp = ctx
-        .put(
-            &format!("/api/users/{}", user_id),
-            &serde_json::json!({ "instance_limit": 3 }),
-        )
-        .await;
-    assert_eq!(resp.status(), 200);
-    let user = &resp.json::<serde_json::Value>().await.unwrap()["user"];
-    assert_eq!(user["instance_limit"], 3);
-    assert_eq!(user["max_cpu_cores"], 9);
-    assert_eq!(user["max_ram_bytes"].as_u64().unwrap(), 10737418240);
-    assert_eq!(user["effective_instance_limit"], 3);
-    assert_eq!(user["effective_max_cpu_cores"], 9);
-}
-
-#[tokio::test]
-async fn test_list_users_includes_effective_quota() {
-    let ctx = TestContext::new().await;
-    ctx.login_admin().await;
-
-    let resp = ctx.get("/api/users").await;
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let users = body["users"].as_array().unwrap();
-    assert!(!users.is_empty());
-    for u in users {
-        assert!(u.get("effective_instance_limit").is_some());
-        assert!(u.get("effective_max_cpu_cores").is_some());
-        assert!(u.get("effective_max_ram_bytes").is_some());
-        assert!(u.get("quota_exempt").is_some());
-    }
 }

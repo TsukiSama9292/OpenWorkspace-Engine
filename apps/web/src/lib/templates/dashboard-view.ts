@@ -1,9 +1,18 @@
 import type { TemplateFormState } from './template-form';
 
-export type DashboardTab = 'instances' | 'templates' | 'sessions' | 'users';
+export type DashboardTab =
+  | 'instances'
+  | 'templates'
+  | 'sessions'
+  | 'volumes'
+  | 'groups'
+  | 'users'
+  | 'settings'
+  | 'monitor'
+  | 'logs';
 
 export type DashboardView =
-  | { tab: 'instances' | 'sessions' | 'users' }
+  | { tab: 'instances' | 'sessions' | 'volumes' | 'groups' | 'users' | 'settings' | 'monitor' | 'logs' }
   | { tab: 'templates'; editor: 'list' }
   | { tab: 'templates'; editor: 'new' }
   | { tab: 'templates'; editor: 'edit'; templateId: string };
@@ -27,8 +36,18 @@ export function parseDashboardHash(hash: string): DashboardView {
       return { tab: 'templates', editor: 'list' };
     case 'sessions':
       return { tab: 'sessions' };
+    case 'volumes':
+      return { tab: 'volumes' };
+    case 'groups':
+      return { tab: 'groups' };
     case 'users':
       return { tab: 'users' };
+    case 'settings':
+      return { tab: 'settings' };
+    case 'monitor':
+      return { tab: 'monitor' };
+    case 'logs':
+      return { tab: 'logs' };
     default:
       return { tab: 'instances' };
   }

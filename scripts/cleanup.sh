@@ -4,15 +4,19 @@
 # Subcommands:
 #   tests       remove containers/networks left behind by the API test suite
 #               (any `ow-*` network except the shared control network
-#               `ow-network`, plus `ow_test*`/`ow-vol-*` containers) and any
+#               `ow-network`, plus `ow_test*`/`ow-vol-*` containers), the
+#               persistent-storage named volumes (`ow-persist-*`), and any
 #               per-instance route files in the dev traefik dynamic dir
+#   volumes     remove persistent-storage Docker named volumes (`ow-persist-*`)
 #   instances   remove per-instance networks (`ow-<instance-id>`) and their
 #               containers
 #   network     remove the shared control network `ow-network`
 #   traefik     remove per-instance route files from the dev traefik dynamic dir
+#   orphans     kill runsc / containerd-shim process trees no longer tracked by
+#               Docker (docker ps -aq)
 #   (none)      run all of the above
 #
-# Usage: ./scripts/cleanup.sh [--verbose] [tests|instances|network|traefik]
+# Usage: ./scripts/cleanup.sh [--verbose] [tests|volumes|instances|network|traefik]
 
 set -uo pipefail
 
@@ -28,7 +32,7 @@ SUBCOMMAND="all"
 for arg in "$@"; do
     case "$arg" in
         --verbose|-v) VERBOSE=1 ;;
-        tests|instances|network|traefik|all) SUBCOMMAND="$arg" ;;
+        tests|volumes|instances|network|traefik|orphans|all) SUBCOMMAND="$arg" ;;
         *) echo "ERROR: unknown argument: $arg" >&2; exit 2 ;;
     esac
 done
@@ -76,6 +80,65 @@ sweep_containers() {
     else
         log "    沒有找到符合條件的容器"
     fi
+}
+
+# Kill runsc / containerd-shim process trees whose container id is no longer
+# known to Docker (docker ps -aq --no-trunc). These accumulate when the API
+# test suite force-removes containers whose sandbox is deadlocked mid-boot:
+# dockerd drops the metadata, but the sandbox never exits, so the shim + gofer
+# + sandbox get reparented to PID 1 as orphans that `docker ps` can't see.
+#
+# Two guards keep this from killing live containers:
+#   1. `docker ps -aq --no-trunc` — the default (truncated 12-char) IDs never
+#      match the full 64-hex cid on a shim/sandbox cmdline, so *every* shim
+#      would be misclassified as an orphan and killed (killing a shim kills
+#      its container with exit 137 and no docker event).
+#   2. A cid tracked by Docker is never touched. Note: a leaked sandbox's
+#      containerd task dir may linger after `docker rm -f` (the task delete
+#      never completes for a created-state runsc container), so the task dir
+#      must NOT be used to protect a process — "docker still tracks this cid"
+#      is the only authoritative guard.
+#
+# The host shell collects the target PIDs (any user can read /proc cmdlines),
+# then a privileged host-PID-namespace container performs the kill. The PID
+# list is passed explicitly — never scan-and-kill by container id inside the
+# container, because the host shell's own cmdline contains those ids.
+sweep_orphans() {
+    local active pids=() pid args cid
+    log "==> [orphans] 清除 Docker 已遺忘的 runsc / containerd-shim 進程樹..."
+    active=$(docker ps -aq --no-trunc 2>/dev/null || true)
+    if [ -n "$active" ]; then
+        active=$(echo "$active" | sort -u)
+    fi
+
+    while read -r pid args; do
+        cid=""
+        case "$args" in
+            *containerd-shim*)
+                cid=$(echo "$args" | sed -n 's/.* -id \([0-9a-f]\{64\}\).*/\1/p')
+                ;;
+            runsc-sandbox* | runsc-gofer*)
+                cid=$(echo "$args" | grep -oE '[0-9a-f]{64}$' | head -n1)
+                ;;
+        esac
+        [ -n "$cid" ] || continue
+        if [ -z "$active" ] || ! echo "$active" | grep -qx "$cid"; then
+            pids+=("$pid")
+            log "    orphan pid=$pid cid=$cid"
+        fi
+    done < <(ps -eo pid,args --no-headers 2>/dev/null \
+        | grep -E 'containerd-shim|runsc-(sandbox|gofer)' || true)
+
+    if [ ${#pids[@]} -eq 0 ]; then
+        log "    沒有孤兒進程。"
+        return 0
+    fi
+
+    local targets
+    targets=$(printf '%s\n' "${pids[@]}" | sort -u | tr '\n' ' ')
+    log "    透過 privileged host-PID 容器 kill: $targets"
+    docker run --rm --privileged --pid=host busybox:1 sh -c "kill -9 $targets 2>/dev/null" >/dev/null 2>&1 || true
+    log "    已 kill ${#pids[@]} 個孤兒進程。"
 }
 
 # Remove all networks matching $1 (extended regex), optionally excluding
@@ -140,13 +203,37 @@ cleanup_traefik() {
     log "  -> 已移除 $removed 個路由檔案"
 }
 
+# Remove Docker named volumes created for persistent storage (`ow-persist-*`).
+# These local-bind named volumes are never removed by the API's lifecycle
+# paths — only the explicit cleanup endpoint and this script remove them.
+cleanup_volumes() {
+    local vol
+    log "==> [volumes] 清理 persistent-storage 命名卷 (ow-persist-*)..."
+    mapfile -t VOLS < <(docker volume ls -q --filter name='^ow-persist-' 2>/dev/null || true)
+    if [ ${#VOLS[@]} -eq 0 ]; then
+        log "    沒有符合條件的卷。"
+        return 0
+    fi
+    for vol in "${VOLS[@]}"; do
+        if docker volume rm "$vol" >/dev/null 2>&1; then
+            log "  - 已移除卷: $vol"
+        else
+            echo "> 錯誤：無法移除卷 '$vol'。" >&2
+        fi
+    done
+}
+
 cleanup_tests() {
     log "==> [tests] 清理測試容器..."
     sweep_containers '^ow-'
     log "==> [tests] 清理測試網路..."
     remove_networks '^ow-' '^ow-network$'
+    log "==> [tests] 清理測試卷..."
+    cleanup_volumes
     log "==> [tests] 清理測試 traefik 配置 (測試目錄)..."
     cleanup_traefik "$TEST_DYNAMIC_DIR"
+    log "==> [tests] 清理孤兒 runsc / containerd-shim 進程..."
+    sweep_orphans
 }
 
 cleanup_instances() {
@@ -182,14 +269,17 @@ cleanup_network() {
 
 case "$SUBCOMMAND" in
     tests) cleanup_tests ;;
+    volumes) cleanup_volumes ;;
     instances) cleanup_instances ;;
     network) cleanup_network ;;
     traefik) cleanup_traefik ;;
+    orphans) sweep_orphans ;;
     all)
         cleanup_instances
         cleanup_tests
         cleanup_network
         cleanup_traefik
+        sweep_orphans
         ;;
 esac
 

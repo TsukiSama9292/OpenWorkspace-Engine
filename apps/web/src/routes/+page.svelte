@@ -7,14 +7,23 @@
   import { loadDashboard } from './dashboard-data';
   import { performAction, deleteInstance } from '$lib/api/instance-actions';
   import { launchInstance, deleteTemplate } from '$lib/api/template-actions';
-  import { auth, isManager } from '$lib/stores/auth';
+  import {
+    auth,
+    isAdmin,
+    canCreateTemplate,
+    canManageUsers,
+    canManageGroupInstances,
+    effectiveMaxInstances
+  } from '$lib/stores/auth';
+  import { mayControlInstance, mayLaunchTemplate } from '$lib/permissions';
   import { api } from '$lib/api/client';
   import { wrapperUrl, formatRemaining, remainingMs } from '$lib/countdown/countdown';
-  import { formatMemory } from '$lib/utils/format';
-  import { emptyQuotaForm, quotaFormFromUser, buildQuotaOverrides, type UserQuotaForm, type UserRow } from '$lib/users/user-quota';
   import AdminSettings from '$lib/components/AdminSettings.svelte';
-  import QuotaModal from '$lib/components/quota/QuotaModal.svelte';
-  import type { Template, Instance, Role, QuotaPayload } from '$lib/types';
+  import RejectionNotice from '$lib/components/RejectionNotice.svelte';
+  import GroupPanel from '$lib/components/groups/GroupPanel.svelte';
+  import UserManagementPanel from '$lib/components/users/UserManagementPanel.svelte';
+  import OrphanedVolumesPanel from '$lib/components/volumes/OrphanedVolumesPanel.svelte';
+  import type { Template, Instance, PreflightRejection } from '$lib/types';
 
   let sidebarOpen = $state(false);
   let view = $state<DashboardView>({ tab: 'instances' });
@@ -24,7 +33,7 @@
   let configs = $state<Template[]>([]);
   let instances = $state<Instance[]>([]);
   let loading = $state(true);
-  let quotaNotice = $state<{ error: string; quota: QuotaPayload } | null>(null);
+  let rejectionNotice = $state<{ error: string; rejection: PreflightRejection } | null>(null);
 
   let launchModal = $state<{ open: boolean; config: Template | null }>({ open: false, config: null });
   let launchTarget = $state<'current' | 'tab'>('current');
@@ -35,17 +44,41 @@
   let filterUser = $state('');
   let filterStatus = $state('');
 
-  let isAdmin = $derived($auth?.role === 'admin');
-  let canManage = $derived($isManager);
+  let pwCurrent = $state('');
+  let pwNew = $state('');
+  let pwError = $state('');
+  let pwSuccess = $state(false);
+  let pwSaving = $state(false);
 
-  type UserFormFields = { username: string; password: string; role: string } & UserQuotaForm;
+  async function onChangePassword() {
+    pwError = '';
+    pwSuccess = false;
+    if (!pwCurrent || !pwNew) {
+      pwError = 'Both fields are required';
+      return;
+    }
+    pwSaving = true;
+    const res = await api.post('/auth/change-password', {
+      current_password: pwCurrent,
+      new_password: pwNew
+    });
+    pwSaving = false;
+    if (res.error) {
+      pwError = res.error;
+      return;
+    }
+    pwCurrent = '';
+    pwNew = '';
+    pwSuccess = true;
+  }
 
-  let users = $state<UserRow[]>([]);
-  let usersLoading = $state(false);
-  let showUserModal = $state(false);
-  let editingUser = $state<UserRow | null>(null);
-  let userForm = $state<UserFormFields>({ username: '', password: '', role: 'user', ...emptyQuotaForm() });
-  let userFormError = $state('');
+  let canManage = $derived($canCreateTemplate || $canManageUsers || $canManageGroupInstances);
+  let effectiveLimitLabel = $derived($isAdmin || $effectiveMaxInstances === 0 ? 'Unlimited' : String($effectiveMaxInstances));
+  let allowedTemplateLabel = $derived(String(configs.filter((c) => mayLaunchTemplate($auth, c)).length));
+  // The session-launch surface only offers usable templates: hidden templates
+  // are excluded here (they remain visible in the templates-management panel,
+  // where managers can restore them).
+  let quickLaunchTemplates = $derived(configs.filter((c) => c.visibility !== 'hidden'));
 
   function navigateToHash(hash: string) {
     view = parseDashboardHash(hash);
@@ -106,21 +139,13 @@
     };
   });
 
-  async function loadUsers() {
-    if (users.length > 0 || usersLoading) return;
-    usersLoading = true;
-    const { api } = await import('$lib/api/client');
-    const res = await api.get<{ users: UserRow[] }>('/users');
-    users = res.data?.users ?? [];
-    usersLoading = false;
-  }
-
   function copySshCommand(id: string) {
     const cmd = `ssh -J gateway.openworkspace.engine:2222 instance@${id}`;
     navigator.clipboard.writeText(cmd);
   }
 
   function openLaunch(config: Template) {
+    if (!mayLaunchTemplate($auth, config)) return;
     launchModal = { open: true, config };
     launchTarget = 'current';
     launchPersistence = 'use_persistent';
@@ -149,9 +174,9 @@
     if (!launchModal.config) return;
     const result = await launchInstance(launchModal.config.id, launchPersistence);
     if (result.error) {
-      if (result.quota) {
+      if (result.rejection) {
         launchModal = { open: false, config: null };
-        quotaNotice = { error: result.error, quota: result.quota };
+        rejectionNotice = { error: result.error, rejection: result.rejection };
       } else {
         alert(result.error);
       }
@@ -193,8 +218,8 @@
 
   async function onAction(inst: Instance, action: 'start' | 'stop' | 'pause' | 'unpause') {
     const result = await performAction(inst.id, action);
-    if (result.quota) {
-      quotaNotice = { error: result.error ?? '', quota: result.quota };
+    if (result.rejection) {
+      rejectionNotice = { error: result.error ?? '', rejection: result.rejection };
       return;
     }
     if (result.status) {
@@ -210,15 +235,15 @@
     }
   }
 
-  const myInstances = $derived(instances);
+  const myInstances = $derived(instances.filter(i => mayControlInstance($auth, i)));
   const runningInstances = $derived(myInstances.filter(i => i.status === 'running'));
   const pausedInstances = $derived(myInstances.filter(i => i.status === 'paused'));
   const stoppedInstances = $derived(myInstances.filter(i => i.status === 'stopped'));
   const errorInstances = $derived(myInstances.filter(i => i.status === 'error'));
 
-  const uniqueUsers = $derived([...new Set(instances.map(i => i.owner_username).filter(Boolean))].sort());
+  const uniqueUsers = $derived([...new Set(myInstances.map(i => i.owner_username).filter(Boolean))].sort());
   const filteredInstances = $derived(
-    instances.filter(i => {
+    myInstances.filter(i => {
       if (filterUser && i.owner_username !== filterUser) return false;
       if (filterStatus && i.status !== filterStatus) return false;
       return true;
@@ -232,89 +257,6 @@
     error: 'dot-error',
     starting: 'dot-starting',
   };
-
-  function canControlInstance(inst: Instance): boolean {
-    if (inst.owner_id === $auth?.id) return true;
-    if ($auth?.role === 'admin') return true;
-    if ($auth?.role === 'manager' && inst.owner_role === 'user') return true;
-    return false;
-  }
-
-  function canEditUser(user: { role: string }): boolean {
-    if (user.role === 'admin') return false;
-    if ($auth?.role === 'manager' && user.role === 'manager') return false;
-    return true;
-  }
-
-  function canDeleteUser(user: { role: string }): boolean {
-    if (user.role === 'admin') return false;
-    if ($auth?.role === 'manager' && user.role === 'manager') return false;
-    return true;
-  }
-
-  function openEditUser(user: UserRow) {
-    editingUser = user;
-    userForm = { username: user.username, password: '', role: user.role, ...quotaFormFromUser(user) };
-    showUserModal = true;
-    userFormError = '';
-  }
-
-  async function onSubmitUser() {
-    userFormError = '';
-    const { api } = await import('$lib/api/client');
-
-    if (editingUser) {
-      const editingId = editingUser.id;
-      const body: Record<string, string | number | null> = {};
-      if (userForm.username) body.username = userForm.username;
-      if (userForm.password) body.password = userForm.password;
-      if (userForm.role) body.role = userForm.role;
-      if (isAdmin) {
-        const overrides = buildQuotaOverrides(userForm);
-        body.instance_limit = overrides.instance_limit;
-        body.max_cpu_cores = overrides.max_cpu_cores;
-        body.max_ram_bytes = overrides.max_ram_bytes;
-      }
-      const res = await api.put<{ user: UserRow }>(`/users/${editingId}`, body);
-      if (res.error) {
-        userFormError = res.error;
-        return;
-      }
-      const updated = res.data?.user;
-      if (updated) {
-        users = users.map(u => u.id === editingId ? updated : u);
-      }
-    } else {
-      if (!userForm.username || !userForm.password) {
-        userFormError = 'Username and password are required';
-        return;
-      }
-      const res = await api.post<{ user: UserRow }>('/users', {
-        username: userForm.username,
-        password: userForm.password,
-        role: userForm.role,
-      });
-      if (res.error) {
-        userFormError = res.error;
-        return;
-      }
-      if (res.data?.user) {
-        users = [...users, res.data.user];
-      }
-    }
-    showUserModal = false;
-    editingUser = null;
-    userForm = { username: '', password: '', role: 'user', ...emptyQuotaForm() };
-  }
-
-  async function onDeleteUser(user: { id: string; username: string }) {
-    if (!confirm(`Delete user "${user.username}"?`)) return;
-    const { api } = await import('$lib/api/client');
-    const res = await api.delete(`/users/${user.id}`);
-    if (!res.error) {
-      users = users.filter(u => u.id !== user.id);
-    }
-  }
 </script>
 
 <div class="dashboard">
@@ -334,51 +276,138 @@
     </div>
 
     <nav class="nav-list">
-      <button
-        class="nav-item"
-        class:active={activeTab === 'instances'}
-        onclick={() => navigateTab('instances')}
-      >
-        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <rect x="2" y="3" width="20" height="14" rx="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" />
-        </svg>
-        {#if sidebarOpen}<span class="nav-text">Instances</span>{/if}
-      </button>
-
-      {#if canManage}
-        <button
-          class="nav-item"
-          class:active={activeTab === 'templates'}
-          onclick={() => navigateTab('templates')}
-        >
-          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-          </svg>
-          {#if sidebarOpen}<span class="nav-text">Templates</span>{/if}
-        </button>
+      <div class="nav-section">
+        {#if sidebarOpen}
+          <span class="nav-section-label">Workspaces</span>
+        {/if}
 
         <button
           class="nav-item"
-          class:active={activeTab === 'sessions'}
-          onclick={() => navigateTab('sessions')}
+          class:active={activeTab === 'instances'}
+          onclick={() => navigateTab('instances')}
         >
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" />
+            <rect x="2" y="3" width="20" height="14" rx="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" />
           </svg>
-          {#if sidebarOpen}<span class="nav-text">Sessions</span>{/if}
+          {#if sidebarOpen}<span class="nav-text">Instances</span>{/if}
         </button>
 
-        <button
-          class="nav-item"
-          class:active={activeTab === 'users'}
-          onclick={() => { navigateTab('users'); loadUsers(); }}
-        >
-          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
-          </svg>
-          {#if sidebarOpen}<span class="nav-text">Users</span>{/if}
-        </button>
-      {/if}
+        {#if canManage}
+          <button
+            class="nav-item"
+            class:active={activeTab === 'templates'}
+            onclick={() => navigateTab('templates')}
+          >
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+            </svg>
+            {#if sidebarOpen}<span class="nav-text">Templates</span>{/if}
+          </button>
+
+          <button
+            class="nav-item"
+            class:active={activeTab === 'sessions'}
+            onclick={() => navigateTab('sessions')}
+          >
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="2" width="20" height="8" rx="2" /><rect x="2" y="14" width="20" height="8" rx="2" /><line x1="6" y1="6" x2="6.01" y2="6" /><line x1="6" y1="18" x2="6.01" y2="18" />
+            </svg>
+            {#if sidebarOpen}<span class="nav-text">Sessions</span>{/if}
+          </button>
+        {/if}
+
+        {#if $canManageUsers}
+          <button
+            class="nav-item"
+            class:active={activeTab === 'volumes'}
+            onclick={() => navigateTab('volumes')}
+          >
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 12H2" /><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" /><line x1="6" y1="16" x2="6.01" y2="16" /><line x1="10" y1="16" x2="10.01" y2="16" />
+            </svg>
+            {#if sidebarOpen}<span class="nav-text">Volumes</span>{/if}
+          </button>
+        {/if}
+      </div>
+
+      <div class="nav-section">
+        {#if sidebarOpen}
+          <span class="nav-section-label">RBAC</span>
+        {/if}
+
+        {#if $isAdmin}
+          <button
+            class="nav-item"
+            class:active={activeTab === 'groups'}
+            onclick={() => navigateTab('groups')}
+          >
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" />
+            </svg>
+            {#if sidebarOpen}<span class="nav-text">Groups</span>{/if}
+          </button>
+        {/if}
+
+        {#if $canManageUsers}
+          <button
+            class="nav-item"
+            class:active={activeTab === 'users'}
+            onclick={() => navigateTab('users')}
+          >
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
+            </svg>
+            {#if sidebarOpen}<span class="nav-text">Users</span>{/if}
+          </button>
+        {/if}
+      </div>
+
+      <div class="nav-section">
+        {#if sidebarOpen}
+          <span class="nav-section-label">Server</span>
+        {/if}
+
+        {#if $isAdmin}
+          <button
+            class="nav-item"
+            class:active={activeTab === 'settings'}
+            onclick={() => navigateTab('settings')}
+          >
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+            {#if sidebarOpen}<span class="nav-text">Settings</span>{/if}
+          </button>
+
+          <button
+            class="nav-item"
+            class:active={activeTab === 'monitor'}
+            onclick={() => navigateTab('monitor')}
+          >
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 3v18h18" /><path d="M7 14l4-4 3 3 5-6" />
+            </svg>
+            {#if sidebarOpen}
+              <span class="nav-text">Monitor</span>
+              <span class="nav-badge">TODO</span>
+            {/if}
+          </button>
+
+          <button
+            class="nav-item"
+            class:active={activeTab === 'logs'}
+            onclick={() => navigateTab('logs')}
+          >
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /><path d="M8 13h8" /><path d="M8 17h8" /><path d="M8 9h2" />
+            </svg>
+            {#if sidebarOpen}
+              <span class="nav-text">Logs</span>
+              <span class="nav-badge">TODO</span>
+            {/if}
+          </button>
+        {/if}
+      </div>
     </nav>
 
     <div class="sidebar-bottom">
@@ -398,28 +427,48 @@
     <div class="settings-overlay" onclick={() => showSettings = false} role="presentation"></div>
     <div class="settings-panel">
       <div class="settings-header">
-        <h2 class="settings-title">Settings</h2>
+        <h2 class="settings-title">Account</h2>
         <button class="settings-close" onclick={() => showSettings = false}>&times;</button>
       </div>
       <div class="settings-section">
-        <span class="settings-label">SSH ProxyCommand</span>
-        <p class="settings-desc">Use this command to connect directly from your terminal.</p>
-        <code class="settings-code">ssh -J gateway.openworkspace.engine:2222 instance@&lt;instance-id&gt;</code>
-      </div>
-      <div class="settings-section">
-        <span class="settings-label">Account</span>
+        <span class="settings-label">Change Password</span>
+        <p class="settings-desc">Update your account password.</p>
+        <div class="settings-row col">
+          <input
+            id="pw-current"
+            class="modal-input"
+            type="password"
+            placeholder="Current password"
+            bind:value={pwCurrent}
+          />
+        </div>
+        <div class="settings-row col">
+          <input
+            id="pw-new"
+            class="modal-input"
+            type="password"
+            placeholder="New password"
+            bind:value={pwNew}
+          />
+        </div>
+        {#if pwError}
+          <div class="error-badge">{pwError}</div>
+        {/if}
+        {#if pwSuccess}
+          <span class="pw-saved">Password updated</span>
+        {/if}
         <div class="settings-row">
-          <span class="settings-value">Developer</span>
-          <button class="settings-action" onclick={() => auth.logout()}>Sign Out</button>
+          <button class="modal-confirm" onclick={onChangePassword} disabled={pwSaving}>
+            {pwSaving ? 'Saving...' : 'Update Password'}
+          </button>
         </div>
       </div>
       <div class="settings-section">
-        <span class="settings-label">License</span>
-        <span class="settings-value">Apache 2.0 &mdash; Open Source</span>
+        <span class="settings-label">Session</span>
+        <div class="settings-row">
+          <button class="settings-action" onclick={() => auth.logout()}>Sign Out</button>
+        </div>
       </div>
-      {#if isAdmin}
-        <AdminSettings />
-      {/if}
     </div>
   {/if}
 
@@ -457,59 +506,11 @@
     </div>
   {/if}
 
-  <QuotaModal
-    error={quotaNotice?.error ?? ''}
-    quota={quotaNotice?.quota ?? null}
-    onclose={() => quotaNotice = null}
+  <RejectionNotice
+    error={rejectionNotice?.error ?? ''}
+    rejection={rejectionNotice?.rejection ?? null}
+    onclose={() => rejectionNotice = null}
   />
-
-  {#if showUserModal}
-    <div class="modal-overlay" onclick={() => { showUserModal = false; editingUser = null; }} role="presentation"></div>
-    <div class="modal-card">
-      <h3 class="modal-title">{editingUser ? 'Edit User' : 'Create User'}</h3>
-      <form onsubmit={(e) => { e.preventDefault(); onSubmitUser(); }}>
-        <div class="modal-field">
-          <label for="user-username" class="modal-label">Username</label>
-          <input id="user-username" class="modal-input" type="text" bind:value={userForm.username} disabled={!!editingUser} required />
-        </div>
-        <div class="modal-field">
-          <label for="user-password" class="modal-label">{editingUser ? 'New Password (leave blank to keep)' : 'Password'}</label>
-          <input id="user-password" class="modal-input" type="password" bind:value={userForm.password} required={!editingUser} />
-        </div>
-        <div class="modal-field">
-          <label for="user-role" class="modal-label">Role</label>
-          <select id="user-role" class="modal-select" bind:value={userForm.role} disabled={editingUser?.role === 'admin'}>
-            <option value="user">User</option>
-            {#if isAdmin}
-              <option value="manager">Manager</option>
-              <option value="admin">Admin</option>
-            {/if}
-          </select>
-        </div>
-        {#if editingUser && isAdmin}
-          <div class="modal-field">
-            <label for="user-instance-limit" class="modal-label">Instance Limit (empty = role default)</label>
-            <input id="user-instance-limit" class="modal-input" type="number" min="0" step="1" bind:value={userForm.instance_limit} />
-          </div>
-          <div class="modal-field">
-            <label for="user-max-cpu" class="modal-label">Max CPU Cores (empty = role default)</label>
-            <input id="user-max-cpu" class="modal-input" type="number" min="0" step="1" bind:value={userForm.max_cpu_cores} />
-          </div>
-          <div class="modal-field">
-            <label for="user-max-ram" class="modal-label">Max RAM Bytes (empty = role default)</label>
-            <input id="user-max-ram" class="modal-input" type="number" min="0" step="1" bind:value={userForm.max_ram_bytes} />
-          </div>
-        {/if}
-        {#if userFormError}
-          <div class="error-badge">{userFormError}</div>
-        {/if}
-        <div class="modal-actions">
-          <button type="button" class="modal-cancel" onclick={() => { showUserModal = false; editingUser = null; }}>Cancel</button>
-          <button type="submit" class="modal-confirm">{editingUser ? 'Save' : 'Create'}</button>
-        </div>
-      </form>
-    </div>
-  {/if}
 
   <main class="main-content">
     {#if loading}
@@ -518,6 +519,7 @@
     {:else if activeTab === 'instances'}
       <section class="ws-section">
         <h2 class="section-title">Instances</h2>
+        <p class="section-desc">Effective ceiling: {effectiveLimitLabel} instances · Allowed templates: {allowedTemplateLabel}</p>
         {#if myInstances.length === 0}
           <p class="empty-text">No instances yet. Launch a template to get started.</p>
         {:else}
@@ -541,7 +543,7 @@
                   <span class="ws-id">{inst.id.slice(0, 8)}</span>
                 </div>
                 <div class="ws-actions">
-                  {#if canControlInstance(inst)}
+                  {#if mayControlInstance($auth, inst)}
                     <div class="action-buttons">
                       {#if inst.status === 'running'}
                         {#if inst.access_token}
@@ -569,10 +571,12 @@
         <h2 class="section-title">Quick Launch</h2>
         <p class="section-desc">Pick a template to spin up a new instance.</p>
         <div class="template-grid">
-          {#each configs as config}
-            <button class="template-card" onclick={() => openLaunch(config)}>
+          {#each quickLaunchTemplates as config}
+            {@const launchable = mayLaunchTemplate($auth, config)}
+            <button class="template-card" class:locked={!launchable} onclick={() => openLaunch(config)}>
               <span class="template-icon">{getTemplateIcon(config.name)}</span>
               <span class="template-name">{config.name}</span>
+              <span class="template-access">{launchable ? 'Allowed' : 'Not allowed'}</span>
             </button>
           {/each}
         </div>
@@ -647,7 +651,7 @@
                     </td>
                     <td class="td-date">{new Date(inst.created_at).toLocaleDateString()}</td>
                     <td class="td-actions">
-                      {#if canControlInstance(inst)}
+                      {#if mayControlInstance($auth, inst)}
                         <div class="action-buttons">
                           {#if inst.status === 'running'}
                             <button class="launch-btn pause sm" onclick={() => onAction(inst, 'pause')}>Pause</button>
@@ -672,66 +676,14 @@
         {/if}
       </section>
 
-    {:else if activeTab === 'users' && canManage}
-      <section class="ws-section">
-        <div class="section-header">
-          <h2 class="section-title">User Management</h2>
-          <button class="btn-create" onclick={() => showUserModal = true}>+ New User</button>
-        </div>
+    {:else if activeTab === 'users' && $canManageUsers}
+      <UserManagementPanel ctx={$auth} />
 
-        {#if usersLoading}
-          <p class="empty-text">Loading users...</p>
-        {:else if users.length === 0}
-          <p class="empty-text">No users found.</p>
-        {:else}
-          <div class="instances-table-wrap">
-            <table class="instances-table">
-              <thead>
-                <tr>
-                  <th>Username</th>
-                  <th>Role</th>
-                  <th>Quota</th>
-                  <th>Created</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each users as user}
-                  <tr>
-                    <td class="td-name">
-                      <span class="td-name-text">{user.username}</span>
-                      <span class="td-id">{user.id.slice(0, 8)}</span>
-                    </td>
-                    <td>
-                      <span class="status-badge {user.role === 'admin' ? 'dot-active' : ''}">{user.role}</span>
-                    </td>
-                    <td class="td-quota">
-                      {#if user.quota_exempt}
-                        <span class="status-badge dot-active">Exempt</span>
-                      {:else}
-                        <span class="td-quota-text">
-                          {user.effective_instance_limit} inst · {user.effective_max_cpu_cores} cores · {formatMemory(user.effective_max_ram_bytes)}
-                        </span>
-                      {/if}
-                    </td>
-                    <td class="td-date">{new Date(user.created_at).toLocaleDateString()}</td>
-                    <td class="td-actions">
-                      <div class="action-buttons">
-                        {#if canEditUser(user)}
-                          <button class="launch-btn pause sm" onclick={() => openEditUser(user)}>Edit</button>
-                        {/if}
-                        {#if canDeleteUser(user)}
-                          <button class="launch-btn remove sm" onclick={() => onDeleteUser(user)}>Delete</button>
-                        {/if}
-                      </div>
-                    </td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
-        {/if}
-      </section>
+    {:else if activeTab === 'groups' && $isAdmin}
+      <GroupPanel ctx={$auth} templates={configs} />
+
+    {:else if activeTab === 'volumes' && $canManageUsers}
+      <OrphanedVolumesPanel ctx={$auth} />
 
     {:else if activeTab === 'templates'}
       <TemplatePanel
@@ -740,7 +692,25 @@
         bind:dirty={panelDirty}
         onnavigate={navigateToHash}
         ondelete={onDeleteConfig}
+        ctx={$auth}
       />
+
+    {:else if activeTab === 'settings' && $isAdmin}
+      <AdminSettings />
+
+    {:else if activeTab === 'monitor' && $isAdmin}
+      <section class="ws-section">
+        <h2 class="section-title">Monitor</h2>
+        <p class="section-desc">Resource monitoring.</p>
+        <p class="empty-text">Not implemented yet. (待辦)</p>
+      </section>
+
+    {:else if activeTab === 'logs' && $isAdmin}
+      <section class="ws-section">
+        <h2 class="section-title">Logs</h2>
+        <p class="section-desc">Server logs.</p>
+        <p class="empty-text">Not implemented yet. (待辦)</p>
+      </section>
     {/if}
   </main>
 </div>
@@ -818,8 +788,24 @@
   .nav-list {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 1.1rem;
     margin-top: 1.5rem;
+  }
+
+  .nav-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .nav-section-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #52525b;
+    padding: 0 0.75rem 0.25rem;
+    white-space: nowrap;
   }
 
   .nav-item {
@@ -850,6 +836,19 @@
   .nav-text {
     font-size: 0.85rem;
     font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .nav-badge {
+    font-size: 0.62rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    color: #a78bfa;
+    background: rgba(139, 92, 246, 0.12);
+    border: 1px solid rgba(139, 92, 246, 0.25);
+    border-radius: 4px;
+    padding: 1px 5px;
+    margin-left: auto;
     white-space: nowrap;
   }
 
@@ -966,23 +965,26 @@
 
   .settings-desc { font-size: 0.8rem; color: #a1a1aa; margin: 0; }
 
-  .settings-code {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.75rem;
-    color: #a1a1aa;
-    padding: 0.5rem;
-    background: rgba(0, 0, 0, 0.4);
-    border-radius: 4px;
-    display: block;
-  }
-
   .settings-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
   }
 
+  .settings-row.col {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    margin-bottom: 0.75rem;
+  }
+
   .settings-value { font-size: 0.85rem; color: #d4d4d8; }
+
+  .pw-saved {
+    font-size: 0.75rem;
+    color: #4ade80;
+    margin-bottom: 0.75rem;
+  }
 
   .settings-action {
     background: rgba(239, 68, 68, 0.1);
@@ -1096,15 +1098,6 @@
   }
 
   .ws-section { margin-bottom: 2.5rem; }
-
-  .section-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 1rem;
-  }
-
-  .section-header .section-title { margin: 0; }
 
   .section-title {
     font-size: 0.7rem;
@@ -1339,6 +1332,29 @@
     max-width: 100%;
   }
 
+  .template-card.locked {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .template-card.locked:hover {
+    border-color: rgba(255, 255, 255, 0.06);
+    background: rgba(20, 20, 26, 0.6);
+    transform: none;
+  }
+
+  .template-access {
+    font-size: 0.62rem;
+    font-weight: 600;
+    color: #4ade80;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .template-card.locked .template-access {
+    color: #71717a;
+  }
+
   /* Filter Bar */
   .filter-bar {
     display: flex;
@@ -1413,24 +1429,138 @@
     margin-top: 0.5rem;
   }
 
-  /* Instances Table */
-  .instances-table-wrap {
+  /* Shared table + panel chrome (used by the Instances view and the
+     Groups/Users/Volumes admin panels, which are child components) */
+  :global(.panel-card) {
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 14px;
+    padding: 1.25rem;
+  }
+
+  :global(.panel-head) {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1.25rem;
+  }
+
+  :global(.panel-head-title) {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #f4f4f5;
+    margin: 0;
+  }
+
+  :global(.panel-head-desc) {
+    font-size: 0.8rem;
+    color: #71717a;
+    margin: 0.25rem 0 0;
+  }
+
+  :global(.panel-toolbar) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 1rem;
+  }
+
+  :global(.panel-search-wrap) {
+    position: relative;
+    flex: 1 1 240px;
+    min-width: 200px;
+  }
+
+  :global(.panel-search) {
+    width: 100%;
+    box-sizing: border-box;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 0.55rem 0.75rem 0.55rem 2.1rem;
+    color: #f4f4f5;
+    font-size: 0.82rem;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+
+  :global(.panel-search::placeholder) { color: #52525b; }
+
+  :global(.panel-search:focus) {
+    border-color: #818cf8;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+  }
+
+  :global(.panel-search-icon) {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 14px;
+    height: 14px;
+    color: #52525b;
+    pointer-events: none;
+  }
+
+  :global(.panel-select) {
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 0.55rem 0.75rem;
+    color: #d4d4d8;
+    font-size: 0.8rem;
+    font-family: inherit;
+    outline: none;
+    cursor: pointer;
+    transition: border-color 0.2s;
+  }
+
+  :global(.panel-select:focus) { border-color: #818cf8; }
+
+  :global(.panel-count) {
+    margin-left: auto;
+    font-size: 0.75rem;
+    color: #71717a;
+    white-space: nowrap;
+  }
+
+  :global(.panel-clear) {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #a1a1aa;
+    font-size: 0.72rem;
+    padding: 0.45rem 0.75rem;
+    border-radius: 8px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.2s;
+  }
+
+  :global(.panel-clear:hover) {
+    color: #f4f4f5;
+    border-color: rgba(255, 255, 255, 0.25);
+  }
+
+  :global(.instances-table-wrap) {
     overflow-x: auto;
     border: 1px solid rgba(255, 255, 255, 0.06);
     border-radius: 10px;
   }
 
-  .instances-table {
+  :global(.instances-table) {
     width: 100%;
     border-collapse: collapse;
     font-size: 0.8rem;
   }
 
-  .instances-table thead {
+  :global(.instances-table thead) {
     background: rgba(0, 0, 0, 0.3);
   }
 
-  .instances-table th {
+  :global(.instances-table th) {
     text-align: left;
     padding: 0.65rem 0.75rem;
     font-size: 0.65rem;
@@ -1442,44 +1572,47 @@
     white-space: nowrap;
   }
 
-  .instances-table td {
+  :global(.instances-table td) {
     padding: 0.6rem 0.75rem;
     border-bottom: 1px solid rgba(255, 255, 255, 0.04);
     color: #d4d4d8;
     vertical-align: middle;
   }
 
-  .instances-table tbody tr:hover {
+  :global(.instances-table tbody tr:hover) {
     background: rgba(255, 255, 255, 0.02);
   }
 
-  .instances-table tbody tr:last-child td {
+  :global(.instances-table tbody tr:last-child td) {
     border-bottom: none;
   }
 
-  .td-name {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
+  :global(.td-name) { min-width: 0; }
 
-  .td-name-text { font-weight: 600; color: #f4f4f5; }
+  :global(.td-name-text) { display: block; font-weight: 600; color: #f4f4f5; }
 
-  .td-id {
+  :global(.td-id) {
+    display: block;
     font-family: monospace;
     font-size: 0.65rem;
     color: #52525b;
+    margin-top: 2px;
   }
 
-  .td-owner { color: #a1a1aa; }
+  :global(.td-owner) { color: #a1a1aa; }
 
-  .td-date {
+  :global(.td-date) {
     font-size: 0.75rem;
     color: #71717a;
     white-space: nowrap;
   }
 
-  .td-actions { white-space: nowrap; }
+  :global(.td-actions) { white-space: nowrap; }
+
+  :global(.instances-table th:first-child),
+  :global(.instances-table td:first-child) {
+    min-width: 190px;
+  }
 
   .status-badge {
     display: inline-flex;

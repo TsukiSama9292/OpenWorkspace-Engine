@@ -1,6 +1,7 @@
 mod templates;
 mod docker_raw;
 mod instances;
+mod persistent_volumes;
 mod registry;
 
 use axum::Router;
@@ -12,5 +13,6 @@ pub fn routes() -> Router<AppState> {
         .merge(templates::routes())
         .merge(instances::routes())
         .merge(docker_raw::routes())
+        .merge(persistent_volumes::routes())
         .merge(registry::routes())
 }

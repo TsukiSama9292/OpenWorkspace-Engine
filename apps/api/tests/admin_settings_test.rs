@@ -45,11 +45,7 @@ async fn test_put_settings_forbidden_for_user() {
 
     let resp = ctx
         .put("/api/admin/settings", &serde_json::json!({
-            "max_cpu_cores": 1,
-            "max_ram_bytes": 1,
             "host_instance_limit": 0,
-            "shared_max_cpu": 0,
-            "shared_max_ram": 0,
         }))
         .await;
     assert_eq!(resp.status(), 403);
@@ -64,11 +60,7 @@ async fn test_get_settings_admin_returns_migration_defaults() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     let s = &body["settings"];
-    assert_eq!(s["max_cpu_cores"], 8);
-    assert_eq!(s["max_ram_bytes"], 17179869184i64);
     assert_eq!(s["host_instance_limit"], 0);
-    assert_eq!(s["shared_max_cpu"], 0);
-    assert_eq!(s["shared_max_ram"], 0);
 }
 
 #[tokio::test]
@@ -78,32 +70,20 @@ async fn test_put_settings_admin_updates_and_persists() {
 
     let resp = ctx
         .put("/api/admin/settings", &serde_json::json!({
-            "max_cpu_cores": 32,
-            "max_ram_bytes": 68719476736i64,
             "host_instance_limit": 10,
-            "shared_max_cpu": 8,
-            "shared_max_ram": 8 * 1024 * 1024 * 1024i64,
         }))
         .await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     let s = &body["settings"];
-    assert_eq!(s["max_cpu_cores"], 32);
-    assert_eq!(s["max_ram_bytes"], 68719476736i64);
     assert_eq!(s["host_instance_limit"], 10);
-    assert_eq!(s["shared_max_cpu"], 8);
-    assert_eq!(s["shared_max_ram"], 8 * 1024 * 1024 * 1024i64);
 
     // Values persisted: a fresh read returns the edited row.
     let resp = ctx.get("/api/admin/settings").await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     let s = &body["settings"];
-    assert_eq!(s["max_cpu_cores"], 32);
-    assert_eq!(s["max_ram_bytes"], 68719476736i64);
     assert_eq!(s["host_instance_limit"], 10);
-    assert_eq!(s["shared_max_cpu"], 8);
-    assert_eq!(s["shared_max_ram"], 8 * 1024 * 1024 * 1024i64);
 }
 
 #[tokio::test]
@@ -112,11 +92,7 @@ async fn test_put_settings_rejects_negative_values() {
     ctx.login_admin().await;
 
     let cases = [
-        serde_json::json!({ "max_cpu_cores": -1, "max_ram_bytes": 1, "host_instance_limit": 0, "shared_max_cpu": 0, "shared_max_ram": 0 }),
-        serde_json::json!({ "max_cpu_cores": 1, "max_ram_bytes": -1, "host_instance_limit": 0, "shared_max_cpu": 0, "shared_max_ram": 0 }),
-        serde_json::json!({ "max_cpu_cores": 1, "max_ram_bytes": 1, "host_instance_limit": -2, "shared_max_cpu": 0, "shared_max_ram": 0 }),
-        serde_json::json!({ "max_cpu_cores": 1, "max_ram_bytes": 1, "host_instance_limit": 0, "shared_max_cpu": -3, "shared_max_ram": 0 }),
-        serde_json::json!({ "max_cpu_cores": 1, "max_ram_bytes": 1, "host_instance_limit": 0, "shared_max_cpu": 0, "shared_max_ram": -4 }),
+        serde_json::json!({ "host_instance_limit": -2 }),
     ];
     for body in cases {
         let resp = ctx.put("/api/admin/settings", &body).await;
@@ -131,11 +107,7 @@ async fn test_put_settings_accepts_zero_values() {
 
     let resp = ctx
         .put("/api/admin/settings", &serde_json::json!({
-            "max_cpu_cores": 0,
-            "max_ram_bytes": 0,
             "host_instance_limit": 0,
-            "shared_max_cpu": 0,
-            "shared_max_ram": 0,
         }))
         .await;
     assert_eq!(resp.status(), 200);

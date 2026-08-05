@@ -1,5 +1,5 @@
-import type { ApiResult, QuotaPayload } from '$lib/types';
-import { isQuotaPayload } from '$lib/quota';
+import type { ApiResult, PreflightRejection } from '$lib/types';
+import { isPreflightRejection } from '$lib/types';
 
 const BASE = '/api';
 
@@ -27,9 +27,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
       const msg = payload && typeof payload.error === 'string'
         ? payload.error
         : `Request failed (${res.status})`;
-      const quota: QuotaPayload | undefined =
-        payload && isQuotaPayload(payload.quota) ? payload.quota : undefined;
-      return { error: msg, status: res.status, quota };
+      const rejection: PreflightRejection | undefined =
+        payload && isPreflightRejection(payload.rejection) ? payload.rejection : undefined;
+      return { error: msg, status: res.status, rejection };
     }
 
     return { data: data as T };

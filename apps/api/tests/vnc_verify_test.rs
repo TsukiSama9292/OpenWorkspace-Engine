@@ -137,7 +137,6 @@ async fn test_vnc_verify_db_hit_running() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     assert!(resp.headers().contains_key("x-forwarded-user"));
-    assert!(resp.headers().contains_key("x-forwarded-role"));
 }
 
 #[tokio::test]

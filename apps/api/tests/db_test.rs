@@ -1,10 +1,16 @@
 mod common;
 
 use openworkspace_api::db::*;
-use sea_orm::DatabaseConnection;
+use openworkspace_api::effective_context::TemplateVisibility;
 use migration::MigratorTrait;
+use sea_orm::ConnectionTrait;
+use sea_orm::DatabaseConnection;
 
 async fn setup_db() -> DatabaseConnection {
+    setup_db_with_steps(None).await
+}
+
+async fn setup_db_with_steps(steps: Option<u32>) -> DatabaseConnection {
     common::ensure_pg().await;
 
     static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -40,7 +46,7 @@ async fn setup_db() -> DatabaseConnection {
     let migrator_db = sea_orm::Database::connect(&db_url)
         .await
         .expect("failed to connect for migrations");
-    migration::Migrator::up(&migrator_db, None)
+    migration::Migrator::up(&migrator_db, steps)
         .await
         .expect("failed to run migrations");
     drop(migrator_db);
@@ -62,6 +68,383 @@ async fn migrations_round_trip() {
         .expect("failed to re-apply migrations");
 }
 
+// ── Flat-RBAC migration tests ────────────────────────────────
+
+async fn query_scalar<T>(db: &DatabaseConnection, sql: &str) -> T
+where
+    T: sea_orm::TryGetable,
+{
+    let result = db
+        .query_one(sea_orm::Statement::from_string(
+            sea_orm::DatabaseBackend::Postgres,
+            sql.to_string(),
+        ))
+        .await
+        .expect("raw query failed")
+        .expect("expected a result row");
+    result
+        .try_get("", "value")
+        .expect("failed to read scalar value")
+}
+
+async fn query_scalar_nullable<T>(db: &DatabaseConnection, sql: &str) -> Option<T>
+where
+    T: sea_orm::TryGetable,
+{
+    let result = db
+        .query_one(sea_orm::Statement::from_string(
+            sea_orm::DatabaseBackend::Postgres,
+            sql.to_string(),
+        ))
+        .await
+        .expect("raw query failed")
+        .expect("expected a result row");
+    result
+        .try_get_nullable("", "value")
+        .expect("failed to read scalar value")
+}
+
+async fn group_membership_count(db: &DatabaseConnection, group_name: &str, user_id: uuid::Uuid) -> i64 {
+    query_scalar(
+        db,
+        &format!(
+            "SELECT count(*) AS value FROM user_groups ug JOIN groups g ON g.id = ug.group_id \
+             WHERE g.name = '{}' AND ug.user_id = '{}'",
+            group_name, user_id
+        ),
+    )
+    .await
+}
+
+async fn group_kind(db: &DatabaseConnection, group_name: &str) -> Option<String> {
+    query_scalar_nullable(
+        db,
+        &format!(
+            "SELECT kind AS value FROM groups WHERE name = '{}'",
+            group_name
+        ),
+    )
+    .await
+}
+
+async fn group_flag(db: &DatabaseConnection, group_name: &str, flag: &str) -> bool {
+    query_scalar(
+        db,
+        &format!("SELECT {} AS value FROM groups WHERE name = '{}'", flag, group_name),
+    )
+    .await
+}
+
+async fn group_max_instances(db: &DatabaseConnection, group_name: &str) -> Option<i32> {
+    query_scalar_nullable(
+        db,
+        &format!(
+            "SELECT max_instances AS value FROM groups WHERE name = '{}'",
+            group_name
+        ),
+    )
+    .await
+}
+
+async fn group_id(db: &DatabaseConnection, group_name: &str) -> uuid::Uuid {
+    query_scalar(
+        db,
+        &format!("SELECT id AS value FROM groups WHERE name = '{}'", group_name),
+    )
+    .await
+}
+
+async fn user_direct_max_instances(db: &DatabaseConnection, user_id: uuid::Uuid) -> Option<i32> {
+    query_scalar_nullable(
+        db,
+        &format!(
+            "SELECT direct_max_instances AS value FROM users WHERE id = '{}'",
+            user_id
+        ),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn flat_rbac_migration_creates_tables_and_seeds_system_groups() {
+    let db = setup_db().await;
+
+    for table in &[
+        "groups",
+        "user_groups",
+        "group_templates",
+        "persistent_volumes",
+    ] {
+        let exists: bool = query_scalar(
+            &db,
+            &format!("SELECT to_regclass('{}') IS NOT NULL AS value", table),
+        )
+        .await;
+        assert!(exists, "expected table {} to exist after migrations", table);
+    }
+
+    // The per-user whitelist is the contract drop of migration 000020.
+    let personal_whitelist: bool = query_scalar(
+        &db,
+        "SELECT to_regclass('user_templates') IS NOT NULL AS value",
+    )
+    .await;
+    assert!(!personal_whitelist, "user_templates must be dropped");
+
+    // The admin boolean is the contract drop of migration 000020.
+    let user_columns: i64 = query_scalar(
+        &db,
+        "SELECT count(*) AS value FROM information_schema.columns \
+         WHERE table_name = 'users' AND column_name IN ('is_system_admin', 'direct_max_instances')",
+    )
+    .await;
+    assert_eq!(user_columns, 1, "only direct_max_instances must remain");
+
+    // The legacy Managers group is renamed to Manager.
+    let managers: i64 =
+        query_scalar(&db, "SELECT count(*) AS value FROM groups WHERE name = 'Managers'").await;
+    assert_eq!(managers, 0, "Managers must be renamed to Manager");
+
+    // Admin group: kind='admin', all five flags TRUE, unlimited (NULL) ceiling.
+    let admin_count: i64 =
+        query_scalar(&db, "SELECT count(*) AS value FROM groups WHERE name = 'Admin'").await;
+    assert_eq!(admin_count, 1, "expected the Admin group to be seeded");
+    assert_eq!(group_kind(&db, "Admin").await.as_deref(), Some("admin"));
+    for flag in &[
+        "can_create_template",
+        "can_manage_users",
+        "can_manage_group_instances",
+        "can_manage_docker",
+        "can_manage_registry",
+    ] {
+        assert!(group_flag(&db, "Admin", flag).await, "Admin {} = TRUE", flag);
+    }
+    assert_eq!(group_max_instances(&db, "Admin").await, None, "Admin is unlimited");
+
+    // Manager group: kind='manager', all five flags TRUE, ceiling 2.
+    let manager_count: i64 =
+        query_scalar(&db, "SELECT count(*) AS value FROM groups WHERE name = 'Manager'").await;
+    assert_eq!(manager_count, 1, "expected the Manager group to be seeded");
+    assert_eq!(group_kind(&db, "Manager").await.as_deref(), Some("manager"));
+    for flag in &[
+        "can_create_template",
+        "can_manage_users",
+        "can_manage_group_instances",
+        "can_manage_docker",
+        "can_manage_registry",
+    ] {
+        assert!(group_flag(&db, "Manager", flag).await, "Manager {} = TRUE", flag);
+    }
+    assert_eq!(group_max_instances(&db, "Manager").await, Some(2));
+
+    // User group: kind='user', all five flags FALSE, ceiling 1.
+    let user_count: i64 =
+        query_scalar(&db, "SELECT count(*) AS value FROM groups WHERE name = 'User'").await;
+    assert_eq!(user_count, 1, "expected the User group to be seeded");
+    assert_eq!(group_kind(&db, "User").await.as_deref(), Some("user"));
+    for flag in &[
+        "can_create_template",
+        "can_manage_users",
+        "can_manage_group_instances",
+        "can_manage_docker",
+        "can_manage_registry",
+    ] {
+        assert!(!group_flag(&db, "User", flag).await, "User {} = FALSE", flag);
+    }
+    assert_eq!(group_max_instances(&db, "User").await, Some(1));
+
+    db.execute(sea_orm::Statement::from_string(
+        sea_orm::DatabaseBackend::Postgres,
+        "INSERT INTO groups (name) VALUES ('defaults')".to_string(),
+    ))
+    .await
+    .unwrap();
+
+    let default_flag: bool = query_scalar(
+        &db,
+        "SELECT can_create_template AS value FROM groups WHERE name = 'defaults'",
+    )
+    .await;
+    assert!(!default_flag, "a fresh custom group should have all flags FALSE");
+    assert_eq!(group_kind(&db, "defaults").await, None, "custom groups have no kind");
+    let default_ceiling: i32 =
+        query_scalar(&db, "SELECT max_instances AS value FROM groups WHERE name = 'defaults'")
+            .await;
+    assert_eq!(default_ceiling, 2);
+}
+
+#[tokio::test]
+async fn flat_rbac_migration_moves_system_admins_and_backfills_admin_whitelist() {
+    // Migrations 1..19 land the legacy flat-RBAC state: the `Managers` group,
+    // `users.is_system_admin`, and the `user_templates` table all exist.
+    let db = setup_db_with_steps(Some(19)).await;
+
+    // Seed the pre-000020 rows a real post-000019 deployment would have.
+    let admin_id = uuid::Uuid::new_v4();
+    let mgr1_id = uuid::Uuid::new_v4();
+    let mgr2_id = uuid::Uuid::new_v4();
+    let plain_id = uuid::Uuid::new_v4();
+    for (id, username) in [
+        (admin_id, "admin1"),
+        (mgr1_id, "mgr1"),
+        (mgr2_id, "mgr2"),
+        (plain_id, "plain"),
+    ] {
+        db.execute(sea_orm::Statement::from_string(
+            sea_orm::DatabaseBackend::Postgres,
+            format!(
+                "INSERT INTO users (id, username, password_hash) VALUES ('{}', '{}', 'hash')",
+                id, username
+            ),
+        ))
+        .await
+        .unwrap();
+    }
+
+    db.execute(sea_orm::Statement::from_string(
+        sea_orm::DatabaseBackend::Postgres,
+        format!(
+            "UPDATE users SET is_system_admin = TRUE WHERE id = '{}'",
+            admin_id
+        ),
+    ))
+    .await
+    .unwrap();
+
+    let managers_id = group_id(&db, "Managers").await;
+    for id in [mgr1_id, mgr2_id] {
+        db.execute(sea_orm::Statement::from_string(
+            sea_orm::DatabaseBackend::Postgres,
+            format!(
+                "INSERT INTO user_groups (user_id, group_id) VALUES ('{}', '{}')",
+                id, managers_id
+            ),
+        ))
+        .await
+        .unwrap();
+    }
+
+    for (id, limit) in [(admin_id, 9), (mgr1_id, 5), (plain_id, 3)] {
+        db.execute(sea_orm::Statement::from_string(
+            sea_orm::DatabaseBackend::Postgres,
+            format!(
+                "UPDATE users SET direct_max_instances = {} WHERE id = '{}'",
+                limit, id
+            ),
+        ))
+        .await
+        .unwrap();
+    }
+
+    // A template exists before the migration so the Admin backfill has
+    // something to grant.
+    let template_id = uuid::Uuid::new_v4();
+    db.execute(sea_orm::Statement::from_string(
+        sea_orm::DatabaseBackend::Postgres,
+        format!(
+            "INSERT INTO workspace_templates (id, name, owner_id) VALUES ('{}', 'pre', '{}')",
+            template_id, admin_id
+        ),
+    ))
+    .await
+    .unwrap();
+
+    migration::Migrator::up(&db, Some(1))
+        .await
+        .expect("failed to apply the system-groups migration");
+
+    // Contract drop: personal whitelist table and admin boolean are gone.
+    let personal_whitelist: bool = query_scalar(
+        &db,
+        "SELECT to_regclass('user_templates') IS NOT NULL AS value",
+    )
+    .await;
+    assert!(!personal_whitelist, "user_templates must be dropped");
+    let admin_columns: i64 = query_scalar(
+        &db,
+        "SELECT count(*) AS value FROM information_schema.columns \
+         WHERE table_name = 'users' AND column_name = 'is_system_admin'",
+    )
+    .await;
+    assert_eq!(admin_columns, 0, "is_system_admin must be dropped");
+
+    // Former system admins move into the Admin group and out of Manager.
+    assert_eq!(group_membership_count(&db, "Admin", admin_id).await, 1);
+    assert_eq!(group_membership_count(&db, "Manager", admin_id).await, 0);
+
+    // Managers stay in the renamed Manager group; nobody else lands in it.
+    assert_eq!(group_membership_count(&db, "Manager", mgr1_id).await, 1);
+    assert_eq!(group_membership_count(&db, "Manager", mgr2_id).await, 1);
+    assert_eq!(group_membership_count(&db, "Admin", mgr1_id).await, 0);
+    assert_eq!(group_membership_count(&db, "Admin", plain_id).await, 0);
+
+    // The Admin group's whitelist is backfilled onto every existing template.
+    let backfilled: i64 = query_scalar(
+        &db,
+        &format!(
+            "SELECT count(*) AS value FROM group_templates gt \
+             JOIN groups g ON g.id = gt.group_id \
+             WHERE g.kind = 'admin' AND gt.template_id = '{}'",
+            template_id
+        ),
+    )
+    .await;
+    assert_eq!(backfilled, 1, "Admin must be whitelisted on pre-existing templates");
+
+    // Personal ceilings survive the expand→contract.
+    assert_eq!(user_direct_max_instances(&db, admin_id).await, Some(9));
+    assert_eq!(user_direct_max_instances(&db, mgr1_id).await, Some(5));
+    assert_eq!(user_direct_max_instances(&db, plain_id).await, Some(3));
+
+    // The seeded system groups carry the spec'd kinds and ceilings.
+    assert_eq!(group_kind(&db, "Admin").await.as_deref(), Some("admin"));
+    assert_eq!(group_kind(&db, "Manager").await.as_deref(), Some("manager"));
+    assert_eq!(group_kind(&db, "User").await.as_deref(), Some("user"));
+    assert_eq!(group_max_instances(&db, "Admin").await, None);
+    assert_eq!(group_max_instances(&db, "Manager").await, Some(2));
+    assert_eq!(group_max_instances(&db, "User").await, Some(1));
+}
+
+#[tokio::test]
+async fn flat_rbac_migration_tolerates_custom_groups_with_system_names() {
+    // Spec Decision 9 keeps `Admin`/`Manager`/`User` legal as custom-group
+    // names; migration 000020 must not crash on them (Standards finding: the
+    // seeding previously collided on the unique name constraint).
+    let db = setup_db_with_steps(Some(19)).await;
+
+    // A pre-000020 deployment with custom groups named exactly like the
+    // system groups that 000020 is about to seed.
+    db.execute(sea_orm::Statement::from_string(
+        sea_orm::DatabaseBackend::Postgres,
+        "INSERT INTO groups (name) VALUES ('Admin'), ('User')".to_string(),
+    ))
+    .await
+    .unwrap();
+
+    migration::Migrator::up(&db, Some(1))
+        .await
+        .expect("migration 000020 must tolerate custom groups holding system names");
+
+    // The system groups are seeded with the canonical names and kinds.
+    assert_eq!(group_kind(&db, "Admin").await.as_deref(), Some("admin"));
+    assert_eq!(group_kind(&db, "User").await.as_deref(), Some("user"));
+    assert_eq!(group_kind(&db, "Manager").await.as_deref(), Some("manager"));
+
+    // The colliding custom groups survive, renamed out of the way.
+    let renamed_admin: i64 = query_scalar(
+        &db,
+        "SELECT count(*) AS value FROM groups WHERE kind IS NULL AND name LIKE 'Admin (custom %'",
+    )
+    .await;
+    assert_eq!(renamed_admin, 1, "custom Admin group must survive renamed");
+    let renamed_user: i64 = query_scalar(
+        &db,
+        "SELECT count(*) AS value FROM groups WHERE kind IS NULL AND name LIKE 'User (custom %'",
+    )
+    .await;
+    assert_eq!(renamed_user, 1, "custom User group must survive renamed");
+}
+
 // ── UserRepository tests ──────────────────────────────────────
 
 #[tokio::test]
@@ -75,7 +458,6 @@ async fn user_seed_admin_creates_admin() {
     assert!(user.is_some());
     let u = user.unwrap();
     assert_eq!(u.username, "admin");
-    assert_eq!(u.role, "admin");
     assert!(!u.id.is_nil());
 }
 
@@ -96,7 +478,7 @@ async fn user_create_and_find_by_id() {
     let db = setup_db().await;
     let repo = UserRepository::new(&db);
 
-    let id = repo.create("alice", "hash123", "user").await.unwrap();
+    let id = repo.create("alice", "hash123").await.unwrap();
 
     let found = repo.find_by_id(id).await.unwrap();
     assert!(found.is_some());
@@ -104,7 +486,6 @@ async fn user_create_and_find_by_id() {
     assert_eq!(u.id, id);
     assert_eq!(u.username, "alice");
     assert_eq!(u.password_hash, "hash123");
-    assert_eq!(u.role, "user");
 }
 
 #[tokio::test]
@@ -121,8 +502,8 @@ async fn user_list_all() {
     let db = setup_db().await;
     let repo = UserRepository::new(&db);
 
-    repo.create("user1", "h1", "user").await.unwrap();
-    repo.create("user2", "h2", "admin").await.unwrap();
+    repo.create("user1", "h1").await.unwrap();
+    repo.create("user2", "h2").await.unwrap();
 
     let users = repo.list_all().await.unwrap();
     assert_eq!(users.len(), 2);
@@ -136,7 +517,7 @@ async fn user_delete() {
     let db = setup_db().await;
     let repo = UserRepository::new(&db);
 
-    let id = repo.create("deleteme", "h", "user").await.unwrap();
+    let id = repo.create("deleteme", "h").await.unwrap();
     let deleted = repo.delete(id).await.unwrap();
     assert!(deleted);
 
@@ -296,6 +677,140 @@ async fn config_update() {
     assert_eq!(found.persistent_storage_path, Some("/new/path".to_string()));
     assert_eq!(found.max_run_seconds, Some(7200));
     assert_eq!(found.timeout_action, "pause");
+}
+
+#[tokio::test]
+async fn template_create_defaults_to_private() {
+    let db = setup_db().await;
+    let template_repo = WorkspaceTemplateRepository::new(&db);
+    let user_repo = UserRepository::new(&db);
+
+    user_repo.seed_admin("pass").await.unwrap();
+    let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
+
+    let config = template_repo
+        .create("cfg", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .await
+        .unwrap();
+
+    assert_eq!(config.visibility, TemplateVisibility::Private);
+}
+
+#[tokio::test]
+async fn template_set_visibility_persists() {
+    let db = setup_db().await;
+    let template_repo = WorkspaceTemplateRepository::new(&db);
+    let user_repo = UserRepository::new(&db);
+
+    user_repo.seed_admin("pass").await.unwrap();
+    let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
+
+    let config = template_repo
+        .create("cfg", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .await
+        .unwrap();
+
+    assert!(template_repo
+        .set_visibility(config.id, TemplateVisibility::Public)
+        .await
+        .unwrap());
+    let found = template_repo.find_by_id(config.id).await.unwrap().unwrap();
+    assert_eq!(found.visibility, TemplateVisibility::Public);
+
+    assert!(template_repo
+        .set_visibility(config.id, TemplateVisibility::Hidden)
+        .await
+        .unwrap());
+    let found = template_repo.find_by_id(config.id).await.unwrap().unwrap();
+    assert_eq!(found.visibility, TemplateVisibility::Hidden);
+
+    assert!(template_repo
+        .set_visibility(config.id, TemplateVisibility::Private)
+        .await
+        .unwrap());
+    let found = template_repo.find_by_id(config.id).await.unwrap().unwrap();
+    assert_eq!(found.visibility, TemplateVisibility::Private);
+}
+
+#[tokio::test]
+async fn template_update_preserves_visibility() {
+    let db = setup_db().await;
+    let template_repo = WorkspaceTemplateRepository::new(&db);
+    let user_repo = UserRepository::new(&db);
+
+    user_repo.seed_admin("pass").await.unwrap();
+    let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
+
+    let config = template_repo
+        .create("cfg", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "docker", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", false)
+        .await
+        .unwrap();
+    assert!(template_repo
+        .set_visibility(config.id, TemplateVisibility::Public)
+        .await
+        .unwrap());
+
+    let updated = template_repo
+        .update(
+            config.id,
+            "new-name",
+            None,
+            "new:img",
+            2,
+            1024,
+            0,
+            None,
+            "kasmvnc",
+            "docker",
+            &serde_json::json!({}),
+            &serde_json::json!({}),
+            &serde_json::json!({}),
+            None,
+            None,
+            "remove",
+            0,
+            0,
+            None,
+            "pause",
+            false,
+        )
+        .await
+        .unwrap();
+    assert!(updated);
+
+    let found = template_repo.find_by_id(config.id).await.unwrap().unwrap();
+    assert_eq!(found.name, "new-name");
+    assert_eq!(found.visibility, TemplateVisibility::Public);
+}
+
+#[tokio::test]
+async fn template_visibility_migration_defaults_existing_rows_to_private() {
+    // A template created before the visibility column existed must land at
+    // `private` once migration 21 runs — the upgrade changes no authorization.
+    let db = setup_db_with_steps(Some(20)).await;
+    let user_repo = UserRepository::new(&db);
+    user_repo.seed_admin("pass").await.unwrap();
+    let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
+
+    let id = uuid::Uuid::new_v4();
+    db.execute(sea_orm::Statement::from_string(
+        sea_orm::DatabaseBackend::Postgres,
+        format!(
+            "INSERT INTO workspace_templates (id, name, owner_id) VALUES ('{}', 'legacy', '{}')",
+            id, admin.id
+        ),
+    ))
+    .await
+    .expect("failed to insert pre-visibility template");
+
+    migration::Migrator::up(&db, Some(21))
+        .await
+        .expect("failed to apply visibility migration");
+
+    let visibility: String =
+        query_scalar(&db, &format!("SELECT visibility AS value FROM workspace_templates WHERE id = '{}'", id))
+            .await;
+    assert_eq!(visibility, "private");
 }
 
 #[tokio::test]
@@ -585,7 +1100,7 @@ async fn instance_list_by_owner() {
     user_repo.seed_admin("pass").await.unwrap();
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
-    user_repo.create("bob", "hash", "user").await.unwrap();
+    user_repo.create("bob", "hash").await.unwrap();
     let bob = user_repo.find_by_username("bob").await.unwrap().unwrap();
 
     let config = template_repo
@@ -872,7 +1387,7 @@ fn config_model_from_converts_all_fields() {
         keep_time_seconds: Some(1800),
         keep_time_action: "pause".to_string(),
         docker_in_instance: false,
-        allocation_mode: "shared".to_string(),
+        visibility: "public".to_string(),
         created_at: now,
         updated_at: now,
     };
@@ -899,7 +1414,7 @@ fn config_model_from_converts_all_fields() {
     assert_eq!(config.network_bandwidth_down_mbps, 50);
     assert_eq!(config.keep_time_seconds, Some(1800));
     assert_eq!(config.keep_time_action, "pause");
-    assert_eq!(config.allocation_mode, "shared");
+    assert_eq!(config.visibility, TemplateVisibility::Public);
 }
 
 #[test]
@@ -927,7 +1442,7 @@ fn config_model_from_null_optionals() {
         keep_time_seconds: None,
         keep_time_action: "remove".to_string(),
         docker_in_instance: false,
-        allocation_mode: "shared".to_string(),
+        visibility: "private".to_string(),
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };
@@ -940,6 +1455,7 @@ fn config_model_from_null_optionals() {
     assert_eq!(config.timeout_action, "remove");
     assert!(config.keep_time_seconds.is_none());
     assert_eq!(config.keep_time_action, "remove");
+    assert_eq!(config.visibility, TemplateVisibility::Private);
 }
 
 #[test]
@@ -967,7 +1483,7 @@ fn config_model_from_container_runtime_runsc() {
         keep_time_seconds: None,
         keep_time_action: "remove".to_string(),
         docker_in_instance: false,
-        allocation_mode: "shared".to_string(),
+        visibility: "hidden".to_string(),
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };
@@ -978,6 +1494,7 @@ fn config_model_from_container_runtime_runsc() {
     assert_eq!(config.timeout_action, "stop");
     assert!(config.keep_time_seconds.is_none());
     assert_eq!(config.keep_time_action, "remove");
+    assert_eq!(config.visibility, TemplateVisibility::Hidden);
 }
 
 #[test]

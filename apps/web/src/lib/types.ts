@@ -1,21 +1,14 @@
-export type Role = 'admin' | 'manager' | 'user';
-
-export interface User {
-  id: string;
-  username: string;
-  role: Role;
-}
-
 export type RemoteType = 'kasmvnc' | 'ttyd' | 'jupyter';
 
 export type TimeoutAction = 'remove' | 'stop' | 'pause';
 
-export type TemplateAllocationMode = 'shared' | 'dedicated';
+export type TemplateVisibility = 'public' | 'private' | 'hidden';
 
 export interface Template {
   id: string;
   name: string;
   description: string;
+  owner_id: string;
   image: string;
   cores: number;
   memory: number;
@@ -31,7 +24,7 @@ export interface Template {
   network_bandwidth_up_mbps: number;
   network_bandwidth_down_mbps: number;
   docker_in_instance: boolean;
-  allocation_mode: TemplateAllocationMode;
+  visibility: TemplateVisibility;
   run_config: Record<string, unknown>;
   exec_config: Record<string, unknown>;
   volume_mappings: Record<string, string>;
@@ -48,7 +41,8 @@ export interface Instance {
   remote_type: 'kasmvnc' | 'ttyd' | 'jupyter';
   owner_id: string;
   owner_username: string;
-  owner_role: Role;
+  owner_group_ids: string[];
+  owner_tier: number;
   status: 'running' | 'stopped' | 'paused' | 'error' | 'starting';
   instance_number: number;
   container_id: string;
@@ -73,26 +67,89 @@ export interface VncSettings {
   scaleViewport: boolean;
 }
 
-export type QuotaScope =
-  | 'user_instance'
-  | 'user_cpu'
-  | 'user_ram'
-  | 'host_instance'
-  | 'host_dedicated_cpu'
-  | 'host_dedicated_ram'
-  | 'host_shared_cpu'
-  | 'host_shared_ram';
+export type PreflightRejectionScope = 'template_not_allowed' | 'user_instance' | 'host_instance';
 
-export interface QuotaPayload {
-  scope: QuotaScope;
+export interface PreflightRejection {
+  scope: PreflightRejectionScope;
   current: number;
   limit: number;
   requested: number;
+}
+
+const PREFLIGHT_SCOPES: PreflightRejectionScope[] = ['template_not_allowed', 'user_instance', 'host_instance'];
+
+export function isPreflightRejection(value: unknown): value is PreflightRejection {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.scope === 'string' &&
+    PREFLIGHT_SCOPES.includes(v.scope as PreflightRejectionScope) &&
+    typeof v.current === 'number' &&
+    typeof v.limit === 'number' &&
+    typeof v.requested === 'number'
+  );
+}
+
+export interface EffectiveContext {
+  user_id: string;
+  username: string;
+  is_admin: boolean;
+  tier: number;
+  can_create_template: boolean;
+  can_manage_users: boolean;
+  can_manage_group_instances: boolean;
+  can_manage_docker: boolean;
+  can_manage_registry: boolean;
+  effective_max_instances: number;
+  allowed_template_ids: string[];
+  group_ids: string[];
+  direct_max_instances: number | null;
+}
+
+export const TIER_USER = 0;
+export const TIER_MANAGER = 1;
+export const TIER_ADMIN = 2;
+
+export interface Group {
+  id: string;
+  name: string;
+  description: string | null;
+  kind: 'admin' | 'manager' | 'user' | null;
+  can_create_template: boolean;
+  can_manage_users: boolean;
+  can_manage_group_instances: boolean;
+  can_manage_docker: boolean;
+  can_manage_registry: boolean;
+  max_instances: number | null;
+  template_ids: string[];
+}
+
+export type GroupInput = Omit<Group, 'id' | 'kind'>;
+
+export interface GroupMembershipPayload {
+  group_ids: string[];
+}
+
+export interface DirectMaxInstancesPayload {
+  direct_max_instances: number | null;
+}
+
+export type UserPolicyUpdate = Partial<GroupMembershipPayload & DirectMaxInstancesPayload>;
+
+export type PersistentVolumeStatus = 'active' | 'orphaned';
+
+export interface PersistentVolume {
+  id: string;
+  host_path: string;
+  owner_id: string | null;
+  owner_username: string | null;
+  status: PersistentVolumeStatus;
+  created_at: string;
 }
 
 export interface ApiResult<T> {
   data?: T;
   error?: string;
   status?: number;
-  quota?: QuotaPayload;
+  rejection?: PreflightRejection;
 }

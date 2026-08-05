@@ -18,6 +18,10 @@ mod m20260802_000014_add_docker_in_instance;
 mod m20260803_000015_add_system_settings;
 mod m20260803_000016_add_user_quota_columns;
 mod m20260803_000017_add_template_allocation_mode;
+mod m20260803_000018_add_flat_rbac_tables;
+mod m20260803_000019_drop_legacy_contract;
+mod m20260803_000020_add_system_groups_and_drop_personal_contract;
+mod m20260803_000021_add_template_visibility;
 
 pub struct Migrator;
 
@@ -42,6 +46,10 @@ impl MigratorTrait for Migrator {
             Box::new(m20260803_000015_add_system_settings::Migration),
             Box::new(m20260803_000016_add_user_quota_columns::Migration),
             Box::new(m20260803_000017_add_template_allocation_mode::Migration),
+            Box::new(m20260803_000018_add_flat_rbac_tables::Migration),
+            Box::new(m20260803_000019_drop_legacy_contract::Migration),
+            Box::new(m20260803_000020_add_system_groups_and_drop_personal_contract::Migration),
+            Box::new(m20260803_000021_add_template_visibility::Migration),
         ]
     }
 }

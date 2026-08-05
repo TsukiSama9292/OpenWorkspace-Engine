@@ -4,7 +4,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use common::ensure_pg;
 use migration::MigratorTrait;
-use openworkspace_api::db::{WorkspaceInstanceRepository, WorkspaceTemplateRepository, UserRepository};
+use openworkspace_api::db::{
+    PersistentVolumeRepository, UserRepository, WorkspaceInstanceRepository,
+    WorkspaceTemplateRepository, VOLUME_STATUS_ORPHANED,
+};
 use openworkspace_api::docker::MockDockerService;
 use openworkspace_api::health_worker;
 use openworkspace_api::vnc_cache::VncCache;
@@ -396,6 +399,73 @@ async fn test_auto_sleep_remove_over_limit() {
 
     assert!(instance_repo.find_by_id(instance_id).await.unwrap().is_none());
     assert!(vnc_cache.get(&instance.access_token).is_none());
+}
+
+#[tokio::test]
+async fn test_auto_sleep_remove_flips_orphaned_volume() {
+    let ctx = WorkerTestContext::new().await;
+    let now = chrono::Utc::now();
+    let template_id = ctx
+        .create_template_with_auto_sleep("auto-sleep-remove-vol", Some(3600), "remove")
+        .await;
+
+    // A persistent instance: mount_persistent with a resolved host path plus a
+    // registry row for that path — exactly the state a real launch leaves.
+    let host_path = format!("/tmp/ow_hw_orphan_{}", std::process::id());
+    let repo = WorkspaceInstanceRepository::new(&ctx.db);
+    let instance = repo
+        .launch(template_id, ctx.admin_id, "auto-sleep-instance", true, Some(&host_path))
+        .await
+        .unwrap();
+    repo.update_container_id(instance.id, "test-container-id")
+        .await
+        .unwrap();
+    repo.update_status(instance.id, "running").await.unwrap();
+    repo.update_started_at(instance.id, Some(now - chrono::Duration::seconds(3601)))
+        .await
+        .unwrap();
+
+    PersistentVolumeRepository::new(&ctx.db)
+        .upsert(&host_path, ctx.admin_id)
+        .await
+        .unwrap();
+
+    let mut mock_docker = MockDockerService::new();
+    mock_docker
+        .expect_stop_container_by_id()
+        .returning(|_| Box::pin(async { Ok(()) }));
+    mock_docker
+        .expect_remove_container_by_id()
+        .returning(|_| Box::pin(async { Ok(()) }));
+
+    let vnc_cache = VncCache::new();
+    let instance_repo = WorkspaceInstanceRepository::new(&ctx.db);
+    let template_repo = WorkspaceTemplateRepository::new(&ctx.db);
+    let instance = instance_repo.find_by_id(instance.id).await.unwrap().unwrap();
+    vnc_cache.insert(&instance.access_token, "running");
+
+    let count = health_worker::check_auto_sleep(
+        &instance_repo,
+        &template_repo,
+        &mock_docker,
+        &vnc_cache,
+        now,
+    )
+    .await
+    .unwrap();
+    assert_eq!(count, 1);
+    assert!(instance_repo.find_by_id(instance.id).await.unwrap().is_none());
+
+    let volume = PersistentVolumeRepository::new(&ctx.db)
+        .find_by_host_path(&host_path)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        volume.status, VOLUME_STATUS_ORPHANED,
+        "auto-remove must flip the volume registry row to orphaned"
+    );
+    std::fs::remove_dir_all(&host_path).ok();
 }
 
 #[tokio::test]

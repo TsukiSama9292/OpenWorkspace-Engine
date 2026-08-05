@@ -24,6 +24,10 @@ services:
     ports:
       - "80:80"
       - "8080:8080"
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     extra_hosts:
       - "host.docker.internal:host-gateway" # 💥 讓 Traefik 容器能連回宿主機的 3000 和 5173
     volumes:

@@ -24,8 +24,12 @@ struct SetRegistryUrlRequest {
 
 async fn get_registry(
     State(state): State<AppState>,
-    _auth: AuthUser,
+    auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    if !auth.can_manage_registry() {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
     let repo = RegistryRepository::new(&state.db);
 
     let cached = repo
@@ -43,7 +47,7 @@ async fn sync_registry(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    if !auth.role.can_manage_registry() {
+    if !auth.can_manage_registry() {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -81,7 +85,7 @@ async fn get_registry_url(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    if !auth.role.can_manage_registry() {
+    if !auth.can_manage_registry() {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -100,7 +104,7 @@ async fn set_registry_url(
     auth: AuthUser,
     Json(input): Json<SetRegistryUrlRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    if !auth.role.can_manage_registry() {
+    if !auth.can_manage_registry() {
         return Err(StatusCode::FORBIDDEN);
     }
 

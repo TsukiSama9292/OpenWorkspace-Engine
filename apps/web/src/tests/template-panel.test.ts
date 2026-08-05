@@ -1,9 +1,71 @@
-import { render, screen, fireEvent } from '@testing-library/svelte';
+import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import TemplatePanel from '$lib/components/templates/TemplatePanel.svelte';
+import type { EffectiveContext, Template } from '$lib/types';
+
+vi.mock('$lib/api/client', () => ({
+  api: {
+    get: vi.fn(),
+    post: vi.fn(),
+    put: vi.fn(),
+    delete: vi.fn()
+  }
+}));
+
+import { api } from '$lib/api/client';
+const mockApi = vi.mocked(api);
 
 const editorView = { tab: 'templates', editor: 'new' } as const;
+
+function context(overrides: Partial<EffectiveContext> = {}): EffectiveContext {
+  return {
+    user_id: 'me',
+    username: 'me',
+    is_admin: false, tier: 0,
+    can_create_template: false,
+    can_manage_users: false,
+    can_manage_group_instances: false,
+    can_manage_docker: false,
+    can_manage_registry: false,
+    effective_max_instances: 4,
+    allowed_template_ids: ['t-own'],
+    group_ids: ['g1'],
+    direct_max_instances: null,
+    ...overrides
+  };
+}
+
+function template(overrides: Partial<Template> = {}): Template {
+  return {
+    id: 't1',
+    name: 'Tpl',
+    description: '',
+    owner_id: 'someone-else',
+    image: 'img:1',
+    cores: 2,
+    memory: 4294967296,
+    gpu_count: 0,
+    docker_registry: '',
+    remote_type: 'kasmvnc',
+    persistent_storage_path: '',
+    container_runtime: 'docker',
+    max_run_seconds: null,
+    timeout_action: 'remove',
+    keep_time_seconds: null,
+    keep_time_action: 'pause',
+    network_bandwidth_up_mbps: 0,
+    network_bandwidth_down_mbps: 0,
+    docker_in_instance: false,
+    visibility: 'private',
+    run_config: {},
+    exec_config: {},
+    volume_mappings: {},
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    ...overrides
+  };
+}
 
 function panelProps(overrides: Record<string, unknown> = {}) {
   return {
@@ -21,22 +83,40 @@ describe('TemplatePanel', () => {
     vi.restoreAllMocks();
   });
 
+  it('refreshes the effective context after creating a template', async () => {
+    mockApi.post.mockResolvedValue({ data: { template: { id: 't-new' } } });
+    mockApi.get.mockImplementation(async (path: string) => {
+      if (path === '/auth/me') {
+        return { data: { context: context({ allowed_template_ids: ['t-new'] }) } };
+      }
+      return { data: { templates: [] } };
+    });
+
+    const { container } = render(TemplatePanel, { props: panelProps() });
+    const nameInput = container.querySelector('input[placeholder="e.g. AI Lab"]') as HTMLInputElement;
+    await fireEvent.input(nameInput, { target: { value: 'New VM' } });
+    await fireEvent.click(screen.getByText('Create Template'));
+
+    await waitFor(() => {
+      expect(mockApi.get).toHaveBeenCalledWith('/auth/me');
+    });
+  });
+
   it('renders the new-template editor without effect looping', () => {
     expect(() => render(TemplatePanel, { props: panelProps() })).not.toThrow();
     expect(screen.getByText('New Template')).toBeTruthy();
     expect(screen.getByText('Create Template')).toBeTruthy();
   });
 
-  it('hides the dedicated allocation option for non-admins', () => {
+  it('renders the editor without an allocation mode selector', () => {
     const { container } = render(TemplatePanel, { props: panelProps() });
-    const select = container.querySelector<HTMLSelectElement>('[data-testid="allocation-mode-select"]');
-    expect(select).toBeTruthy();
-    expect(Array.from(select!.options).map((o) => o.value)).toEqual(['shared']);
+    expect(container.querySelector('[data-testid="allocation-mode-select"]')).toBeNull();
+    expect(screen.queryByText('Allocation Mode')).toBeNull();
   });
 
   it('drops the form and shows the list when leaving the editor view', async () => {
     const { rerender } = render(TemplatePanel, { props: panelProps() });
-    await rerender({ view: { tab: 'templates', editor: 'list' } });
+    await rerender({ view: { tab: 'templates', editor: 'list' }, ctx: context({ can_create_template: true }) });
     await tick();
     expect(screen.getByText('+ New Template')).toBeTruthy();
   });
@@ -150,5 +230,63 @@ describe('TemplatePanel', () => {
 
     expect(screen.queryByText(/runs with full host privileges/i)).toBeTruthy();
     expect(screen.queryByText('Sandboxed via gVisor')).toBeNull();
+  });
+
+  it('marks templates the user may launch and gates edit/delete on ownership', () => {
+    const ctx = context({ user_id: 'me', can_create_template: true, allowed_template_ids: ['t-own'] });
+    const configs = [
+      template({ id: 't-own', name: 'Mine', owner_id: 'me' }),
+      template({ id: 't-other', name: 'Others', owner_id: 'someone-else' })
+    ];
+    render(TemplatePanel, {
+      props: panelProps({ view: { tab: 'templates', editor: 'list' }, configs, ctx })
+    });
+
+    expect(screen.getAllByText('May launch')).toHaveLength(1);
+    expect(screen.getAllByText('Not allowed')).toHaveLength(1);
+    expect(screen.getAllByText('Edit')).toHaveLength(1);
+    expect(screen.getAllByText('Delete')).toHaveLength(1);
+    expect(screen.getAllByText('+ New Template')).toHaveLength(1);
+  });
+
+  it('lets the system admin edit every template but launch only whitelisted ones', () => {
+    const ctx = context({ is_admin: true, tier: 2, allowed_template_ids: ['t1'] });
+    const configs = [
+      template({ id: 't1', name: 'A', owner_id: 'a' }),
+      template({ id: 't2', name: 'B', owner_id: 'b' })
+    ];
+    render(TemplatePanel, {
+      props: panelProps({ view: { tab: 'templates', editor: 'list' }, configs, ctx })
+    });
+
+    expect(screen.getAllByText('May launch')).toHaveLength(1);
+    expect(screen.getAllByText('Not allowed')).toHaveLength(1);
+    expect(screen.getAllByText('Edit')).toHaveLength(2);
+    expect(screen.getAllByText('Delete')).toHaveLength(2);
+  });
+
+  it('marks public templates as launchable and hidden templates as not (the API excludes hidden from the whitelist)', () => {
+    const ctx = context({ user_id: 'me', can_create_template: true, allowed_template_ids: ['t-own'] });
+    const configs = [
+      template({ id: 't-own', name: 'Private', owner_id: 'me' }),
+      template({ id: 't-public', name: 'Public', owner_id: 'someone-else', visibility: 'public' }),
+      template({ id: 't-hidden', name: 'Hidden', owner_id: 'someone-else', visibility: 'hidden' })
+    ];
+    render(TemplatePanel, {
+      props: panelProps({ view: { tab: 'templates', editor: 'list' }, configs, ctx })
+    });
+
+    expect(screen.getAllByText('May launch')).toHaveLength(2);
+    expect(screen.getAllByText('Not allowed')).toHaveLength(1);
+  });
+
+  it('shows a visibility selector defaulting to private in the new-template editor', async () => {
+    const { container } = render(TemplatePanel, { props: panelProps() });
+    const select = Array.from(container.querySelectorAll<HTMLSelectElement>('select'))
+      .find((s) => Array.from(s.options).some((o) => o.value === 'hidden'));
+
+    expect(select).toBeTruthy();
+    expect(select!.value).toBe('private');
+    expect(Array.from(select!.options).map((o) => o.value)).toEqual(['private', 'public', 'hidden']);
   });
 });

@@ -324,9 +324,10 @@ pub trait DockerService: Send + Sync {
 
     /// Create a clean, empty host data directory for an Instance and declare a
     /// Local Bind-mounted Named Volume over it. The API runs in a container and
-    /// cannot touch host files, so a short-lived `alpine` helper container
-    /// `mkdir -p`s the host dir and `chown`s it to UID/GID 1000 (the uid of
-    /// both `kasm-user` and `ow_user`); the volume is then declared with
+    /// cannot touch host files, so it pre-creates the full host chain as its own
+    /// user (keeping Docker from auto-creating any parent dir as root) and a
+    /// short-lived `alpine` helper container `chown`s it to UID/GID 1000 (the
+    /// uid of both `kasm-user` and `ow_user`); the volume is then declared with
     /// `driver=local`, `type=none` / `device=<host_path>` / `o=bind`. The first
     /// container to mount the empty volume gets Docker's copy-up of the image's
     /// built-in home files.
@@ -375,11 +376,6 @@ pub trait DockerService: Send + Sync {
     /// List the networks Docker currently knows (name + first IPv4 IPAM
     /// subnet), enough for the subnet allocator to compute the in-use set.
     async fn list_networks(&self) -> Result<Vec<NetworkInfo>, String>;
-
-    /// Total host CPU cores / RAM bytes as reported by the Docker daemon
-    /// (`docker info`) — the host totals, not the API container's cgroup
-    /// limits. Used to seed `system_settings` on first startup.
-    async fn host_capacity(&self) -> Result<crate::system_settings::HostCapacity, String>;
 }
 
 pub fn is_container_not_found(err: &bollard::errors::Error) -> bool {
@@ -768,14 +764,7 @@ impl DockerService for DockerClient {
                 container_name,
                 e
             );
-            if let Err(remove_err) = self
-                .docker
-                .remove_container(
-                    &container.id,
-                    None::<bollard::container::RemoveContainerOptions>,
-                )
-                .await
-            {
+            if let Err(remove_err) = self.remove_container_by_id(&container.id).await {
                 tracing::warn!(
                     "Failed to remove container '{}' after failed start: {}",
                     container_name,
@@ -888,7 +877,8 @@ impl DockerService for DockerClient {
         &self,
         container_id: &str,
     ) -> Result<(), bollard::errors::Error> {
-        self.docker
+        let result = self
+            .docker
             .remove_container(
                 container_id,
                 Some(RemoveContainerOptions {
@@ -897,7 +887,12 @@ impl DockerService for DockerClient {
                     link: false,
                 }),
             )
-            .await
+            .await;
+        // `docker rm -f` returns success even when a `created`-stuck sandbox
+        // survives its shim — kill any leftover runsc processes so they don't
+        // leak ports/veths forever. Runs regardless of the remove result.
+        self.kill_residual_runtime_procs(container_id).await;
+        result
     }
 
     async fn inspect_container_state(
@@ -1041,26 +1036,6 @@ impl DockerService for DockerClient {
             .collect())
     }
 
-    async fn host_capacity(&self) -> Result<crate::system_settings::HostCapacity, String> {
-        let info = self
-            .docker
-            .info()
-            .await
-            .map_err(|e| format!("docker info failed: {}", e))?;
-        let cpu_cores = info.ncpu.unwrap_or(0);
-        let ram_bytes = info.mem_total.unwrap_or(0);
-        if cpu_cores <= 0 || ram_bytes <= 0 {
-            return Err(format!(
-                "docker info reported invalid host capacity (ncpu={}, mem_total={})",
-                cpu_cores, ram_bytes
-            ));
-        }
-        Ok(crate::system_settings::HostCapacity {
-            cpu_cores: cpu_cores as i32,
-            ram_bytes,
-        })
-    }
-
     async fn has_session_connection(
         &self,
         container_id: &str,
@@ -1088,11 +1063,13 @@ impl DockerService for DockerClient {
         Ok(ss_output_has_connection(&output, port))
     }
 
-    /// Create the (empty, 1000:1000-owned) host data directory via an alpine
-    /// helper container, then declare the Local Bind-mounted Named Volume over
-    /// it. If the Volume declaration already exists — e.g. a previous Instance
-    /// was deleted but its data preserved for reuse — the existing data is left
-    /// untouched and the existing Volume is reused as-is.
+    /// Create the (empty) host data directory: pre-create the full chain as the
+    /// API process's user so Docker doesn't leave root-owned parent dirs, then
+    /// an alpine helper container `chown`s the leaf to 1000:1000, and declare
+    /// the Local Bind-mounted Named Volume over it. If the Volume declaration
+    /// already exists — e.g. a previous Instance was deleted but its data
+    /// preserved for reuse — the existing data is left untouched and the
+    /// existing Volume is reused as-is.
     async fn prepare_persistent_volume(
         &self,
         host_path: &str,
@@ -1103,6 +1080,12 @@ impl DockerService for DockerClient {
             Err(ref e) if is_volume_not_found(e) => {}
             Err(e) => return Err(format!("Failed to inspect volume '{}': {}", volume_name, e)),
         }
+
+        // Docker auto-creates missing bind-mount sources as root. Pre-create the
+        // full chain as the API process's user so no parent dir is left
+        // root-owned (which would block later cleanup by non-root tooling).
+        std::fs::create_dir_all(host_path)
+            .map_err(|e| format!("Failed to create host dir '{}': {}", host_path, e))?;
 
         self.run_helper_container(
             "prepare",
@@ -1161,6 +1144,83 @@ impl DockerService for DockerClient {
 }
 
 impl DockerClient {
+    /// Best-effort SIGKILL of any `runsc-sandbox`/`runsc-gofer` processes left
+    /// behind by `container_id`. Tries a direct `kill` first (the API runs as
+    /// root with `pid: host` in production); on failure it escalates through a
+    /// one-shot privileged `pid=host` container (used when the API lacks
+    /// privileges, e.g. dev/test). Fail-open: cleanup errors are logged, never
+    /// propagated — the caller's removal outcome already decided.
+    async fn kill_residual_runtime_procs(&self, container_id: &str) {
+        let pids = find_runtime_procs(container_id);
+        if pids.is_empty() {
+            return;
+        }
+        tracing::warn!(
+            "Container '{}' removal left {} runsc process(es) behind; killing them",
+            container_id,
+            pids.len()
+        );
+        let mut remaining: Vec<i32> = Vec::new();
+        for &pid in &pids {
+            match std::process::Command::new("kill")
+                .args(["-9", &pid.to_string()])
+                .status()
+            {
+                Ok(status) if status.success() => {
+                    tracing::info!("Killed residual runsc pid {} for '{}'", pid, container_id);
+                }
+                _ => remaining.push(pid),
+            }
+        }
+        if remaining.is_empty() {
+            return;
+        }
+        let cmd = format!(
+            "kill -9 {}",
+            remaining
+                .iter()
+                .map(|pid| pid.to_string())
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        let cfg = Config {
+            image: Some("busybox:1".to_string()),
+            cmd: Some(vec!["sh".to_string(), "-c".to_string(), cmd]),
+            host_config: Some(bollard::models::HostConfig {
+                privileged: Some(true),
+                pid_mode: Some("host".to_string()),
+                auto_remove: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let name = format!("ow-runsc-kill-{}", &container_id[..container_id.len().min(12)]);
+        let options = Some(CreateContainerOptions {
+            name,
+            ..Default::default()
+        });
+        match self.docker.create_container(options, cfg).await {
+            Ok(created) => {
+                if let Err(e) = self
+                    .docker
+                    .start_container(&created.id, None::<StartContainerOptions<String>>)
+                    .await
+                {
+                    tracing::error!(
+                        "Failed to start privileged kill container for '{}': {}",
+                        container_id,
+                        e
+                    );
+                }
+            }
+            Err(e) => tracing::error!(
+                "Failed to spawn privileged kill container for '{}': {}",
+                container_id,
+                e
+            ),
+        }
+    }
+
     /// Declare a Local Bind-mounted Named Volume over `host_path`. The same
     /// declaration is shared by `prepare_persistent_volume` (fresh creation)
     /// and `ensure_persistent_volume` (re-creation after loss).
@@ -1331,6 +1391,49 @@ fn run_nsenter_ns(pid: u32, args: &[String]) -> Result<String, String> {
             String::from_utf8_lossy(&output.stderr).trim()
         ))
     }
+}
+
+/// True when a process's raw `/proc/<pid>/cmdline` (NUL-separated args)
+/// identifies a `runsc-sandbox`/`runsc-gofer` process still attached to `cid`.
+/// runsc embeds the container id as one of the args; the runtime-marker check
+/// prevents matching unrelated host processes that merely echo the id.
+fn is_runsc_proc_for(cmdline: &[u8], cid: &str) -> bool {
+    let Ok(s) = std::str::from_utf8(cmdline) else {
+        return false;
+    };
+    if !(s.contains("runsc-sandbox") || s.contains("runsc-gofer")) {
+        return false;
+    }
+    s.split('\0').any(|arg| arg == cid || arg.ends_with(cid))
+}
+
+/// Host PIDs of `runsc-sandbox`/`runsc-gofer` processes still attached to
+/// `container_id` after Docker reported the container removed. `docker rm -f`
+/// returns success even when a `created`-stuck sandbox survives its shim, so a
+/// removed container can leave live processes behind; each one embeds the full
+/// container id in its cmdline.
+fn find_runtime_procs(container_id: &str) -> Vec<i32> {
+    let cid = container_id.trim_start_matches("sha256:");
+    let mut pids = Vec::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return pids;
+    };
+    for entry in entries.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        let Ok(cmdline) = std::fs::read(format!("/proc/{}/cmdline", pid)) else {
+            continue;
+        };
+        if is_runsc_proc_for(&cmdline, cid) {
+            pids.push(pid);
+        }
+    }
+    pids
 }
 
 #[cfg(test)]
@@ -1601,5 +1704,38 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(first_ipv4_subnet(&network), None);
+    }
+
+    #[test]
+    fn test_is_runsc_proc_for_matches_sandbox_cmdline() {
+        let cid = "ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12";
+        let mut cmdline = format!("/runsc-sandbox\0--root=/run/runsc\0{}", cid).into_bytes();
+        cmdline.push(0);
+        assert!(is_runsc_proc_for(&cmdline, cid));
+    }
+
+    #[test]
+    fn test_is_runsc_proc_for_matches_gofer_with_id_as_arg() {
+        let cid = "ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12";
+        let mut cmdline = format!("runsc-gofer\0{}", cid).into_bytes();
+        cmdline.push(0);
+        assert!(is_runsc_proc_for(&cmdline, cid));
+    }
+
+    #[test]
+    fn test_is_runsc_proc_for_rejects_other_process() {
+        let cid = "ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12";
+        let mut cmdline = format!("docker\0rm\0-f\0{}", cid).into_bytes();
+        cmdline.push(0);
+        assert!(!is_runsc_proc_for(&cmdline, cid));
+    }
+
+    #[test]
+    fn test_is_runsc_proc_for_rejects_wrong_cid() {
+        let cid = "ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12";
+        let other = "ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00";
+        let mut cmdline = format!("/runsc-sandbox\0--root=/run/runsc\0{}", other).into_bytes();
+        cmdline.push(0);
+        assert!(!is_runsc_proc_for(&cmdline, cid));
     }
 }

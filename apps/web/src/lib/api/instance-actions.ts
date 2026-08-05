@@ -1,4 +1,4 @@
-import type { Instance, QuotaPayload } from '$lib/types';
+import type { Instance, PreflightRejection } from '$lib/types';
 import { api } from '$lib/api/client';
 import { goto } from '$app/navigation';
 
@@ -12,9 +12,9 @@ const STATUS_MAP: Record<string, Instance['status']> = {
 export async function performAction(
   instanceId: string,
   action: string,
-): Promise<{ error?: string; status?: Instance['status']; quota?: QuotaPayload }> {
+): Promise<{ error?: string; status?: Instance['status']; rejection?: PreflightRejection }> {
   const res = await api.post(`/instances/${instanceId}/${action}`);
-  if (res.error) return { error: res.error, quota: res.quota };
+  if (res.error) return { error: res.error, rejection: res.rejection };
   return { status: STATUS_MAP[action] };
 }
 

@@ -17,7 +17,12 @@ describe('dashboard view helpers', () => {
       ['#', { tab: 'instances' }],
       ['#instances', { tab: 'instances' }],
       ['#sessions', { tab: 'sessions' }],
-      ['#users', { tab: 'users' }]
+      ['#users', { tab: 'users' }],
+      ['#groups', { tab: 'groups' }],
+      ['#volumes', { tab: 'volumes' }],
+      ['#settings', { tab: 'settings' }],
+      ['#monitor', { tab: 'monitor' }],
+      ['#logs', { tab: 'logs' }]
     ])('parses %s', (hash, expected) => {
       expect(parseDashboardHash(hash)).toEqual(expected);
     });
@@ -61,6 +66,11 @@ describe('dashboard view helpers', () => {
       [{ tab: 'instances' }, '#instances'],
       [{ tab: 'sessions' }, '#sessions'],
       [{ tab: 'users' }, '#users'],
+      [{ tab: 'groups' }, '#groups'],
+      [{ tab: 'volumes' }, '#volumes'],
+      [{ tab: 'settings' }, '#settings'],
+      [{ tab: 'monitor' }, '#monitor'],
+      [{ tab: 'logs' }, '#logs'],
       [{ tab: 'templates', editor: 'list' }, '#templates'],
       [{ tab: 'templates', editor: 'new' }, '#templates/new'],
       [{ tab: 'templates', editor: 'edit', templateId: 'abc' }, '#templates/edit/abc']
@@ -73,6 +83,11 @@ describe('dashboard view helpers', () => {
         { tab: 'instances' },
         { tab: 'sessions' },
         { tab: 'users' },
+        { tab: 'groups' },
+        { tab: 'volumes' },
+        { tab: 'settings' },
+        { tab: 'monitor' },
+        { tab: 'logs' },
         { tab: 'templates', editor: 'list' },
         { tab: 'templates', editor: 'new' },
         { tab: 'templates', editor: 'edit', templateId: 'id-with spaces' }

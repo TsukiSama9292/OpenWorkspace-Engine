@@ -51,6 +51,7 @@
       keep_time_deadline = next.keep_time_deadline;
       keep_time_action = next.keep_time_action;
     }
+    now = Date.now();
   }
 
   function startTimers() {

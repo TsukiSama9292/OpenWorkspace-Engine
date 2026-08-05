@@ -105,6 +105,37 @@ pub fn is_port_conflict(err: &str) -> bool {
     err.contains("port is already allocated")
 }
 
+/// In-process registry of host ports reserved for the
+/// allocate → create → start → DB-commit window.
+///
+/// Docker binds the host port at `start` (not `create`), and the DB row is
+/// committed only after `start` returns. Between allocation and that commit the
+/// port is invisible to `collect_used_host_ports` (DB snapshot) and — until the
+/// container's process starts listening — to the TCP probe. Without this set,
+/// two concurrent launches would both see the port as free and race at Docker's
+/// bind: one wins, the other gets `port is already allocated`, and its
+/// `created`-stuck sandbox leaks runsc processes. The reservation closes that
+/// hole within one process; cross-process collisions still fall through to the
+/// port-conflict retry.
+#[derive(Default)]
+pub struct PortPool {
+    reserved: BTreeSet<u16>,
+}
+
+impl PortPool {
+    pub fn reserve(&mut self, port: u16) {
+        self.reserved.insert(port);
+    }
+
+    pub fn release(&mut self, port: u16) {
+        self.reserved.remove(&port);
+    }
+
+    pub fn reserved(&self) -> impl Iterator<Item = u16> + '_ {
+        self.reserved.iter().copied()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,6 +231,31 @@ mod tests {
         assert!(is_port_conflict("port is already allocated"));
         assert!(!is_port_conflict("no such container"));
         assert!(!is_port_conflict(""));
+    }
+
+    #[test]
+    fn port_pool_reserve_release_reserved() {
+        let mut pool = PortPool::default();
+        assert!(pool.reserved().next().is_none());
+        pool.reserve(10001);
+        pool.reserve(10002);
+        let ports: Vec<u16> = pool.reserved().collect();
+        assert_eq!(ports, vec![10001, 10002]);
+        pool.release(10001);
+        let ports: Vec<u16> = pool.reserved().collect();
+        assert_eq!(ports, vec![10002]);
+        pool.release(10002);
+        assert!(pool.reserved().next().is_none());
+    }
+
+    #[test]
+    fn port_pool_release_absent_is_noop() {
+        let mut pool = PortPool::default();
+        pool.release(10001);
+        assert!(pool.reserved().next().is_none());
+        pool.reserve(10001);
+        pool.reserve(10001);
+        assert_eq!(pool.reserved().count(), 1);
     }
 
     #[test]

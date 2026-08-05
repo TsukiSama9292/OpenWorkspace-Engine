@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # To Tickets
 
-Break a plan, spec, or conversation into a set of **tickets** — tracer-bullet vertical slices, each declaring the tickets that **block** it.
+Break a plan, spec, or conversation into a set of **tickets** — in this repo, exactly three: one backend, one frontend, one integration test.
 
 The issue tracker and triage label vocabulary should have been provided to you — run `/setup-matt-pocock-skills` if not.
 
@@ -22,7 +22,7 @@ If you have not already explored the codebase, do so to understand the current s
 
 Look for opportunities to prefactor the code to make the implementation easier. "Make the change easy, then make the easy change."
 
-### 3. Draft vertical slices
+### 3. Draft the tickets
 
 Break the work into **tracer bullet** tickets.
 
@@ -35,21 +35,23 @@ Break the work into **tracer bullet** tickets.
 
 </vertical-slice-rules>
 
-**In this repo, deliberately split every feature into a frontend/backend pair of tracks.** A slice is realized by one SvelteKit ticket plus one Rust API ticket that together make the story work:
+**In this repo, split the feature into exactly three tickets — one backend, one frontend, one end-to-end test.** The user finds ticket fan-out and subagent dispatch too complex for this codebase; keep it to one continuous pass per ticket, done directly:
 
-- **One-to-one alignment.** Each user story becomes two tickets: `FE#n` (frontend, SvelteKit UI) and `BE#n` (backend, Rust API) for the same story `n`. They pair up and are presented together.
-- **Contract first.** The API contract (endpoints, shapes, semantics) is pinned in the spec during to-spec, before splitting. Both tracks' first tickets have no blockers and start immediately, each tested against contract tests for that shared shape — that's what lets the two tracks run in parallel.
-- **Blocking is type-first.** A ticket is blocked by the previous ticket of the **same type**: each frontend ticket is blocked by the prior frontend ticket, each backend ticket by the prior backend ticket. This reflects cumulative TDD within a type — a later same-type ticket builds on earlier tests and code.
-- **Cross-type edges only when genuinely gated.** Same-type edges are the default. Add a cross-type edge only when a ticket cannot be developed against the spec'd contract alone and truly needs the other side to exist first (e.g. the seam cannot be mocked). Justify every cross-type edge when presenting the breakdown.
-- **Converge at the end.** Add a final integration ticket blocked by the last frontend and last backend ticket, verifying the pair works end to end against the real backend.
+1. **`01-be-<slug>` (backend)** — all Rust API work: migrations, policy/domain logic, route guardrails, API contracts, and their tests. Backend-only concerns (migration mechanics, backfills, contract drops) all live here. Lands with the full API suite green and zero compiler warnings.
+2. **`02-fe-<slug>` (frontend)** — all SvelteKit UI work: contract types/API client, stores, components, and their tests. Built against the backend schema it just received. Layout/visual consistency with the existing design language is part of its scope. Lands with `svelte-check` and the Vitest suite green.
+3. **`03-int-end-to-end` (integration)** — the full-stack test verifying both sides work together against the real backend.
 
-Give each ticket its **blocking edges** — the other tickets that must complete before it can start. A ticket with no blockers can start immediately. In this repo the same-type rule above is the default; cross-type edges are the justified exception.
+Rules:
+
+- **One continuous pass per ticket, no subagents.** The backend ticket is completed in its entirety before the frontend ticket begins; the integration ticket runs last. Work top to bottom; there is no frontier.
+- **Blocking is sequential.** `01-be` has no blockers. `02-fe` is blocked by `01-be`. `03-int` is blocked by `02-fe`.
+- **Each ticket is self-contained and green on its own** — that is what lets the next ticket start from a known-good base.
 
 **Wide refactors are the exception to vertical slicing.** A **wide refactor** is one mechanical change — rename a column, retype a shared symbol — whose **blast radius** fans across the whole codebase, so a single edit breaks thousands of call sites at once and no vertical slice can land green. Don't force it into a tracer bullet; sequence it as **expand–contract**. First expand: add the new form beside the old so nothing breaks. Then migrate the call sites over in batches sized by blast radius (per package, per directory), each batch its own ticket blocked by the expand, keeping CI green batch to batch because the old form still exists. Finally contract: delete the old form once no caller remains, in a ticket blocked by every migrate batch. When even the batches can't stay green alone, keep the sequence but let them share an integration branch that all block a final integrate-and-verify ticket — green is promised only there.
 
 ### 4. Quiz the user
 
-Present the proposed breakdown as a numbered list. For each ticket, show:
+Present the proposed breakdown as a numbered list — three tickets. For each ticket, show:
 
 - **Title**: short descriptive name
 - **Blocked by**: which other tickets (if any) must complete first
@@ -57,10 +59,9 @@ Present the proposed breakdown as a numbered list. For each ticket, show:
 
 Ask the user:
 
-- Does the granularity feel right? (too coarse / too fine)
-- Are the blocking edges correct — does each ticket only depend on tickets that genuinely gate it?
-- Is the frontend/backend pairing right, and is every cross-type edge justified rather than relying on the spec'd contract?
-- Should any tickets be merged or split further?
+- Is the three-ticket split right — does the backend ticket cover all API work, the frontend ticket all UI work?
+- Is the scope of each ticket complete — anything missing, anything that belongs in a different ticket?
+- Are the blocking edges correct?
 
 Iterate until the user approves the breakdown.
 
@@ -68,10 +69,10 @@ Iterate until the user approves the breakdown.
 
 Publish the approved tickets. **How** depends on the tracker `/setup-matt-pocock-skills` configured — the tickets are the same either way, only the shape of the blocking edges changes:
 
-- **Local files** → write one file per ticket under `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01` in story order with each story's frontend/backend pair adjacent (e.g. `01-fe-<slug>`, `02-be-<slug>`). Same-type blockers always carry a lower number. Each file's "Blocked by" lists the numbers/titles it depends on. Use the per-ticket file template below — one ticket per file, never a single combined file.
+- **Local files** → write one file per ticket under `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered `01` (backend), `02` (frontend), `03` (integration): e.g. `01-be-<slug>`, `02-fe-<slug>`, `03-int-end-to-end`. Blockers always carry a lower number: `01-be` has none, `02-fe` is blocked by `01-be`, `03-int` is blocked by `02-fe`. Each file's "Blocked by" lists the numbers/titles it depends on. Use the per-ticket file template below — one ticket per file, never a single combined file.
 - **A real issue tracker (GitHub, Linear, …)** → publish one issue per ticket in dependency order (blockers first) so each ticket's blocking edges can reference real identifiers. Use the platform's native blocking / sub-issue relationship where it has one; otherwise set each ticket's "Blocked by" to the blocking issues. Apply the `ready-for-agent` triage label unless instructed otherwise — the tickets are agent-grabbable by construction.
 
-Work the **frontier**: any ticket whose blockers are all done. With type-first blocking the frontier is the latest ticket of each track in parallel (plus the integration ticket once both tracks' last tickets land). For a purely linear chain that means top to bottom.
+Work the tickets **top to bottom**: `01-be` first, then `02-fe` (blocked by `01-be`), then `03-int` (blocked by `02-fe`). There is no frontier — the chain is strictly sequential, one continuous pass per ticket.
 
 Do NOT close or modify any parent issue.
 
@@ -79,11 +80,11 @@ Do NOT close or modify any parent issue.
 
 # <NN> — <Ticket title>
 
-**Track:** frontend / backend
+**Track:** backend / frontend / integration
 
 **What to build:** the end-to-end behaviour this ticket makes work, from the user's perspective — not a layer-by-layer implementation list.
 
-**Blocked by:** the numbers/titles of the tickets that gate this one (default: the previous same-track ticket), or "None — can start immediately".
+**Blocked by:** the numbers/titles of the tickets that gate this one (default: `01-be` has none, `02-fe` blocked by `01-be`, `03-int` blocked by `02-fe`), or "None — can start immediately".
 
 **Status:** ready-for-agent
 
@@ -100,7 +101,7 @@ A reference to the parent issue on the tracker (if the source was an existing is
 
 ## Track
 
-frontend / backend
+backend / frontend / integration
 
 ## What to build
 

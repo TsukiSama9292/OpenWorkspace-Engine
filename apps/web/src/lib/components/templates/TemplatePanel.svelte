@@ -1,11 +1,12 @@
 <script lang="ts">
   import { api } from '$lib/api/client';
+  import { auth } from '$lib/stores/auth';
   import { formatMemory } from '$lib/utils/format';
   import { getTemplateIcon } from '$lib/utils/template-icons';
   import { loadTemplate, submitTemplate, updateTemplate, createInitialFormState, DEFAULT_IMAGES, type TemplateFormState } from '$lib/templates/template-form';
   import { isTemplatesEditor, serializeDashboardHash, createDirtySnapshot, isFormDirty, confirmDiscardChanges, type DashboardView } from '$lib/templates/dashboard-view';
-  import type { Template } from '$lib/types';
-  import { isAdmin } from '$lib/stores/auth';
+  import { mayCreateTemplate, mayEditTemplate, mayLaunchTemplate } from '$lib/permissions';
+  import type { Template, EffectiveContext } from '$lib/types';
   import TemplateBasics from '$lib/components/forms/TemplateBasics.svelte';
   import TemplateResources from '$lib/components/forms/TemplateResources.svelte';
   import TemplateAdvanced from '$lib/components/forms/TemplateAdvanced.svelte';
@@ -15,13 +16,15 @@
     configs = $bindable(),
     dirty = $bindable(),
     onnavigate = () => {},
-    ondelete = () => {}
+    ondelete = () => {},
+    ctx = null
   }: {
     view: DashboardView;
     configs: Template[];
     dirty: boolean;
     onnavigate: (hash: string) => void;
     ondelete: (config: Template) => void;
+    ctx?: EffectiveContext | null;
   } = $props();
 
   let form = $state<TemplateFormState | null>(null);
@@ -108,6 +111,10 @@
       return;
     }
     await refresh();
+    // Creating a template whitelists the Admin group on it, so the effective
+    // context (allowed_template_ids) must be re-fetched or the new template
+    // stays locked on the Instances page.
+    await auth.check();
     onnavigate('#templates');
   }
 
@@ -150,8 +157,8 @@
       <button class="px-4 py-2 mt-4 bg-primary-500 text-white border-none rounded cursor-pointer hover:bg-primary-600 transition-colors" onclick={backToTemplates}>Back to Templates</button>
     {:else if form}
       <form class="flex flex-col gap-4" onsubmit={onSubmit}>
-        <TemplateBasics bind:name={form.name} bind:description={form.description} bind:image={form.image} bind:remoteType={form.remoteType} />
-        <TemplateResources bind:cores={form.cores} bind:ramGb={form.ramGb} bind:gpuCount={form.gpuCount} bind:dockerRegistry={form.dockerRegistry} bind:persistentStoragePath={form.persistentStoragePath} bind:maxRunSeconds={form.maxRunSeconds} bind:timeoutAction={form.timeoutAction} bind:keepTimeSeconds={form.keepTimeSeconds} bind:keepTimeAction={form.keepTimeAction} bind:allocationMode={form.allocationMode} canAllocateDedicated={$isAdmin} />
+        <TemplateBasics bind:name={form.name} bind:description={form.description} bind:image={form.image} bind:remoteType={form.remoteType} bind:visibility={form.visibility} />
+        <TemplateResources bind:cores={form.cores} bind:ramGb={form.ramGb} bind:gpuCount={form.gpuCount} bind:dockerRegistry={form.dockerRegistry} bind:persistentStoragePath={form.persistentStoragePath} bind:maxRunSeconds={form.maxRunSeconds} bind:timeoutAction={form.timeoutAction} bind:keepTimeSeconds={form.keepTimeSeconds} bind:keepTimeAction={form.keepTimeAction} />
 
         <button type="button" class="text-sm text-surface-400 hover:text-surface-100 bg-transparent border-none cursor-pointer text-left p-0" onclick={() => { if (form) form.showAdvanced = !form.showAdvanced; }}>
           {form.showAdvanced ? '▾ Hide Advanced' : '▸ Show Advanced'}
@@ -182,7 +189,9 @@
   </div>
 {:else}
   <div class="templates-header">
-    <button class="btn-create" onclick={openNew}>+ New Template</button>
+    {#if mayCreateTemplate(ctx)}
+      <button class="btn-create" onclick={openNew}>+ New Template</button>
+    {/if}
   </div>
   {#if configs?.length === 0}
     <p class="empty-text">No templates yet. Create one to get started.</p>
@@ -212,8 +221,15 @@
           </div>
           <div class="ws-actions">
             <div class="action-buttons">
-              <button class="launch-btn edit" onclick={() => openEdit(config.id)}>Edit</button>
-              <button class="launch-btn remove" onclick={() => ondelete(config)}>Delete</button>
+              {#if mayLaunchTemplate(ctx, config)}
+                <span class="launchable-badge">May launch</span>
+              {:else}
+                <span class="launchable-badge locked">Not allowed</span>
+              {/if}
+              {#if mayEditTemplate(ctx, config)}
+                <button class="launch-btn edit" onclick={() => openEdit(config.id)}>Edit</button>
+                <button class="launch-btn remove" onclick={() => ondelete(config)}>Delete</button>
+              {/if}
             </div>
           </div>
         </div>
@@ -230,4 +246,22 @@
   }
 
   .template-icon-sm { font-size: 1rem; }
+
+  .launchable-badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.65rem;
+    font-weight: 600;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    color: #4ade80;
+    background: rgba(34, 197, 94, 0.1);
+    border: 1px solid rgba(34, 197, 94, 0.2);
+  }
+
+  .launchable-badge.locked {
+    color: #71717a;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
 </style>

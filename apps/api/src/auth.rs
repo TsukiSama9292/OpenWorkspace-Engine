@@ -4,99 +4,46 @@ use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::db::{PolicyRepository, UserRepository};
+use crate::effective_context::EffectiveContext;
 use crate::routes::AppState;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Role {
-    Admin,
-    Manager,
-    User,
-}
-
-impl Role {
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "admin" => Some(Role::Admin),
-            "manager" => Some(Role::Manager),
-            "user" => Some(Role::User),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Role::Admin => "admin",
-            Role::Manager => "manager",
-            Role::User => "user",
-        }
-    }
-
-    pub fn can_manage_users(&self) -> bool {
-        matches!(self, Role::Admin | Role::Manager)
-    }
-
-    pub fn can_create_role(&self, target: &Role) -> bool {
-        match self {
-            Role::Admin => !matches!(target, Role::Admin),
-            Role::Manager => matches!(target, Role::User),
-            Role::User => false,
-        }
-    }
-
-    pub fn can_manage_templates(&self) -> bool {
-        matches!(self, Role::Admin | Role::Manager)
-    }
-
-    pub fn can_view_all_instances(&self) -> bool {
-        matches!(self, Role::Admin | Role::Manager)
-    }
-
-    pub fn can_manage_instance(&self, owner_role: &Role) -> bool {
-        match self {
-            Role::Admin => true,
-            Role::Manager => matches!(owner_role, Role::User),
-            Role::User => false,
-        }
-    }
-
-    pub fn can_manage_all_instances(&self) -> bool {
-        matches!(self, Role::Admin)
-    }
-
-    pub fn can_manage_docker(&self) -> bool {
-        matches!(self, Role::Admin | Role::Manager)
-    }
-
-    pub fn can_manage_registry(&self) -> bool {
-        matches!(self, Role::Admin | Role::Manager)
-    }
-}
-
+/// The authenticated user with the effective context resolved from the
+/// database on this very request. All permission decisions go through the
+/// context's flags / `is_admin` (root → Admin-group membership; manager → the
+/// seeded Manager group, which carries all five flags).
 #[derive(Clone)]
 pub struct AuthUser {
     pub user_id: Uuid,
-    pub role: Role,
+    pub username: String,
+    /// The context computed by the policy module from the DB. Permission
+    /// changes take effect on the next request without re-login.
+    pub context: EffectiveContext,
 }
 
 impl AuthUser {
     pub fn is_admin(&self) -> bool {
-        self.role == Role::Admin
+        self.context.is_admin
     }
 
     pub fn can_manage_users(&self) -> bool {
-        self.role.can_manage_users()
+        self.is_admin() || self.context.can_manage_users
     }
 
-    pub fn can_create_role(&self, target: &Role) -> bool {
-        self.role.can_create_role(target)
+    pub fn can_manage_docker(&self) -> bool {
+        self.is_admin() || self.context.can_manage_docker
+    }
+
+    pub fn can_manage_registry(&self) -> bool {
+        self.is_admin() || self.context.can_manage_registry
     }
 }
 
+/// Identity-only JWT claims: the user id and the expiry. The token never
+/// carries a role, so a stale permission claim can never outlive a change.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String,
-    pub role: String,
     pub exp: usize,
 }
 
@@ -131,20 +78,29 @@ impl FromRequestParts<AppState> for AuthUser {
             .parse::<Uuid>()
             .map_err(|_| StatusCode::UNAUTHORIZED)?;
 
-        let role = Role::from_str(&token_data.claims.role)
+        let user = UserRepository::new(&state.db)
+            .find_by_id(user_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::UNAUTHORIZED)?;
+
+        let context = PolicyRepository::new(&state.db)
+            .load_effective_context(user_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             .ok_or(StatusCode::UNAUTHORIZED)?;
 
         Ok(AuthUser {
             user_id,
-            role,
+            username: user.username,
+            context,
         })
     }
 }
 
-pub fn create_token(user_id: &Uuid, role: &Role, jwt_secret: &str) -> Result<String, StatusCode> {
+pub fn create_token(user_id: &Uuid, jwt_secret: &str) -> Result<String, StatusCode> {
     let claims = Claims {
         sub: user_id.to_string(),
-        role: role.as_str().to_string(),
         exp: chrono::Utc::now()
             .checked_add_signed(chrono::Duration::days(7))
             .unwrap()
@@ -177,102 +133,71 @@ pub fn clear_cookie(headers: &mut axum::http::HeaderMap) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::effective_context::EffectiveContext;
 
     const TEST_SECRET: &str = "test-jwt-secret";
 
-    #[test]
-    fn test_role_from_str() {
-        assert_eq!(Role::from_str("admin"), Some(Role::Admin));
-        assert_eq!(Role::from_str("manager"), Some(Role::Manager));
-        assert_eq!(Role::from_str("user"), Some(Role::User));
-        assert_eq!(Role::from_str("invalid"), None);
+    fn auth_user(
+        is_admin: bool,
+        can_create_template: bool,
+        can_manage_users: bool,
+        can_manage_group_instances: bool,
+        can_manage_docker: bool,
+        can_manage_registry: bool,
+    ) -> AuthUser {
+        AuthUser {
+            user_id: Uuid::new_v4(),
+            username: "tester".to_string(),
+            context: EffectiveContext {
+                user_id: Uuid::new_v4(),
+                username: "tester".to_string(),
+                is_admin,
+                tier: if is_admin { 2 } else { 0 },
+                can_create_template,
+                can_manage_users,
+                can_manage_group_instances,
+                can_manage_docker,
+                can_manage_registry,
+                effective_max_instances: 2,
+                allowed_template_ids: vec![],
+                group_ids: vec![],
+                direct_max_instances: None,
+            },
+        }
     }
 
     #[test]
-    fn test_role_as_str() {
-        assert_eq!(Role::Admin.as_str(), "admin");
-        assert_eq!(Role::Manager.as_str(), "manager");
-        assert_eq!(Role::User.as_str(), "user");
+    fn test_is_admin_backed_by_context_flag() {
+        assert!(auth_user(true, false, false, false, false, false).is_admin());
+        assert!(!auth_user(false, false, false, false, false, false).is_admin());
     }
 
     #[test]
-    fn test_role_can_manage_users() {
-        assert!(Role::Admin.can_manage_users());
-        assert!(Role::Manager.can_manage_users());
-        assert!(!Role::User.can_manage_users());
+    fn test_compat_gates_reflect_context_flags() {
+        let manager = auth_user(false, true, true, true, true, true);
+        assert!(manager.can_manage_users());
+        assert!(manager.can_manage_docker());
+        assert!(manager.can_manage_registry());
+
+        let plain = auth_user(false, false, false, false, false, false);
+        assert!(!plain.can_manage_users());
+        assert!(!plain.can_manage_docker());
+        assert!(!plain.can_manage_registry());
     }
 
     #[test]
-    fn test_role_can_create_role() {
-        assert!(Role::Admin.can_create_role(&Role::Manager));
-        assert!(Role::Admin.can_create_role(&Role::User));
-        assert!(!Role::Admin.can_create_role(&Role::Admin));
-
-        assert!(Role::Manager.can_create_role(&Role::User));
-        assert!(!Role::Manager.can_create_role(&Role::Manager));
-        assert!(!Role::Manager.can_create_role(&Role::Admin));
-
-        assert!(!Role::User.can_create_role(&Role::User));
-        assert!(!Role::User.can_create_role(&Role::Manager));
-        assert!(!Role::User.can_create_role(&Role::Admin));
+    fn test_admin_bypasses_every_gate() {
+        let admin = auth_user(true, false, false, false, false, false);
+        assert!(admin.can_manage_users());
+        assert!(admin.can_manage_docker());
+        assert!(admin.can_manage_registry());
     }
 
     #[test]
-    fn test_role_can_manage_templates() {
-        assert!(Role::Admin.can_manage_templates());
-        assert!(Role::Manager.can_manage_templates());
-        assert!(!Role::User.can_manage_templates());
-    }
-
-    #[test]
-    fn test_role_can_view_all_instances() {
-        assert!(Role::Admin.can_view_all_instances());
-        assert!(Role::Manager.can_view_all_instances());
-        assert!(!Role::User.can_view_all_instances());
-    }
-
-    #[test]
-    fn test_role_can_manage_all_instances() {
-        assert!(Role::Admin.can_manage_all_instances());
-        assert!(!Role::Manager.can_manage_all_instances());
-        assert!(!Role::User.can_manage_all_instances());
-    }
-
-    #[test]
-    fn test_role_can_manage_instance() {
-        assert!(Role::Admin.can_manage_instance(&Role::Admin));
-        assert!(Role::Admin.can_manage_instance(&Role::Manager));
-        assert!(Role::Admin.can_manage_instance(&Role::User));
-
-        assert!(!Role::Manager.can_manage_instance(&Role::Admin));
-        assert!(!Role::Manager.can_manage_instance(&Role::Manager));
-        assert!(Role::Manager.can_manage_instance(&Role::User));
-
-        assert!(!Role::User.can_manage_instance(&Role::Admin));
-        assert!(!Role::User.can_manage_instance(&Role::Manager));
-        assert!(!Role::User.can_manage_instance(&Role::User));
-    }
-
-    #[test]
-    fn test_role_can_manage_docker() {
-        assert!(Role::Admin.can_manage_docker());
-        assert!(Role::Manager.can_manage_docker());
-        assert!(!Role::User.can_manage_docker());
-    }
-
-    #[test]
-    fn test_role_can_manage_registry() {
-        assert!(Role::Admin.can_manage_registry());
-        assert!(Role::Manager.can_manage_registry());
-        assert!(!Role::User.can_manage_registry());
-    }
-
-    #[test]
-    fn test_create_token_roundtrip() {
+    fn test_create_token_carries_identity_only() {
         let user_id = Uuid::new_v4();
-        let role = Role::Admin;
 
-        let token = create_token(&user_id, &role, TEST_SECRET).unwrap();
+        let token = create_token(&user_id, TEST_SECRET).unwrap();
 
         let token_data = decode::<Claims>(
             &token,
@@ -282,14 +207,23 @@ mod tests {
         .unwrap();
 
         assert_eq!(token_data.claims.sub, user_id.to_string());
-        assert_eq!(token_data.claims.role, "admin");
         assert!(token_data.claims.exp > chrono::Utc::now().timestamp() as usize);
+
+        let payload: serde_json::Value = decode::<serde_json::Value>(
+            &token,
+            &DecodingKey::from_secret(TEST_SECRET.as_bytes()),
+            &Validation::default(),
+        )
+        .unwrap()
+        .claims;
+        assert_eq!(payload["sub"], user_id.to_string());
+        assert!(payload.get("role").is_none(), "JWT must not carry a role claim");
     }
 
     #[test]
     fn test_create_token_wrong_secret() {
         let user_id = Uuid::new_v4();
-        let token = create_token(&user_id, &Role::User, TEST_SECRET).unwrap();
+        let token = create_token(&user_id, TEST_SECRET).unwrap();
 
         let result = decode::<Claims>(
             &token,
@@ -301,10 +235,10 @@ mod tests {
     }
 
     #[test]
-    fn test_create_token_user_role() {
+    fn test_create_token_expires_in_seven_days() {
         let user_id = Uuid::new_v4();
-        let token = create_token(&user_id, &Role::User, TEST_SECRET).unwrap();
 
+        let token = create_token(&user_id, TEST_SECRET).unwrap();
         let token_data = decode::<Claims>(
             &token,
             &DecodingKey::from_secret(TEST_SECRET.as_bytes()),
@@ -312,7 +246,11 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(token_data.claims.role, "user");
+        let now = chrono::Utc::now().timestamp() as usize;
+        let seven_days = 7 * 24 * 60 * 60;
+        let remaining = token_data.claims.exp.saturating_sub(now);
+        assert!(remaining > seven_days - 60, "token should last ~7 days, got {remaining}s");
+        assert!(remaining <= seven_days, "token should not exceed 7 days, got {remaining}s");
     }
 
     #[test]
@@ -326,26 +264,6 @@ mod tests {
         assert!(cookie_val.contains("Secure"));
         assert!(cookie_val.contains("SameSite=Lax"));
         assert!(cookie_val.contains("Max-Age=604800"));
-    }
-
-    #[test]
-    fn test_create_token_expires_in_seven_days() {
-        let user_id = Uuid::new_v4();
-        let role = Role::Admin;
-
-        let token = create_token(&user_id, &role, TEST_SECRET).unwrap();
-        let token_data = decode::<Claims>(
-            &token,
-            &DecodingKey::from_secret(TEST_SECRET.as_bytes()),
-            &Validation::default(),
-        )
-        .unwrap();
-
-        let now = chrono::Utc::now().timestamp() as usize;
-        let seven_days = 7 * 24 * 60 * 60;
-        let remaining = token_data.claims.exp.saturating_sub(now);
-        assert!(remaining > seven_days - 60, "token should last ~7 days, got {remaining}s");
-        assert!(remaining <= seven_days, "token should not exceed 7 days, got {remaining}s");
     }
 
     #[test]

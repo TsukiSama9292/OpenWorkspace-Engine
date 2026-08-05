@@ -19,25 +19,14 @@ pub fn routes() -> Router<AppState> {
 
 #[derive(Deserialize)]
 pub struct UpdateSettingsRequest {
-    max_cpu_cores: i32,
-    max_ram_bytes: i64,
     host_instance_limit: i32,
-    shared_max_cpu: i32,
-    shared_max_ram: i64,
 }
 
 impl UpdateSettingsRequest {
-    /// Every knob must be a non-negative integer (`0` carries its documented
-    /// meaning: unlimited instance count, shared fuse off).
+    /// The knob must be a non-negative integer (`0` carries its documented
+    /// meaning: unlimited instance count).
     fn validate(&self) -> Result<(), StatusCode> {
-        let non_negative = [
-            self.max_cpu_cores >= 0,
-            self.max_ram_bytes >= 0,
-            self.host_instance_limit >= 0,
-            self.shared_max_cpu >= 0,
-            self.shared_max_ram >= 0,
-        ];
-        if non_negative.into_iter().all(|ok| ok) {
+        if self.host_instance_limit >= 0 {
             Ok(())
         } else {
             Err(StatusCode::BAD_REQUEST)
@@ -73,11 +62,7 @@ async fn update_settings(
     input.validate()?;
 
     let settings = SystemSettings {
-        max_cpu_cores: input.max_cpu_cores,
-        max_ram_bytes: input.max_ram_bytes,
         host_instance_limit: input.host_instance_limit,
-        shared_max_cpu: input.shared_max_cpu,
-        shared_max_ram: input.shared_max_ram,
     };
 
     let updated = SystemSettingsRepository::new(&state.db)

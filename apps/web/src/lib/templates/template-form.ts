@@ -1,7 +1,7 @@
 import { api } from '$lib/api/client';
 import { buildRunConfig, buildExecConfig, buildVolumeMappings, createEmptyEnvVar, createEmptyVolume } from '$lib/utils/format';
 import type { EnvVar, VolumeMapping } from '$lib/utils/format';
-import type { Template, RemoteType, TimeoutAction, TemplateAllocationMode } from '$lib/types';
+import type { Template, RemoteType, TimeoutAction, TemplateVisibility } from '$lib/types';
 
 export type { TimeoutAction } from '$lib/types';
 
@@ -33,7 +33,7 @@ export interface TemplateFormState {
   bandwidthUpMbps: number;
   bandwidthDownMbps: number;
   dockerInInstance: boolean;
-  allocationMode: TemplateAllocationMode;
+  visibility: TemplateVisibility;
   envVars: EnvVar[];
   execCommand: string;
   volumeMappings: VolumeMapping[];
@@ -65,7 +65,7 @@ export function createInitialFormState(): TemplateFormState {
     bandwidthUpMbps: 0,
     bandwidthDownMbps: 0,
     dockerInInstance: false,
-    allocationMode: 'shared',
+    visibility: 'private',
     envVars: [createEmptyEnvVar()],
     execCommand: '',
     volumeMappings: [createEmptyVolume()],
@@ -103,7 +103,7 @@ function buildTemplateBody(state: TemplateFormState): Record<string, unknown> {
     network_bandwidth_up_mbps: state.bandwidthUpMbps,
     network_bandwidth_down_mbps: state.bandwidthDownMbps,
     docker_in_instance: state.dockerInInstance,
-    allocation_mode: state.allocationMode,
+    visibility: state.visibility,
   };
 }
 
@@ -176,7 +176,7 @@ export function formStateFromTemplate(t: Template): TemplateFormState {
     bandwidthUpMbps: t.network_bandwidth_up_mbps ?? 0,
     bandwidthDownMbps: t.network_bandwidth_down_mbps ?? 0,
     dockerInInstance: t.docker_in_instance ?? false,
-    allocationMode: t.allocation_mode === 'dedicated' ? 'dedicated' : 'shared',
+    visibility: t.visibility ?? 'private',
     envVars: rc.envVars,
     execCommand: parseExecConfig(t.exec_config as Record<string, unknown>),
     volumeMappings: parseVolumeMappings(t.volume_mappings as Record<string, string>),

@@ -20,6 +20,7 @@ const template: Template = {
   id: 'tpl-1',
   name: ' Dev VM ',
   description: 'My dev box',
+  owner_id: 'u1',
   image: 'img:1',
   cores: 4,
   memory: 8589934592,
@@ -35,7 +36,7 @@ const template: Template = {
   network_bandwidth_up_mbps: 100,
   network_bandwidth_down_mbps: 50,
   docker_in_instance: true,
-  allocation_mode: 'shared',
+  visibility: 'private',
   run_config: {
     hostname: 'devbox',
     dns: ['8.8.8.8', '1.1.1.1'],
@@ -71,7 +72,7 @@ const populatedState: TemplateFormState = {
   bandwidthUpMbps: 50,
   bandwidthDownMbps: 25,
   dockerInInstance: true,
-  allocationMode: 'shared',
+  visibility: 'private',
   envVars: [{ key: 'FOO', value: 'bar' }],
   execCommand: 'bash',
   volumeMappings: [{ host: '/h', container: '/c' }],
@@ -99,7 +100,7 @@ describe('template-form', () => {
       expect(state.keepTimeSeconds).toBeNull();
       expect(state.keepTimeAction).toBe('pause');
       expect(state.dockerInInstance).toBe(false);
-      expect(state.allocationMode).toBe('shared');
+      expect(state.visibility).toBe('private');
       expect(state.envVars).toEqual([{ key: '', value: '' }]);
       expect(state.volumeMappings).toEqual([{ host: '', container: '' }]);
     });
@@ -142,7 +143,7 @@ describe('template-form', () => {
           network_bandwidth_up_mbps: 50,
           network_bandwidth_down_mbps: 25,
           docker_in_instance: true,
-          allocation_mode: 'shared'
+          visibility: 'private'
         })
       }));
     });
@@ -175,7 +176,7 @@ describe('template-form', () => {
           network_bandwidth_up_mbps: 0,
           network_bandwidth_down_mbps: 0,
           docker_in_instance: false,
-          allocation_mode: 'shared'
+          visibility: 'private'
         })
       }));
     });
@@ -246,14 +247,24 @@ describe('template-form', () => {
       expect(body.keep_time_action).toBe('stop');
     });
 
-    it('sends the dedicated allocation mode when selected', async () => {
+    it('does not emit allocation_mode in the POST body', async () => {
       const mockFetch = vi.fn().mockResolvedValue(jsonResponse({ template: { id: 'tpl-new' } }));
       vi.stubGlobal('fetch', mockFetch);
 
-      await submitTemplate({ ...createInitialFormState(), name: 'X', allocationMode: 'dedicated' });
+      await submitTemplate({ ...createInitialFormState(), name: 'X' });
 
       const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
-      expect(body.allocation_mode).toBe('dedicated');
+      expect(body.allocation_mode).toBeUndefined();
+    });
+
+    it('sends the chosen visibility in the POST body', async () => {
+      const mockFetch = vi.fn().mockResolvedValue(jsonResponse({ template: { id: 'tpl-new' } }));
+      vi.stubGlobal('fetch', mockFetch);
+
+      await submitTemplate({ ...createInitialFormState(), name: 'X', visibility: 'hidden' });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+      expect(body.visibility).toBe('hidden');
     });
   });
 
@@ -282,7 +293,7 @@ describe('template-form', () => {
         bandwidthUpMbps: 100,
         bandwidthDownMbps: 50,
         dockerInInstance: true,
-        allocationMode: 'shared',
+        visibility: 'private',
         envVars: [
           { key: 'FOO', value: 'bar' },
           { key: 'EMPTY', value: '' }
@@ -325,6 +336,11 @@ describe('template-form', () => {
       expect(state.dockerInInstance).toBe(false);
     });
 
+    it('maps the template visibility', () => {
+      const state = formStateFromTemplate({ ...template, visibility: 'public' });
+      expect(state.visibility).toBe('public');
+    });
+
     it('prefills keep-time fields from a template', () => {
       const state = formStateFromTemplate({ ...template, keep_time_seconds: 600, keep_time_action: 'stop' });
       expect(state.keepTimeSeconds).toBe(600);
@@ -335,17 +351,6 @@ describe('template-form', () => {
       const state = formStateFromTemplate({ ...template, keep_time_seconds: null, keep_time_action: 'pause' });
       expect(state.keepTimeSeconds).toBeNull();
       expect(state.keepTimeAction).toBe('pause');
-    });
-
-    it('maps a dedicated allocation mode into editable form state', () => {
-      const state = formStateFromTemplate({ ...template, allocation_mode: 'dedicated' });
-      expect(state.allocationMode).toBe('dedicated');
-    });
-
-    it('defaults a missing allocation mode to shared', () => {
-      const { allocation_mode, ...rest } = template;
-      const state = formStateFromTemplate(rest as Template);
-      expect(state.allocationMode).toBe('shared');
     });
   });
 
@@ -417,7 +422,7 @@ describe('template-form', () => {
           network_bandwidth_up_mbps: 50,
           network_bandwidth_down_mbps: 25,
           docker_in_instance: true,
-          allocation_mode: 'shared'
+          visibility: 'private'
         })
       }));
     });

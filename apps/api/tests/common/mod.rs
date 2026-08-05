@@ -112,6 +112,7 @@ impl TestContext {
             vnc_cache,
             settings: settings.clone(),
             network_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+            port_pool: std::sync::Arc::new(tokio::sync::Mutex::new(Default::default())),
         };
 
         let cors = tower_http::cors::CorsLayer::new()

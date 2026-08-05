@@ -14,36 +14,14 @@ const baseProps = {
   keepTimeAction: 'pause' as const,
 };
 
-function modeSelect(container: HTMLElement) {
-  return container.querySelector<HTMLSelectElement>('[data-testid="allocation-mode-select"]')!;
-}
+describe('TemplateResources', () => {
+  it('renders resource fields without an allocation mode selector', () => {
+    const { container } = render(TemplateResources, { props: baseProps });
 
-describe('TemplateResources allocation mode', () => {
-  it('offers both shared and dedicated to admins', () => {
-    const { container } = render(TemplateResources, {
-      props: { ...baseProps, allocationMode: 'shared', canAllocateDedicated: true }
-    });
-    const select = modeSelect(container);
-    expect(Array.from(select.options).map((o) => o.value)).toEqual(['shared', 'dedicated']);
-    expect(select.disabled).toBe(false);
-  });
-
-  it('hides the dedicated option for managers', () => {
-    const { container } = render(TemplateResources, {
-      props: { ...baseProps, allocationMode: 'shared', canAllocateDedicated: false }
-    });
-    const select = modeSelect(container);
-    expect(Array.from(select.options).map((o) => o.value)).toEqual(['shared']);
-    expect(select.disabled).toBe(false);
-  });
-
-  it('locks a dedicated template for managers and preserves its value', () => {
-    const { container } = render(TemplateResources, {
-      props: { ...baseProps, allocationMode: 'dedicated', canAllocateDedicated: false }
-    });
-    const select = modeSelect(container);
-    expect(select.disabled).toBe(true);
-    expect(select.value).toBe('dedicated');
-    expect(screen.queryByText(/set to dedicated mode by an admin/i)).toBeTruthy();
+    expect(screen.getByLabelText('CPU Cores *')).toBeTruthy();
+    expect(screen.getByLabelText('RAM (GB) *')).toBeTruthy();
+    expect(screen.getByLabelText('GPU')).toBeTruthy();
+    expect(container.querySelector('[data-testid="allocation-mode-select"]')).toBeNull();
+    expect(screen.queryByText('Allocation Mode')).toBeNull();
   });
 });

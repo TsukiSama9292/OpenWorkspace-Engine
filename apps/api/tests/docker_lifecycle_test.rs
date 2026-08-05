@@ -569,6 +569,7 @@ async fn test_launch_persistent_resolves_path_server_side() {
     ctx.login_admin().await;
 
     let name = format!("ow_test_docker_lt_volpath_{}", std::process::id());
+    let persistent_root = format!("/tmp/ow_test_root_{}_{}", std::process::id(), "volpath");
     let resp = ctx
         .post("/api/templates", &serde_json::json!({
             "name": name,
@@ -576,7 +577,7 @@ async fn test_launch_persistent_resolves_path_server_side() {
             "cores": 0,
             "memory": 0,
             "run_config": { "command": ["sleep", "3600"] },
-            "persistent_storage_path": "/tmp/ow_test_root",
+            "persistent_storage_path": persistent_root,
         }))
         .await;
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -591,7 +592,7 @@ async fn test_launch_persistent_resolves_path_server_side() {
         .unwrap()
         .expect("admin user must exist");
     drop(db);
-    let expected_path = format!("/tmp/ow_test_root/{}/{}", name, admin.id);
+    let expected_path = format!("{}/{}/{}", persistent_root, name, admin.id);
 
     let resp = ctx
         .post("/api/instances", &serde_json::json!({
@@ -640,10 +641,11 @@ async fn test_launch_persistent_resolves_path_server_side() {
     assert_eq!(body["instance"]["mount_persistent"], true);
 
     // Clean up: delete the relaunched instance, then drop the leftover volume
-    // + host dir manually (delete intentionally keeps them).
+    // + host data tree manually (delete intentionally keeps them). The per-test
+    // root is unique to this test (pid + suffix), so removal is race-free.
     assert_eq!(ctx.delete(&format!("/api/instances/{}", relaunched_id)).await.status(), 204);
     docker.remove_volume(&volume_name, None::<bollard::volume::RemoveVolumeOptions>).await.ok();
-    std::fs::remove_dir_all(&expected_path).ok();
+    std::fs::remove_dir_all(&persistent_root).ok();
 }
 
 #[tokio::test]

@@ -1,2 +1,6 @@
 [profile.default]
+# Hard per-test cap so a hung docker/runsc sandbox start fails the test
+# instead of blocking the run indefinitely. bollard's per-request timeout is
+# already 120s; this bounds the whole test on top of it.
+timeout = { per-test = "180s" }
 slow-timeout = { period = "120s", terminate-after = 3 }

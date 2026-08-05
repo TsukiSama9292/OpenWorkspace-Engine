@@ -9,8 +9,8 @@ use bcrypt::verify;
 use serde::Deserialize;
 
 use super::super::AppState;
-use crate::auth::{create_token, set_cookie, Role};
-use crate::db::UserRepository;
+use crate::auth::{create_token, set_cookie};
+use crate::db::{PolicyRepository, UserRepository};
 
 #[derive(Deserialize)]
 struct LoginRequest {
@@ -39,16 +39,19 @@ async fn login(
         return Err(StatusCode::UNAUTHORIZED);
     }
 
-    let role = Role::from_str(&user.role).ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-    let token = create_token(&user.id, &role, &state.settings.jwt_secret)?;
+    let context = PolicyRepository::new(&state.db)
+        .load_effective_context(user.id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let token = create_token(&user.id, &state.settings.jwt_secret)?;
 
     let mut headers = axum::http::HeaderMap::new();
     set_cookie(&mut headers, &token);
 
     Ok((
         headers,
-        Json(serde_json::json!({
-            "user": { "id": user.id, "username": user.username, "role": user.role }
-        })),
+        Json(serde_json::json!({ "context": context })),
     ))
 }

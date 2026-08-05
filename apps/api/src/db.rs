@@ -1,10 +1,20 @@
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Insert, Order, PaginatorTrait, QueryFilter, QueryOrder, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Insert, Order, PaginatorTrait, QueryFilter, QueryOrder, Set, TryIntoModel};
 use sea_orm::sea_query::{Expr, OnConflict};
+use std::collections::HashMap;
 use uuid::Uuid;
+
+use crate::effective_context::{
+    calculate_effective_context, EffectiveContext, GroupPolicy, TemplateVisibility, UserPolicy,
+};
 
 /// Instance statuses that count toward quota accounting — the Active Set
 /// (spec Decision 2). Anything else (`stopped`, `error`) is inactive.
 pub const ACTIVE_STATUSES: [&str; 3] = ["running", "starting", "paused"];
+
+/// Registry status of a `persistent_volumes` row: `active` while at least one
+/// active instance references its host path, `orphaned` once nothing does.
+pub const VOLUME_STATUS_ACTIVE: &str = "active";
+pub const VOLUME_STATUS_ORPHANED: &str = "orphaned";
 
 fn generate_access_token() -> String {
     Uuid::new_v4().as_simple().to_string()
@@ -53,10 +63,7 @@ pub mod user {
         pub id: Uuid,
         pub username: String,
         pub password_hash: String,
-        pub role: String,
-        pub instance_limit: Option<i32>,
-        pub max_cpu_cores: Option<i32>,
-        pub max_ram_bytes: Option<i64>,
+        pub direct_max_instances: Option<i32>,
         pub created_at: DateTimeUtc,
         pub updated_at: DateTimeUtc,
     }
@@ -106,7 +113,7 @@ pub mod workspace_template {
         pub keep_time_seconds: Option<i64>,
         pub keep_time_action: String,
         pub docker_in_instance: bool,
-        pub allocation_mode: String,
+        pub visibility: String,
         pub created_at: DateTimeUtc,
         pub updated_at: DateTimeUtc,
     }
@@ -195,6 +202,32 @@ pub mod workspace_instance {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
+/// The `persistent_volumes` registry (spec Decision 7). One row per resolved
+/// host data path; `owner_id` is nulled (never the row deleted) when the owner
+/// user is deleted, and `status` flips between `active` and `orphaned` as
+/// instances referencing the path come and go. Host data itself is only ever
+/// removed by the explicit double-confirmed cleanup endpoint.
+pub mod persistent_volume {
+    use sea_orm::entity::prelude::*;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
+    #[sea_orm(table_name = "persistent_volumes")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: Uuid,
+        pub owner_id: Option<Uuid>,
+        pub host_path: String,
+        pub status: String,
+        pub created_at: DateTimeUtc,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
 pub mod registry_config {
     use sea_orm::entity::prelude::*;
     use serde::{Deserialize, Serialize};
@@ -233,6 +266,75 @@ pub mod registry_cache {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
+pub mod group {
+    use sea_orm::entity::prelude::*;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
+    #[sea_orm(table_name = "groups")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: Uuid,
+        pub name: String,
+        pub description: Option<String>,
+        /// `admin` | `manager` | `user` | `None` (custom). System groups are
+        /// identified by this column, never by name (spec Decision 2/9).
+        pub kind: Option<String>,
+        pub can_create_template: bool,
+        pub can_manage_users: bool,
+        pub can_manage_group_instances: bool,
+        pub can_manage_docker: bool,
+        pub can_manage_registry: bool,
+        /// `None` (NULL) means "unlimited" (the Admin group's ceiling).
+        pub max_instances: Option<i32>,
+        pub created_at: DateTimeUtc,
+        pub updated_at: DateTimeUtc,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub mod user_group {
+    use sea_orm::entity::prelude::*;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
+    #[sea_orm(table_name = "user_groups")]
+    pub struct Model {
+        #[sea_orm(primary_key)]
+        pub user_id: Uuid,
+        #[sea_orm(primary_key)]
+        pub group_id: Uuid,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub mod group_template {
+    use sea_orm::entity::prelude::*;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
+    #[sea_orm(table_name = "group_templates")]
+    pub struct Model {
+        #[sea_orm(primary_key)]
+        pub group_id: Uuid,
+        #[sea_orm(primary_key)]
+        pub template_id: Uuid,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
 // ── Public Model Types (for callers) ──────────────────────────
 
 #[derive(Debug, Clone)]
@@ -259,7 +361,7 @@ pub struct WorkspaceTemplate {
     pub keep_time_seconds: Option<i64>,
     pub keep_time_action: String,
     pub docker_in_instance: bool,
-    pub allocation_mode: String,
+    pub visibility: TemplateVisibility,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -289,7 +391,7 @@ impl From<workspace_template::Model> for WorkspaceTemplate {
             keep_time_seconds: m.keep_time_seconds,
             keep_time_action: m.keep_time_action,
             docker_in_instance: m.docker_in_instance,
-            allocation_mode: m.allocation_mode,
+            visibility: m.visibility.parse().unwrap_or_default(),
             created_at: m.created_at,
             updated_at: m.updated_at,
         }
@@ -341,21 +443,30 @@ impl From<workspace_instance::Model> for WorkspaceInstance {
 
 // ── User Repository ───────────────────────────────────────────
 
-/// A user row as returned by the repository read queries: the identity and
-/// role columns plus the per-user quota override columns. This replaces the
-/// former positional tuples, whose element order and count differed per query
-/// (`find_by_username` omitted `created_at`, `list_all` omitted
-/// `password_hash`).
+/// A user row as returned by the repository read queries: the identity plus
+/// the per-user flat-RBAC fields. This replaces the former positional tuples,
+/// whose element order and count differed per query (`find_by_username`
+/// omitted `created_at`, `list_all` omitted `password_hash`).
 #[derive(Debug, Clone)]
 pub struct UserRecord {
     pub id: Uuid,
     pub username: String,
     pub password_hash: String,
-    pub role: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    pub instance_limit: Option<i32>,
-    pub max_cpu_cores: Option<i32>,
-    pub max_ram_bytes: Option<i64>,
+}
+
+/// A user row plus the policy rows the management surface exposes: the
+/// personal instance ceiling, group memberships, and the derived tier /
+/// admin status from the member-group kinds.
+#[derive(Debug, Clone)]
+pub struct UserWithPolicy {
+    pub id: Uuid,
+    pub username: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub direct_max_instances: Option<i32>,
+    pub group_ids: Vec<Uuid>,
+    pub is_admin: bool,
+    pub tier: i32,
 }
 
 pub struct UserRepository<'a> {
@@ -368,15 +479,52 @@ impl<'a> UserRepository<'a> {
     }
 
     pub async fn seed_admin(&self, admin_password: &str) -> Result<(), sea_orm::DbErr> {
-        let existing = user::Entity::find()
-            .filter(user::Column::Role.eq("admin"))
+        // Root is Admin-group membership: seed the initial admin as a member of
+        // the (migration-seeded) Admin group, or return once one exists.
+        let Some(admin_group) = group::Entity::find()
+            .filter(group::Column::Kind.eq(Some("admin".to_string())))
+            .one(self.db)
+            .await?
+        else {
+            return Ok(());
+        };
+        let already_root = user_group::Entity::find()
+            .filter(user_group::Column::GroupId.eq(admin_group.id))
             .count(self.db)
             .await?;
-        if existing > 0 {
+        if already_root > 0 {
             return Ok(());
         }
-        let password_hash = bcrypt::hash(admin_password, 10).expect("Failed to hash admin password");
-        self.create("admin", &password_hash, "admin").await?;
+
+        let admin_user_id = match user::Entity::find()
+            .filter(user::Column::Username.eq("admin"))
+            .one(self.db)
+            .await?
+        {
+            Some(existing) => existing.id,
+            None => {
+                let password_hash =
+                    bcrypt::hash(admin_password, 10).expect("Failed to hash admin password");
+                let id = Uuid::new_v4();
+                user::ActiveModel {
+                    id: Set(id),
+                    username: Set("admin".to_string()),
+                    password_hash: Set(password_hash),
+                    ..Default::default()
+                }
+                .insert(self.db)
+                .await?;
+                id
+            }
+        };
+
+        user_group::ActiveModel {
+            user_id: Set(admin_user_id),
+            group_id: Set(admin_group.id),
+        }
+        .insert(self.db)
+        .await?;
+
         tracing::info!("Seeded default admin user (username: admin)");
         Ok(())
     }
@@ -393,11 +541,7 @@ impl<'a> UserRepository<'a> {
             id: m.id,
             username: m.username,
             password_hash: m.password_hash,
-            role: m.role,
             created_at: m.created_at,
-            instance_limit: m.instance_limit,
-            max_cpu_cores: m.max_cpu_cores,
-            max_ram_bytes: m.max_ram_bytes,
         }))
     }
 
@@ -407,11 +551,7 @@ impl<'a> UserRepository<'a> {
             id: m.id,
             username: m.username,
             password_hash: m.password_hash,
-            role: m.role,
             created_at: m.created_at,
-            instance_limit: m.instance_limit,
-            max_cpu_cores: m.max_cpu_cores,
-            max_ram_bytes: m.max_ram_bytes,
         }))
     }
 
@@ -419,14 +559,12 @@ impl<'a> UserRepository<'a> {
         &self,
         username: &str,
         password_hash: &str,
-        role: &str,
     ) -> Result<Uuid, sea_orm::DbErr> {
         let id = Uuid::new_v4();
         let model = user::ActiveModel {
             id: Set(id),
             username: Set(username.to_string()),
             password_hash: Set(password_hash.to_string()),
-            role: Set(role.to_string()),
             ..Default::default()
         };
         model.insert(self.db).await?;
@@ -444,11 +582,7 @@ impl<'a> UserRepository<'a> {
                 id: m.id,
                 username: m.username,
                 password_hash: m.password_hash,
-                role: m.role,
                 created_at: m.created_at,
-                instance_limit: m.instance_limit,
-                max_cpu_cores: m.max_cpu_cores,
-                max_ram_bytes: m.max_ram_bytes,
             })
             .collect())
     }
@@ -463,10 +597,6 @@ impl<'a> UserRepository<'a> {
         id: Uuid,
         username: Option<&str>,
         password_hash: Option<&str>,
-        role: Option<&str>,
-        instance_limit: Option<Option<i32>>,
-        max_cpu_cores: Option<Option<i32>>,
-        max_ram_bytes: Option<Option<i64>>,
     ) -> Result<bool, sea_orm::DbErr> {
         let existing = user::Entity::find_by_id(id)
             .one(self.db)
@@ -481,25 +611,363 @@ impl<'a> UserRepository<'a> {
         if let Some(p) = password_hash {
             model.password_hash = Set(p.to_string());
         }
-        if let Some(r) = role {
-            model.role = Set(r.to_string());
-        }
-        // The outer Option means "field present in the request"; the inner
-        // Option is the column value, where None writes NULL (restore the
-        // role default) and Some writes the per-user override.
-        if let Some(v) = instance_limit {
-            model.instance_limit = Set(v);
-        }
-        if let Some(v) = max_cpu_cores {
-            model.max_cpu_cores = Set(v);
-        }
-        if let Some(v) = max_ram_bytes {
-            model.max_ram_bytes = Set(v);
-        }
 
         model.update(self.db).await?;
         Ok(true)
     }
+
+    /// The group ids a user is a member of, from the `user_groups` join table.
+    /// Used for the flat-model "shares ≥1 group" instance scope and to expose
+    /// an owner's groups on the instance JSON.
+    pub async fn list_group_ids(&self, user_id: Uuid) -> Result<Vec<Uuid>, sea_orm::DbErr> {
+        let rows = user_group::Entity::find()
+            .filter(user_group::Column::UserId.eq(user_id))
+            .all(self.db)
+            .await?;
+        Ok(rows.into_iter().map(|r| r.group_id).collect())
+    }
+
+    /// The distinct user ids that belong to any of the given groups. Empty
+    /// input yields an empty result (no group, no members).
+    pub async fn list_group_members(
+        &self,
+        group_ids: &[Uuid],
+    ) -> Result<Vec<Uuid>, sea_orm::DbErr> {
+        if group_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = user_group::Entity::find()
+            .filter(user_group::Column::GroupId.is_in(group_ids.to_vec()))
+            .all(self.db)
+            .await?;
+        let mut members: Vec<Uuid> = rows.into_iter().map(|r| r.user_id).collect();
+        members.sort_unstable();
+        members.dedup();
+        Ok(members)
+    }
+
+    /// A user row with its policy rows (personal ceiling, membership group
+    /// ids, derived tier/admin), read in one pass so the management response
+    /// reflects a just-applied policy change.
+    pub async fn find_by_id_with_policy(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<UserWithPolicy>, sea_orm::DbErr> {
+        let Some(model) = user::Entity::find_by_id(id).one(self.db).await? else {
+            return Ok(None);
+        };
+        let group_ids = self.list_group_ids(id).await?;
+        let (tier, is_admin) = self.derive_tier(&group_ids).await?;
+        Ok(Some(UserWithPolicy {
+            id: model.id,
+            username: model.username,
+            created_at: model.created_at,
+            direct_max_instances: model.direct_max_instances,
+            group_ids,
+            is_admin,
+            tier,
+        }))
+    }
+
+    /// Every user with their policy rows, for the management list.
+    pub async fn list_all_with_policy(&self) -> Result<Vec<UserWithPolicy>, sea_orm::DbErr> {
+        let models = user::Entity::find()
+            .order_by_asc(user::Column::CreatedAt)
+            .all(self.db)
+            .await?;
+        let mut out = Vec::with_capacity(models.len());
+        for model in models {
+            let group_ids = self.list_group_ids(model.id).await?;
+            let (tier, is_admin) = self.derive_tier(&group_ids).await?;
+            out.push(UserWithPolicy {
+                id: model.id,
+                username: model.username,
+                created_at: model.created_at,
+                direct_max_instances: model.direct_max_instances,
+                group_ids,
+                is_admin,
+                tier,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Derived tier (max kind-tier across member groups) and admin status
+    /// (member of the Admin group) from a set of member-group ids.
+    pub async fn derive_tier(
+        &self,
+        group_ids: &[Uuid],
+    ) -> Result<(i32, bool), sea_orm::DbErr> {
+        use crate::effective_context::{group_kind_tier, TIER_USER};
+        if group_ids.is_empty() {
+            return Ok((TIER_USER, false));
+        }
+        let groups = group::Entity::find()
+            .filter(group::Column::Id.is_in(group_ids.to_vec()))
+            .all(self.db)
+            .await?;
+        let is_admin = groups.iter().any(|g| g.kind.as_deref() == Some("admin"));
+        let tier = groups
+            .iter()
+            .map(|g| group_kind_tier(g.kind.as_deref()))
+            .max()
+            .unwrap_or(TIER_USER);
+        Ok((tier, is_admin))
+    }
+
+    /// Reconcile a user's group memberships to exactly the given group ids.
+    pub async fn set_group_memberships(
+        &self,
+        user_id: Uuid,
+        group_ids: &[Uuid],
+    ) -> Result<(), sea_orm::DbErr> {
+        user_group::Entity::delete_many()
+            .filter(user_group::Column::UserId.eq(user_id))
+            .exec(self.db)
+            .await?;
+        for &group_id in group_ids {
+            user_group::ActiveModel {
+                user_id: Set(user_id),
+                group_id: Set(group_id),
+            }
+            .insert(self.db)
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Set (or clear, with `None`) a user's personal instance ceiling. `None`
+    /// in the column means "no personal override" per spec Decision 1.
+    pub async fn set_direct_max_instances(
+        &self,
+        user_id: Uuid,
+        direct_max_instances: Option<i32>,
+    ) -> Result<bool, sea_orm::DbErr> {
+        let result = user::Entity::update(user::ActiveModel {
+            id: Set(user_id),
+            direct_max_instances: Set(direct_max_instances),
+            ..Default::default()
+        })
+        .filter(user::Column::Id.eq(user_id))
+        .exec(self.db)
+        .await;
+        match result {
+            Ok(_) => Ok(true),
+            Err(sea_orm::DbErr::RecordNotFound(_)) | Err(sea_orm::DbErr::RecordNotUpdated) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+// ── Group Repository ─────────────────────────────────────────
+
+/// A group row as read from the `groups` table. The template whitelist lives
+/// in `group_templates` and is read separately via `list_template_ids`.
+#[derive(Debug, Clone)]
+pub struct GroupRecord {
+    pub id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+    /// `admin` | `manager` | `user` | `None` (custom groups).
+    pub kind: Option<String>,
+    pub can_create_template: bool,
+    pub can_manage_users: bool,
+    pub can_manage_group_instances: bool,
+    pub can_manage_docker: bool,
+    pub can_manage_registry: bool,
+    pub max_instances: Option<i32>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Group CRUD plus the group template whitelist. Group policy writes are
+/// `is_admin`-only at the route layer; this repository never gates.
+pub struct GroupRepository<'a> {
+    pub db: &'a DatabaseConnection,
+}
+
+impl<'a> GroupRepository<'a> {
+    pub fn new(db: &'a DatabaseConnection) -> Self {
+        Self { db }
+    }
+
+    fn from_model(m: group::Model) -> GroupRecord {
+        GroupRecord {
+            id: m.id,
+            name: m.name,
+            description: m.description,
+            kind: m.kind,
+            can_create_template: m.can_create_template,
+            can_manage_users: m.can_manage_users,
+            can_manage_group_instances: m.can_manage_group_instances,
+            can_manage_docker: m.can_manage_docker,
+            can_manage_registry: m.can_manage_registry,
+            max_instances: m.max_instances,
+            created_at: m.created_at,
+            updated_at: m.updated_at,
+        }
+    }
+
+    pub async fn find_by_name(&self, name: &str) -> Result<Option<GroupRecord>, sea_orm::DbErr> {
+        let model = group::Entity::find()
+            .filter(group::Column::Name.eq(name))
+            .one(self.db)
+            .await?;
+        Ok(model.map(Self::from_model))
+    }
+
+    pub async fn find_by_id(&self, id: Uuid) -> Result<Option<GroupRecord>, sea_orm::DbErr> {
+        let model = group::Entity::find_by_id(id).one(self.db).await?;
+        Ok(model.map(Self::from_model))
+    }
+
+    /// The first system group with the given `kind` (e.g. the Admin group for
+    /// the default template whitelist and `seed_admin`).
+    pub async fn find_by_kind(&self, kind: &str) -> Result<Option<GroupRecord>, sea_orm::DbErr> {
+        let model = group::Entity::find()
+            .filter(group::Column::Kind.eq(Some(kind.to_string())))
+            .one(self.db)
+            .await?;
+        Ok(model.map(Self::from_model))
+    }
+
+    pub async fn list_all(&self) -> Result<Vec<GroupRecord>, sea_orm::DbErr> {
+        let models = group::Entity::find()
+            .order_by_asc(group::Column::Name)
+            .all(self.db)
+            .await?;
+        Ok(models.into_iter().map(Self::from_model).collect())
+    }
+
+    pub async fn create(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        can_create_template: bool,
+        can_manage_users: bool,
+        can_manage_group_instances: bool,
+        can_manage_docker: bool,
+        can_manage_registry: bool,
+        max_instances: i32,
+    ) -> Result<Uuid, sea_orm::DbErr> {
+        let id = Uuid::new_v4();
+        let model = group::ActiveModel {
+            id: Set(id),
+            name: Set(name.to_string()),
+            description: Set(description.map(|s| s.to_string())),
+            kind: Set(None),
+            can_create_template: Set(can_create_template),
+            can_manage_users: Set(can_manage_users),
+            can_manage_group_instances: Set(can_manage_group_instances),
+            can_manage_docker: Set(can_manage_docker),
+            can_manage_registry: Set(can_manage_registry),
+            max_instances: Set(Some(max_instances)),
+            ..Default::default()
+        };
+        model.insert(self.db).await?;
+        Ok(id)
+    }
+
+    pub async fn update(
+        &self,
+        id: Uuid,
+        name: &str,
+        description: Option<&str>,
+        can_create_template: bool,
+        can_manage_users: bool,
+        can_manage_group_instances: bool,
+        can_manage_docker: bool,
+        can_manage_registry: bool,
+        max_instances: Option<i32>,
+    ) -> Result<bool, sea_orm::DbErr> {
+        let result = group::Entity::update(group::ActiveModel {
+            id: Set(id),
+            name: Set(name.to_string()),
+            description: Set(description.map(|s| s.to_string())),
+            can_create_template: Set(can_create_template),
+            can_manage_users: Set(can_manage_users),
+            can_manage_group_instances: Set(can_manage_group_instances),
+            can_manage_docker: Set(can_manage_docker),
+            can_manage_registry: Set(can_manage_registry),
+            max_instances: Set(max_instances),
+            ..Default::default()
+        })
+        .filter(group::Column::Id.eq(id))
+        .exec(self.db)
+        .await;
+        match result {
+            Ok(_) => Ok(true),
+            Err(sea_orm::DbErr::RecordNotFound(_)) | Err(sea_orm::DbErr::RecordNotUpdated) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub async fn delete(&self, id: Uuid) -> Result<bool, sea_orm::DbErr> {
+        let result = group::Entity::delete_by_id(id).exec(self.db).await?;
+        Ok(result.rows_affected > 0)
+    }
+
+    /// The template ids whitelisted for the group.
+    pub async fn list_template_ids(&self, group_id: Uuid) -> Result<Vec<Uuid>, sea_orm::DbErr> {
+        let rows = group_template::Entity::find()
+            .filter(group_template::Column::GroupId.eq(group_id))
+            .all(self.db)
+            .await?;
+        Ok(rows.into_iter().map(|r| r.template_id).collect())
+    }
+
+    /// Reconcile the group's template whitelist to exactly the given ids.
+    pub async fn set_template_ids(
+        &self,
+        group_id: Uuid,
+        template_ids: &[Uuid],
+    ) -> Result<(), sea_orm::DbErr> {
+        group_template::Entity::delete_many()
+            .filter(group_template::Column::GroupId.eq(group_id))
+            .exec(self.db)
+            .await?;
+        for &template_id in template_ids {
+            group_template::ActiveModel {
+                group_id: Set(group_id),
+                template_id: Set(template_id),
+            }
+            .insert(self.db)
+            .await?;
+        }
+        Ok(())
+    }
+}
+
+/// Whether every given group id exists. Used before reconciling memberships so
+/// a bad list gets a 400 instead of a foreign-key 500.
+pub async fn validate_group_ids(
+    db: &DatabaseConnection,
+    ids: &[Uuid],
+) -> Result<bool, sea_orm::DbErr> {
+    if ids.is_empty() {
+        return Ok(true);
+    }
+    let count = group::Entity::find()
+        .filter(group::Column::Id.is_in(ids.to_vec()))
+        .count(db)
+        .await?;
+    Ok(count as usize == ids.len())
+}
+
+/// Whether every given template id exists. Used before reconciling the group
+/// template whitelist.
+pub async fn validate_template_ids(
+    db: &DatabaseConnection,
+    ids: &[Uuid],
+) -> Result<bool, sea_orm::DbErr> {
+    if ids.is_empty() {
+        return Ok(true);
+    }
+    let count = workspace_template::Entity::find()
+        .filter(workspace_template::Column::Id.is_in(ids.to_vec()))
+        .count(db)
+        .await?;
+    Ok(count as usize == ids.len())
 }
 
 // ── Workspace Template Repository ─────────────────────────────
@@ -515,60 +983,6 @@ impl<'a> WorkspaceTemplateRepository<'a> {
 
     pub async fn create(
         &self,
-        name: &str,
-        description: Option<&str>,
-        owner_id: Uuid,
-        image: &str,
-        cores: i32,
-        memory: i64,
-        gpu_count: i32,
-        docker_registry: Option<&str>,
-        remote_type: &str,
-        container_runtime: &str,
-        run_config: &serde_json::Value,
-        exec_config: &serde_json::Value,
-        volume_mappings: &serde_json::Value,
-        persistent_storage_path: Option<&str>,
-        max_run_seconds: Option<i64>,
-        timeout_action: &str,
-        network_bandwidth_up_mbps: i32,
-        network_bandwidth_down_mbps: i32,
-        keep_time_seconds: Option<i64>,
-        keep_time_action: &str,
-        docker_in_instance: bool,
-    ) -> Result<WorkspaceTemplate, sea_orm::DbErr> {
-        self.create_with_allocation_mode(
-            "shared",
-            name,
-            description,
-            owner_id,
-            image,
-            cores,
-            memory,
-            gpu_count,
-            docker_registry,
-            remote_type,
-            container_runtime,
-            run_config,
-            exec_config,
-            volume_mappings,
-            persistent_storage_path,
-            max_run_seconds,
-            timeout_action,
-            network_bandwidth_up_mbps,
-            network_bandwidth_down_mbps,
-            keep_time_seconds,
-            keep_time_action,
-            docker_in_instance,
-        )
-        .await
-    }
-
-    /// Create a template with an explicit `allocation_mode`. The plain `create`
-    /// delegates here with `"shared"` so existing callers keep their behavior.
-    pub async fn create_with_allocation_mode(
-        &self,
-        allocation_mode: &str,
         name: &str,
         description: Option<&str>,
         owner_id: Uuid,
@@ -615,7 +1029,6 @@ impl<'a> WorkspaceTemplateRepository<'a> {
             keep_time_seconds: Set(keep_time_seconds),
             keep_time_action: Set(keep_time_action.to_string()),
             docker_in_instance: Set(docker_in_instance),
-            allocation_mode: Set(allocation_mode.to_string()),
             ..Default::default()
         };
         let inserted = model.insert(self.db).await?;
@@ -652,77 +1065,9 @@ impl<'a> WorkspaceTemplateRepository<'a> {
         Ok(count as i64)
     }
 
-    /// Whether the template has any active instance (running, starting, or
-    /// paused). Changing a template's `allocation_mode` while active instances
-    /// exist is rejected by the routes, keeping per-mode accounting consistent.
-    pub async fn has_active_instances(&self, template_id: Uuid) -> Result<bool, sea_orm::DbErr> {
-        let count = workspace_instance::Entity::find()
-            .filter(workspace_instance::Column::TemplateId.eq(template_id))
-            .filter(workspace_instance::Column::Status.is_in(ACTIVE_STATUSES))
-            .count(self.db)
-            .await?;
-        Ok(count > 0)
-    }
-
     pub async fn update(
         &self,
         id: Uuid,
-        name: &str,
-        description: Option<&str>,
-        image: &str,
-        cores: i32,
-        memory: i64,
-        gpu_count: i32,
-        docker_registry: Option<&str>,
-        remote_type: &str,
-        container_runtime: &str,
-        run_config: &serde_json::Value,
-        exec_config: &serde_json::Value,
-        volume_mappings: &serde_json::Value,
-        persistent_storage_path: Option<&str>,
-        max_run_seconds: Option<i64>,
-        timeout_action: &str,
-        network_bandwidth_up_mbps: i32,
-        network_bandwidth_down_mbps: i32,
-        keep_time_seconds: Option<i64>,
-        keep_time_action: &str,
-        docker_in_instance: bool,
-    ) -> Result<bool, sea_orm::DbErr> {
-        self.update_with_allocation_mode(
-            id,
-            None,
-            name,
-            description,
-            image,
-            cores,
-            memory,
-            gpu_count,
-            docker_registry,
-            remote_type,
-            container_runtime,
-            run_config,
-            exec_config,
-            volume_mappings,
-            persistent_storage_path,
-            max_run_seconds,
-            timeout_action,
-            network_bandwidth_up_mbps,
-            network_bandwidth_down_mbps,
-            keep_time_seconds,
-            keep_time_action,
-            docker_in_instance,
-        )
-        .await
-    }
-
-    /// Update a template, optionally changing its `allocation_mode`. When
-    /// `allocation_mode` is `None` the column is left untouched; `Some(mode)`
-    /// overwrites it. The plain `update` delegates here with `None` so existing
-    /// callers keep their behavior and never silently reset the mode.
-    pub async fn update_with_allocation_mode(
-        &self,
-        id: Uuid,
-        allocation_mode: Option<&str>,
         name: &str,
         description: Option<&str>,
         image: &str,
@@ -766,10 +1111,6 @@ impl<'a> WorkspaceTemplateRepository<'a> {
             keep_time_seconds: Set(keep_time_seconds),
             keep_time_action: Set(keep_time_action.to_string()),
             docker_in_instance: Set(docker_in_instance),
-            allocation_mode: match allocation_mode {
-                Some(mode) => Set(mode.to_string()),
-                None => sea_orm::NotSet,
-            },
             ..Default::default()
         })
         .filter(workspace_template::Column::Id.eq(id))
@@ -785,6 +1126,32 @@ impl<'a> WorkspaceTemplateRepository<'a> {
     pub async fn delete(&self, id: Uuid) -> Result<bool, sea_orm::DbErr> {
         let result = workspace_template::Entity::delete_by_id(id).exec(self.db).await?;
         Ok(result.rows_affected > 0)
+    }
+
+    /// Change a template's launch visibility in place. This is the only writer
+    /// for the `visibility` column — `create`/`update` leave it untouched and
+    /// the DB default (`private`) applies on insert (template-visibility spec
+    /// Decision 1).
+    pub async fn set_visibility(
+        &self,
+        id: Uuid,
+        visibility: TemplateVisibility,
+    ) -> Result<bool, sea_orm::DbErr> {
+        let result = workspace_template::Entity::update(workspace_template::ActiveModel {
+            id: Set(id),
+            visibility: Set(visibility.as_str().to_string()),
+            ..Default::default()
+        })
+        .filter(workspace_template::Column::Id.eq(id))
+        .exec(self.db)
+        .await;
+        match result {
+            Ok(_) => Ok(true),
+            Err(sea_orm::DbErr::RecordNotFound(_)) | Err(sea_orm::DbErr::RecordNotUpdated) => {
+                Ok(false)
+            }
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -873,6 +1240,21 @@ impl<'a> WorkspaceInstanceRepository<'a> {
     pub async fn list_by_owner(&self, owner_id: Uuid) -> Result<Vec<WorkspaceInstance>, sea_orm::DbErr> {
         let models = workspace_instance::Entity::find()
             .filter(workspace_instance::Column::OwnerId.eq(owner_id))
+            .order_by_asc(workspace_instance::Column::CreatedAt)
+            .all(self.db)
+            .await?;
+        Ok(models.into_iter().map(|m| m.into()).collect())
+    }
+
+    /// Instances owned by any of the given users (the same-group scope for
+    /// `can_manage_group_instances` holders). Empty input yields an empty
+    /// result.
+    pub async fn list_by_owner_ids(&self, owner_ids: &[Uuid]) -> Result<Vec<WorkspaceInstance>, sea_orm::DbErr> {
+        if owner_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let models = workspace_instance::Entity::find()
+            .filter(workspace_instance::Column::OwnerId.is_in(owner_ids.to_vec()))
             .order_by_asc(workspace_instance::Column::CreatedAt)
             .all(self.db)
             .await?;
@@ -1122,5 +1504,258 @@ impl<'a> RegistryRepository<'a> {
             .exec(self.db)
             .await?;
         Ok(())
+    }
+}
+
+// ── Persistent-Volume Registry Repository ─────────────────────
+
+/// A `persistent_volumes` registry row as exposed to the API. The owner's
+/// username is resolved by the route layer (join-free), so it is not part of
+/// this record.
+#[derive(Debug, Clone)]
+pub struct PersistentVolume {
+    pub id: Uuid,
+    pub owner_id: Option<Uuid>,
+    pub host_path: String,
+    pub status: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<persistent_volume::Model> for PersistentVolume {
+    fn from(m: persistent_volume::Model) -> Self {
+        Self {
+            id: m.id,
+            owner_id: m.owner_id,
+            host_path: m.host_path,
+            status: m.status,
+            created_at: m.created_at,
+        }
+    }
+}
+
+/// Registry CRUD. The lifecycle rules live here so every call site shares
+/// them: upsert keyed by host path on launch, orphan-flip on instance delete,
+/// and row removal only from the explicit cleanup endpoint. No method here
+/// ever removes host data — that is the `DockerService` seam's job, invoked
+/// solely by the cleanup route.
+pub struct PersistentVolumeRepository<'a> {
+    pub db: &'a DatabaseConnection,
+}
+
+impl<'a> PersistentVolumeRepository<'a> {
+    pub fn new(db: &'a DatabaseConnection) -> Self {
+        Self { db }
+    }
+
+    pub async fn find_by_id(&self, id: Uuid) -> Result<Option<PersistentVolume>, sea_orm::DbErr> {
+        let model = persistent_volume::Entity::find_by_id(id).one(self.db).await?;
+        Ok(model.map(|m| m.into()))
+    }
+
+    pub async fn find_by_host_path(
+        &self,
+        host_path: &str,
+    ) -> Result<Option<PersistentVolume>, sea_orm::DbErr> {
+        let model = persistent_volume::Entity::find()
+            .filter(persistent_volume::Column::HostPath.eq(host_path))
+            .one(self.db)
+            .await?;
+        Ok(model.map(|m| m.into()))
+    }
+
+    /// Record (or re-activate) the registry row for a host path on a
+    /// persistent launch. Keyed by the resolved host path — a re-launch of the
+    /// same template by the same owner reuses the row and flips it back to
+    /// `active`; a path never used before inserts a fresh row. The owner is
+    /// always set to the launching user (the path embeds the owner id).
+    pub async fn upsert(
+        &self,
+        host_path: &str,
+        owner_id: Uuid,
+    ) -> Result<PersistentVolume, sea_orm::DbErr> {
+        let existing = self.find_by_host_path(host_path).await?;
+        let model = match existing {
+            Some(volume) => persistent_volume::ActiveModel {
+                id: Set(volume.id),
+                owner_id: Set(Some(owner_id)),
+                status: Set(VOLUME_STATUS_ACTIVE.to_string()),
+                ..Default::default()
+            },
+            None => persistent_volume::ActiveModel {
+                owner_id: Set(Some(owner_id)),
+                host_path: Set(host_path.to_string()),
+                status: Set(VOLUME_STATUS_ACTIVE.to_string()),
+                ..Default::default()
+            },
+        };
+        let model = model.save(self.db).await?.try_into_model()?;
+        Ok(model.into())
+    }
+
+    /// The registry rows with no referencing active instance, oldest first —
+    /// exactly the set the orphaned-volumes view shows.
+    pub async fn list_orphaned(&self) -> Result<Vec<PersistentVolume>, sea_orm::DbErr> {
+        let models = persistent_volume::Entity::find()
+            .filter(persistent_volume::Column::Status.eq(VOLUME_STATUS_ORPHANED))
+            .order_by_asc(persistent_volume::Column::CreatedAt)
+            .all(self.db)
+            .await?;
+        Ok(models.into_iter().map(|m| m.into()).collect())
+    }
+
+    /// Recompute a row's status from the instances that still reference its
+    /// host path: `active` while any active instance references it, `orphaned`
+    /// once none does. Called after an instance delete removes the last
+    /// reference. No-op when no row exists for the path.
+    pub async fn sync_status_for_host_path(&self, host_path: &str) -> Result<(), sea_orm::DbErr> {
+        let Some(volume) = self.find_by_host_path(host_path).await? else {
+            return Ok(());
+        };
+        let referencing = workspace_instance::Entity::find()
+            .filter(workspace_instance::Column::ResolvedVolumeHostPath.eq(host_path))
+            .filter(workspace_instance::Column::Status.is_in(ACTIVE_STATUSES))
+            .count(self.db)
+            .await?;
+        let target = if referencing == 0 {
+            VOLUME_STATUS_ORPHANED
+        } else {
+            VOLUME_STATUS_ACTIVE
+        };
+        if volume.status != target {
+            persistent_volume::ActiveModel {
+                id: Set(volume.id),
+                status: Set(target.to_string()),
+                ..Default::default()
+            }
+            .update(self.db)
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Remove the registry row itself. Host data is *not* touched here — the
+    /// cleanup route calls the Docker seam first and only then removes the row.
+    pub async fn delete(&self, id: Uuid) -> Result<bool, sea_orm::DbErr> {
+        let result = persistent_volume::Entity::delete_by_id(id).exec(self.db).await?;
+        Ok(result.rows_affected > 0)
+    }
+}
+
+// ── Effective-Context Policy Repository ───────────────────────
+
+/// Reads for the effective-context computation: the user's personal config,
+/// their group memberships, and both template whitelists. The policy decision
+/// itself stays in the pure `effective_context` module.
+pub struct PolicyRepository<'a> {
+    pub db: &'a DatabaseConnection,
+}
+
+impl<'a> PolicyRepository<'a> {
+    pub fn new(db: &'a DatabaseConnection) -> Self {
+        Self { db }
+    }
+
+    /// Resolve a user's effective context from the database on every call.
+    /// Returns `None` when the user row is missing (e.g. deleted after a token
+    /// was issued). The context is recomputed per request, so group edits take
+    /// effect on the very next call without re-authentication.
+    pub async fn load_effective_context(
+        &self,
+        user_id: Uuid,
+    ) -> Result<Option<EffectiveContext>, sea_orm::DbErr> {
+        let Some(user) = user::Entity::find_by_id(user_id).one(self.db).await? else {
+            return Ok(None);
+        };
+
+        let memberships = user_group::Entity::find()
+            .filter(user_group::Column::UserId.eq(user_id))
+            .all(self.db)
+            .await?;
+        let member_group_ids: Vec<Uuid> = memberships.iter().map(|m| m.group_id).collect();
+
+        let groups = group::Entity::find()
+            .filter(group::Column::Id.is_in(member_group_ids))
+            .order_by_asc(group::Column::Name)
+            .all(self.db)
+            .await?;
+
+        let mut group_template_ids: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+        let mut whitelisted_template_ids: Vec<Uuid> = Vec::new();
+        for group_id in groups.iter().map(|g| g.id) {
+            let rows = group_template::Entity::find()
+                .filter(group_template::Column::GroupId.eq(group_id))
+                .all(self.db)
+                .await?;
+            let ids: Vec<Uuid> = rows.into_iter().map(|r| r.template_id).collect();
+            whitelisted_template_ids.extend(ids.iter().copied());
+            group_template_ids.insert(group_id, ids);
+        }
+
+        // Hidden templates never enter the effective whitelist: collect the ids
+        // of any whitelisted template whose visibility is `hidden` so the pure
+        // policy engine can strip them (template-visibility spec Decision 3).
+        let mut hidden_template_ids: Vec<Uuid> = Vec::new();
+        if !whitelisted_template_ids.is_empty() {
+            let hidden_rows = workspace_template::Entity::find()
+                .filter(
+                    workspace_template::Column::Id
+                        .is_in(whitelisted_template_ids)
+                        .and(workspace_template::Column::Visibility.eq(TemplateVisibility::Hidden.as_str())),
+                )
+                .all(self.db)
+                .await?;
+            hidden_template_ids = hidden_rows.into_iter().map(|t| t.id).collect();
+        }
+
+        let user_policy = UserPolicy {
+            user_id: user.id,
+            username: user.username.clone(),
+            direct_max_instances: user.direct_max_instances,
+        };
+        let group_policies: Vec<GroupPolicy> = groups
+            .into_iter()
+            .map(|g| GroupPolicy {
+                id: g.id,
+                kind: g.kind,
+                max_instances: g.max_instances,
+                can_create_template: g.can_create_template,
+                can_manage_users: g.can_manage_users,
+                can_manage_group_instances: g.can_manage_group_instances,
+                can_manage_docker: g.can_manage_docker,
+                can_manage_registry: g.can_manage_registry,
+            })
+            .collect();
+
+        Ok(Some(calculate_effective_context(
+            &user_policy,
+            &group_policies,
+            &group_template_ids,
+            &hidden_template_ids,
+        )))
+    }
+
+    /// The derived tier (0/1/2) of a user from their group memberships. Used by
+    /// the tier guardrails, which compare the actor's tier against the
+    /// target's. Returns `None` when the user row is missing.
+    pub async fn load_user_tier(&self, user_id: Uuid) -> Result<Option<i32>, sea_orm::DbErr> {
+        let exists = user::Entity::find_by_id(user_id).one(self.db).await?;
+        if exists.is_none() {
+            return Ok(None);
+        }
+        let memberships = user_group::Entity::find()
+            .filter(user_group::Column::UserId.eq(user_id))
+            .all(self.db)
+            .await?;
+        let member_group_ids: Vec<Uuid> = memberships.iter().map(|m| m.group_id).collect();
+        let groups = group::Entity::find()
+            .filter(group::Column::Id.is_in(member_group_ids))
+            .all(self.db)
+            .await?;
+        let tier = groups
+            .iter()
+            .map(|g| crate::effective_context::group_kind_tier(g.kind.as_deref()))
+            .max()
+            .unwrap_or(crate::effective_context::TIER_USER);
+        Ok(Some(tier))
     }
 }

@@ -25,7 +25,7 @@ async fn list_docker_containers(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    if !auth.role.can_manage_docker() {
+    if !auth.can_manage_docker() {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -55,7 +55,7 @@ async fn create_docker_container(
     auth: AuthUser,
     Json(input): Json<CreateDockerContainerRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    if !auth.role.can_manage_docker() {
+    if !auth.can_manage_docker() {
         return Err(StatusCode::FORBIDDEN);
     }
 

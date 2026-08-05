@@ -1,4 +1,4 @@
-use crate::db::WorkspaceInstanceRepository;
+use crate::db::{PersistentVolumeRepository, WorkspaceInstanceRepository};
 use crate::docker::DockerService;
 use crate::vnc_cache::VncCache;
 
@@ -20,6 +20,22 @@ pub async fn remove(
 
     match instance_repo.delete(instance.id).await {
         Ok(true) => {
+            // Same lifecycle rule as `delete_instance` (spec §7): once no other
+            // active instance still references the host path, flip the volume
+            // registry row to `orphaned` so it shows up in the cleanup view.
+            // Best-effort: a sync failure is logged, never a removal error.
+            if let Some(host_path) = instance.resolved_volume_host_path.as_deref() {
+                if let Err(e) = PersistentVolumeRepository::new(instance_repo.db)
+                    .sync_status_for_host_path(host_path)
+                    .await
+                {
+                    tracing::warn!(
+                        "Failed to sync persistent-volume registry for '{}': {}",
+                        host_path,
+                        e
+                    );
+                }
+            }
             tracing::info!("{} removed instance '{}'", label, instance.name);
             Ok(())
         }

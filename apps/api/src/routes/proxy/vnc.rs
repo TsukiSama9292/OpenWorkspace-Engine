@@ -44,8 +44,6 @@ async fn vnc_verify(
         .parse()
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
 
-    let role = token_data.claims.role;
-
     let forwarded_uri = headers
         .get("X-Forwarded-Uri")
         .and_then(|v| v.to_str().ok())
@@ -80,7 +78,6 @@ async fn vnc_verify(
 
     let mut resp_headers = axum::http::HeaderMap::new();
     resp_headers.insert("X-Forwarded-User", user_id.to_string().parse().unwrap());
-    resp_headers.insert("X-Forwarded-Role", role.parse().unwrap());
 
     Ok(resp_headers)
 }

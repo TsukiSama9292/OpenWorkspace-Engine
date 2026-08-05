@@ -111,6 +111,7 @@ impl MockContext {
             vnc_cache: VncCache::new(),
             settings,
             network_lock: Arc::new(tokio::sync::Mutex::new(())),
+            port_pool: Arc::new(tokio::sync::Mutex::new(Default::default())),
         };
 
         let cors = tower_http::cors::CorsLayer::new()
@@ -1442,7 +1443,7 @@ async fn test_launch_instance_forwards_runsc_runtime() {
 async fn test_launch_instance_defaults_to_settings_runtime() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
-            .withf(|_, _, config, _, _| config.runtime == Some("docker".to_string()))
+            .withf(|_, _, config, _, _| config.runtime == Some("runsc".to_string()))
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
     }).await;
 
@@ -1513,9 +1514,11 @@ async fn test_heartbeat_forbidden_for_non_owner() {
     }).await;
 
     let admin_token = ctx.login_admin().await;
-    ctx.post_auth("/api/users", &serde_json::json!({
+    let owner = ctx.post_auth("/api/users", &serde_json::json!({
         "username": "hb-owner", "password": "pass123"
     }), &admin_token).await;
+    assert_eq!(owner.status(), 200);
+    let owner_id = owner.json::<serde_json::Value>().await.unwrap()["user"]["id"].as_str().unwrap().to_string();
     ctx.post_auth("/api/users", &serde_json::json!({
         "username": "hb-intruder", "password": "pass123"
     }), &admin_token).await;
@@ -1528,9 +1531,13 @@ async fn test_heartbeat_forbidden_for_non_owner() {
     }), &admin_token).await;
     let template_id = config_resp.json::<serde_json::Value>().await.unwrap()["template"]["id"].as_str().unwrap().to_string();
 
+    // The owner launches with a personal whitelist entry for the template.
+    grant_template_whitelist(&ctx, &owner_id, &template_id).await;
+
     let launch_resp = ctx.post_auth("/api/instances", &serde_json::json!({
         "template_id": template_id
     }), &owner_token).await;
+    assert_eq!(launch_resp.status(), 200, "body: {:?}", launch_resp.text().await);
     let instance_id = launch_resp.json::<serde_json::Value>().await.unwrap()["instance"]["id"].as_str().unwrap().to_string();
 
     let resp = ctx.post_auth(&format!("/api/instances/{}/heartbeat", instance_id), &serde_json::json!({}), &intruder_token).await;
@@ -1939,9 +1946,11 @@ async fn test_launch_persistent_conflict_is_per_owner() {
     let other = ctx.post_auth("/api/users", &serde_json::json!({
         "username": "other_persist_user",
         "password": "password123",
-        "role": "user",
     }), &token).await;
     assert_eq!(other.status(), 200);
+    let other_id = other.json::<serde_json::Value>().await.unwrap()["user"]["id"]
+        .as_str().unwrap().to_string();
+    grant_template_whitelist(&ctx, &other_id, &template_id).await;
     let other_token = ctx.login_user("other_persist_user", "password123").await;
 
     let resp = ctx.post_auth("/api/instances", &serde_json::json!({
@@ -2405,31 +2414,66 @@ async fn test_start_ensure_volume_failure_returns_500() {
     assert_eq!(body["error"], "Failed to ensure persistent volume");
 }
 
-// ── Ticket 06: quota pre-flight gating of launch & start ─────────
+// ── Ticket 06: pre-flight gating of launch & start ─────────────────
 
-/// Create a `user`-role account with a per-user instance-limit override, via
-/// the admin API. Returns the new user's id.
+/// Create a plain account and seed a personal ceiling via SQL (the
+/// quota-override PUT is gone; `direct_max_instances` is the new seam).
+/// Returns the new user's id.
 async fn create_quota_user(
     ctx: &MockContext,
     admin_token: &str,
     username: &str,
-    instance_limit: i32,
+    direct_max_instances: i32,
 ) -> String {
     let create = ctx.post_auth("/api/users", &serde_json::json!({
         "username": username,
         "password": "password123",
-        "role": "user",
     }), admin_token).await;
     assert_eq!(create.status(), 200, "failed to create quota user");
     let user_id = create.json::<serde_json::Value>().await.unwrap()["user"]["id"]
         .as_str()
         .unwrap()
         .to_string();
-    let set = ctx.put_auth(&format!("/api/users/{}", user_id), &serde_json::json!({
-        "instance_limit": instance_limit,
-    }), admin_token).await;
-    assert_eq!(set.status(), 200, "failed to set quota override");
+    seed_direct_max_instances(ctx, &user_id, direct_max_instances).await;
     user_id
+}
+
+async fn seed_direct_max_instances(ctx: &MockContext, user_id: &str, limit: i32) {
+    use sea_orm::ConnectionTrait;
+    ctx.db
+        .execute_unprepared(&format!(
+            "UPDATE users SET direct_max_instances = {} WHERE id = '{}'",
+            limit, user_id
+        ))
+        .await
+        .unwrap();
+}
+
+/// Grant the user a group-whitelist entry (to every group they belong to) so
+/// the template passes the `pre_flight` whitelist check (the second seat of
+/// the policy gate). The personal whitelist is gone: only group grants count.
+async fn grant_template_whitelist(ctx: &MockContext, user_id: &str, template_id: &str) {
+    use sea_orm::ConnectionTrait;
+    ctx.db
+        .execute_unprepared(&format!(
+            "INSERT INTO group_templates (group_id, template_id) \
+             SELECT ug.group_id, '{template_id}' FROM user_groups ug \
+             WHERE ug.user_id = '{user_id}' ON CONFLICT DO NOTHING"
+        ))
+        .await
+        .unwrap();
+}
+
+/// Grant a template to a specific group's whitelist.
+async fn grant_group_template(ctx: &MockContext, group_id: &str, template_id: &str) {
+    use sea_orm::ConnectionTrait;
+    ctx.db
+        .execute_unprepared(&format!(
+            "INSERT INTO group_templates (group_id, template_id) \
+             VALUES ('{group_id}', '{template_id}') ON CONFLICT DO NOTHING"
+        ))
+        .await
+        .unwrap();
 }
 
 /// Create a template only (no launch), returning its id.
@@ -2441,7 +2485,7 @@ async fn create_template_only(ctx: &MockContext, token: &str, name: &str) -> Str
 }
 
 #[tokio::test]
-async fn test_launch_rejected_by_quota_returns_409_and_leaves_no_row() {
+async fn test_launch_rejected_by_ceiling_returns_409_and_leaves_no_row() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .times(1)
@@ -2449,26 +2493,27 @@ async fn test_launch_rejected_by_quota_returns_409_and_leaves_no_row() {
     }).await;
 
     let admin_token = ctx.login_admin().await;
-    let template_id = create_template_only(&ctx, &admin_token, "quota-launch").await;
-    create_quota_user(&ctx, &admin_token, "quota_user", 1).await;
-    let user_token = ctx.login_user("quota_user", "password123").await;
+    let template_id = create_template_only(&ctx, &admin_token, "ceiling-launch").await;
+    let user_id = create_quota_user(&ctx, &admin_token, "ceiling_user", 1).await;
+    grant_template_whitelist(&ctx, &user_id, &template_id).await;
+    let user_token = ctx.login_user("ceiling_user", "password123").await;
 
-    // The user's first launch fits the instance limit of 1.
+    // The user's first launch fits the ceiling of 1.
     let first = ctx.post_auth("/api/instances", &serde_json::json!({
         "template_id": template_id,
     }), &user_token).await;
     assert_eq!(first.status(), 200, "body: {:?}", first.text().await);
 
-    // The second launch is refused fail-fast with the structured quota body.
+    // The second launch is refused fail-fast with the structured rejection body.
     let second = ctx.post_auth("/api/instances", &serde_json::json!({
         "template_id": template_id,
     }), &user_token).await;
     assert_eq!(second.status(), 409);
     let body: serde_json::Value = second.json().await.unwrap();
-    assert_eq!(body["quota"]["scope"], "user_instance");
-    assert_eq!(body["quota"]["current"], 1);
-    assert_eq!(body["quota"]["limit"], 1);
-    assert_eq!(body["quota"]["requested"], 1);
+    assert_eq!(body["rejection"]["scope"], "user_instance");
+    assert_eq!(body["rejection"]["current"], 1);
+    assert_eq!(body["rejection"]["limit"], 1);
+    assert_eq!(body["rejection"]["requested"], 1);
     assert!(body["error"].as_str().unwrap().contains("instance limit"));
 
     // The rejected launch created no DB row: only the first instance exists.
@@ -2478,7 +2523,45 @@ async fn test_launch_rejected_by_quota_returns_409_and_leaves_no_row() {
 }
 
 #[tokio::test]
-async fn test_start_rejected_by_quota_leaves_instance_stopped() {
+async fn test_launch_rejected_by_template_whitelist_returns_403() {
+    let ctx = MockContext::new(|m| {
+        // Only the post-grant launch reaches the container create.
+        m.expect_create_container_from_template()
+            .times(1)
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    }).await;
+
+    let admin_token = ctx.login_admin().await;
+    let template_id = create_template_only(&ctx, &admin_token, "whitelist-launch").await;
+    let user_id = create_quota_user(&ctx, &admin_token, "whitelist_user", 5).await;
+    let user_token = ctx.login_user("whitelist_user", "password123").await;
+
+    // No whitelist entry, no ownership, no group: default-deny (403).
+    let launch = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+    }), &user_token).await;
+    assert_eq!(launch.status(), 403);
+    let body: serde_json::Value = launch.json().await.unwrap();
+    assert_eq!(body["rejection"]["scope"], "template_not_allowed");
+    assert_eq!(body["rejection"]["current"], 0);
+    assert_eq!(body["rejection"]["limit"], 0);
+    assert_eq!(body["rejection"]["requested"], 1);
+
+    // Rejected before any reservation: no row and no Docker call.
+    let list = ctx.get_auth("/api/instances", &user_token).await;
+    let list_body: serde_json::Value = list.json().await.unwrap();
+    assert_eq!(list_body["instances"].as_array().unwrap().len(), 0);
+
+    // Granting the personal whitelist unlocks the template.
+    grant_template_whitelist(&ctx, &user_id, &template_id).await;
+    let launch = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+    }), &user_token).await;
+    assert_eq!(launch.status(), 200, "body: {:?}", launch.text().await);
+}
+
+#[tokio::test]
+async fn test_start_rejected_by_ceiling_leaves_instance_stopped() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
             .times(2)
@@ -2486,8 +2569,9 @@ async fn test_start_rejected_by_quota_leaves_instance_stopped() {
     }).await;
 
     let admin_token = ctx.login_admin().await;
-    let template_id = create_template_only(&ctx, &admin_token, "quota-restart").await;
-    create_quota_user(&ctx, &admin_token, "restart_user", 1).await;
+    let template_id = create_template_only(&ctx, &admin_token, "ceiling-restart").await;
+    let user_id = create_quota_user(&ctx, &admin_token, "restart_user", 1).await;
+    grant_template_whitelist(&ctx, &user_id, &template_id).await;
     let user_token = ctx.login_user("restart_user", "password123").await;
 
     // Launch A (active), then stop it: A releases its instance-count slot.
@@ -2505,12 +2589,12 @@ async fn test_start_rejected_by_quota_leaves_instance_stopped() {
     }), &user_token).await;
     assert_eq!(b.status(), 200, "body: {:?}", b.text().await);
 
-    // Restarting A would push the user past the limit: 409, and A stays stopped.
+    // Restarting A would push the user past the ceiling: 409, and A stays stopped.
     let restart = ctx.post_auth(&format!("/api/instances/{}/start", a_id), &serde_json::json!({}), &user_token).await;
     assert_eq!(restart.status(), 409);
     let body: serde_json::Value = restart.json().await.unwrap();
-    assert_eq!(body["quota"]["scope"], "user_instance");
-    assert_eq!(body["quota"]["current"], 1);
+    assert_eq!(body["rejection"]["scope"], "user_instance");
+    assert_eq!(body["rejection"]["current"], 1);
 
     let inst = ctx.get_auth(&format!("/api/instances/{}", a_id), &user_token).await;
     let inst_body: serde_json::Value = inst.json().await.unwrap();
@@ -2531,7 +2615,8 @@ async fn test_start_infra_failure_rolls_back_to_stopped() {
 
     let admin_token = ctx.login_admin().await;
     let template_id = create_template_only(&ctx, &admin_token, "rollback-start").await;
-    create_quota_user(&ctx, &admin_token, "rollback_user", 1).await;
+    let user_id = create_quota_user(&ctx, &admin_token, "rollback_user", 1).await;
+    grant_template_whitelist(&ctx, &user_id, &template_id).await;
     let user_token = ctx.login_user("rollback_user", "password123").await;
 
     let a = ctx.post_auth("/api/instances", &serde_json::json!({
@@ -2565,7 +2650,8 @@ async fn test_user_launch_infra_failure_marks_error_and_keeps_record() {
 
     let admin_token = ctx.login_admin().await;
     let template_id = create_template_only(&ctx, &admin_token, "err-retry").await;
-    create_quota_user(&ctx, &admin_token, "err_user", 1).await;
+    let user_id = create_quota_user(&ctx, &admin_token, "err_user", 1).await;
+    grant_template_whitelist(&ctx, &user_id, &template_id).await;
     let user_token = ctx.login_user("err_user", "password123").await;
 
     // Infra failure after the quota gate: the launch is marked `error` and the
@@ -2597,7 +2683,8 @@ async fn test_admin_restart_accounts_against_owner_quota() {
 
     let admin_token = ctx.login_admin().await;
     let template_id = create_template_only(&ctx, &admin_token, "owner-quota").await;
-    create_quota_user(&ctx, &admin_token, "owner_user", 1).await;
+    let owner_id = create_quota_user(&ctx, &admin_token, "owner_user", 1).await;
+    grant_template_whitelist(&ctx, &owner_id, &template_id).await;
     let owner_token = ctx.login_user("owner_user", "password123").await;
 
     // Owner launches A (active), then it is stopped, freeing its slot.
@@ -2615,19 +2702,169 @@ async fn test_admin_restart_accounts_against_owner_quota() {
     }), &owner_token).await;
     assert_eq!(b.status(), 200, "body: {:?}", b.text().await);
 
-    // The Admin restarts A. Quota is counted for the *owner* (at its limit),
-    // so this is refused with the user's quota body — not 500, and not a
+    // The Admin restarts A. Quota is counted for the *owner* (at its ceiling),
+    // so this is refused with the owner's rejection body — not 500, and not a
     // success driven by the Admin's own (exempt) limits.
     let restart = ctx.post_auth(&format!("/api/instances/{}/start", a_id), &serde_json::json!({}), &admin_token).await;
     assert_eq!(restart.status(), 409);
     let body: serde_json::Value = restart.json().await.unwrap();
-    assert_eq!(body["quota"]["scope"], "user_instance");
-    assert_eq!(body["quota"]["current"], 1);
-    assert_eq!(body["quota"]["limit"], 1);
+    assert_eq!(body["rejection"]["scope"], "user_instance");
+    assert_eq!(body["rejection"]["current"], 1);
+    assert_eq!(body["rejection"]["limit"], 1);
 
     let inst = ctx.get_auth(&format!("/api/instances/{}", a_id), &admin_token).await;
     let inst_body: serde_json::Value = inst.json().await.unwrap();
     assert_eq!(inst_body["instance"]["status"], "stopped");
+}
+
+#[tokio::test]
+async fn test_launch_rejected_by_host_ceiling_returns_409() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .times(1)
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    }).await;
+
+    let admin_token = ctx.login_admin().await;
+
+    // Tighten the host ceiling to exactly one active instance.
+    let set = ctx.put_auth("/api/admin/settings", &serde_json::json!({
+        "host_instance_limit": 1,
+    }), &admin_token).await;
+    assert_eq!(set.status(), 200, "settings update failed: {:?}", set.text().await);
+
+    let template_id = create_template_only(&ctx, &admin_token, "host-ceiling").await;
+    let user_a = create_quota_user(&ctx, &admin_token, "host_a", 5).await;
+    let user_b = create_quota_user(&ctx, &admin_token, "host_b", 5).await;
+    grant_template_whitelist(&ctx, &user_a, &template_id).await;
+    grant_template_whitelist(&ctx, &user_b, &template_id).await;
+    let token_a = ctx.login_user("host_a", "password123").await;
+    let token_b = ctx.login_user("host_b", "password123").await;
+
+    // The host ceiling counts across *all* users: A fills the single slot.
+    let first = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+    }), &token_a).await;
+    assert_eq!(first.status(), 200, "body: {:?}", first.text().await);
+
+    // B's launch is fine per-user but bumps the global count past 1.
+    let second = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+    }), &token_b).await;
+    assert_eq!(second.status(), 409);
+    let body: serde_json::Value = second.json().await.unwrap();
+    assert_eq!(body["rejection"]["scope"], "host_instance");
+    assert_eq!(body["rejection"]["current"], 1);
+    assert_eq!(body["rejection"]["limit"], 1);
+    assert_eq!(body["rejection"]["requested"], 1);
+    assert!(body["error"].as_str().unwrap().contains("Host instance limit"));
+}
+
+#[tokio::test]
+async fn test_concurrent_launches_same_user_at_ceiling_exactly_one_succeeds() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .times(1)
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    }).await;
+
+    let admin_token = ctx.login_admin().await;
+    let template_id = create_template_only(&ctx, &admin_token, "conc-same").await;
+    let user_id = create_quota_user(&ctx, &admin_token, "conc_user", 1).await;
+    grant_template_whitelist(&ctx, &user_id, &template_id).await;
+    let user_token = ctx.login_user("conc_user", "password123").await;
+
+    // Hammer the launch endpoint with 4 simultaneous requests. The single
+    // user-row lock serializes them: exactly one reserves, the rest 409.
+    let client = ctx.client.clone();
+    let url = format!("{}/api/instances", ctx.base_url);
+    let body = serde_json::json!({ "template_id": template_id });
+    let mut handles = Vec::new();
+    for _ in 0..4 {
+        let client = client.clone();
+        let url = url.clone();
+        let token = user_token.clone();
+        let body = body.clone();
+        handles.push(tokio::spawn(async move {
+            client
+                .post(&url)
+                .header("Cookie", format!("ow_token={}", token))
+                .json(&body)
+                .send()
+                .await
+                .unwrap()
+                .status()
+        }));
+    }
+
+    let mut successes = 0;
+    let mut conflicts = 0;
+    for handle in handles {
+        match handle.await.unwrap() {
+            reqwest::StatusCode::OK => successes += 1,
+            reqwest::StatusCode::CONFLICT => conflicts += 1,
+            other => panic!("unexpected status: {}", other),
+        }
+    }
+    assert_eq!(successes, 1, "exactly one concurrent launch must win");
+    assert_eq!(conflicts, 3);
+}
+
+#[tokio::test]
+async fn test_concurrent_launches_different_users_both_succeed() {
+    // Real Docker surfaces a port collision as a bind failure on the second
+    // concurrent create; the launch retry loop then re-allocates a distinct
+    // port. Replay that: the 2nd create call conflicts, the retried one wins.
+    let calls = Arc::new(AtomicU32::new(0));
+    let calls_for_mock = calls.clone();
+    let ctx = MockContext::new(move |m| {
+        m.expect_create_container_from_template()
+            .times(3)
+            .returning(move |_, _, _, _, _| {
+                let n = calls_for_mock.fetch_add(1, Ordering::Relaxed);
+                Box::pin(async move {
+                    if n == 1 {
+                        Err("Bind for 172.17.0.1:10000 failed: port is already allocated".to_string())
+                    } else {
+                        Ok("fake-container-id".to_string())
+                    }
+                })
+            });
+    }).await;
+
+    let admin_token = ctx.login_admin().await;
+    let template_id = create_template_only(&ctx, &admin_token, "conc-diff").await;
+    for (username, ceiling) in [("conc_x", 5), ("conc_y", 5)] {
+        let user_id = create_quota_user(&ctx, &admin_token, username, ceiling).await;
+        grant_template_whitelist(&ctx, &user_id, &template_id).await;
+    }
+    let token_x = ctx.login_user("conc_x", "password123").await;
+    let token_y = ctx.login_user("conc_y", "password123").await;
+
+    let client = ctx.client.clone();
+    let url = format!("{}/api/instances", ctx.base_url);
+    let body = serde_json::json!({ "template_id": template_id });
+    let mut handles = Vec::new();
+    for token in [token_x, token_y] {
+        let client = client.clone();
+        let url = url.clone();
+        let body = body.clone();
+        handles.push(tokio::spawn(async move {
+            client
+                .post(&url)
+                .header("Cookie", format!("ow_token={}", token))
+                .json(&body)
+                .send()
+                .await
+                .unwrap()
+                .status()
+        }));
+    }
+
+    // Different users never contend on a lock: both launches go through.
+    for handle in handles {
+        assert_eq!(handle.await.unwrap(), reqwest::StatusCode::OK);
+    }
 }
 
 #[tokio::test]
@@ -2666,4 +2903,420 @@ async fn test_persistent_uniqueness_inside_tx_leaves_no_new_row() {
     let instances = list_body["instances"].as_array().unwrap();
     assert_eq!(instances.len(), 1, "the conflicting launch must not leave a row behind");
     assert_eq!(instances[0]["mount_persistent"], true);
+}
+
+// ── Ticket 08: flag-gated routes ─────────────────────────────────
+// Every route gate resolves from the effective-context flags (not the legacy
+// role): user management → can_manage_users; template create → can_create_template
+// (edit/delete also owned); instance lifecycle → ownership / same-group scope /
+// admin; raw Docker → can_manage_docker; registry → can_manage_registry; admin
+// settings → is_admin. Each is exercised as permitted → 2xx / denied → 403.
+
+/// Create a plain user through the admin API and log in as them. Returns
+/// (user_id, auth token).
+async fn create_user_and_token(
+    ctx: &MockContext,
+    admin_token: &str,
+    username: &str,
+) -> (String, String) {
+    let resp = ctx.post_auth("/api/users", &serde_json::json!({
+        "username": username, "password": "password123"
+    }), admin_token).await;
+    assert_eq!(resp.status(), 200, "failed to create user {}", username);
+    let user_id = resp.json::<serde_json::Value>().await.unwrap()["user"]["id"]
+        .as_str().unwrap().to_string();
+    let token = ctx.login_user(username, "password123").await;
+    (user_id, token)
+}
+
+/// Insert a `groups` row with exactly the given flag values and return its id.
+async fn seed_group(
+    ctx: &MockContext,
+    name: &str,
+    can_create_template: bool,
+    can_manage_users: bool,
+    can_manage_group_instances: bool,
+    can_manage_docker: bool,
+    can_manage_registry: bool,
+) -> String {
+    seed_group_kind(
+        ctx,
+        name,
+        None,
+        can_create_template,
+        can_manage_users,
+        can_manage_group_instances,
+        can_manage_docker,
+        can_manage_registry,
+    )
+    .await
+}
+
+/// Like `seed_group`, but with an explicit `kind` (`"manager"` raises the
+/// member's tier to 1, which the instance-tier guardrail requires for a
+/// group-scoped manager to control a tier-0 owner's instances).
+async fn seed_group_kind(
+    ctx: &MockContext,
+    name: &str,
+    kind: Option<&str>,
+    can_create_template: bool,
+    can_manage_users: bool,
+    can_manage_group_instances: bool,
+    can_manage_docker: bool,
+    can_manage_registry: bool,
+) -> String {
+    use openworkspace_api::db::group;
+    use sea_orm::{ActiveModelTrait, Set};
+    let id = uuid::Uuid::new_v4();
+    group::ActiveModel {
+        id: Set(id),
+        name: Set(name.to_string()),
+        description: Set(None),
+        kind: Set(kind.map(|k| k.to_string())),
+        can_create_template: Set(can_create_template),
+        can_manage_users: Set(can_manage_users),
+        can_manage_group_instances: Set(can_manage_group_instances),
+        can_manage_docker: Set(can_manage_docker),
+        can_manage_registry: Set(can_manage_registry),
+        max_instances: Set(Some(4)),
+        ..Default::default()
+    }
+    .insert(&ctx.db)
+    .await
+    .unwrap();
+    id.to_string()
+}
+
+async fn add_group_member(ctx: &MockContext, user_id: &str, group_id: &str) {
+    use openworkspace_api::db::user_group;
+    use sea_orm::{ActiveModelTrait, Set};
+    user_group::ActiveModel {
+        user_id: Set(user_id.parse().unwrap()),
+        group_id: Set(group_id.parse().unwrap()),
+    }
+    .insert(&ctx.db)
+    .await
+    .unwrap();
+}
+
+/// Create a user, seed a fresh group carrying exactly the given flags, and put
+/// the user in it. Returns (user_id, login token).
+async fn create_flagged_user(
+    ctx: &MockContext,
+    admin_token: &str,
+    username: &str,
+    can_create_template: bool,
+    can_manage_users: bool,
+    can_manage_group_instances: bool,
+    can_manage_docker: bool,
+    can_manage_registry: bool,
+) -> (String, String) {
+    let (user_id, token) = create_user_and_token(ctx, admin_token, username).await;
+    let group_id = seed_group(
+        ctx,
+        &format!("grp-{}", username),
+        can_create_template,
+        can_manage_users,
+        can_manage_group_instances,
+        can_manage_docker,
+        can_manage_registry,
+    ).await;
+    add_group_member(ctx, &user_id, &group_id).await;
+    (user_id, token)
+}
+
+#[tokio::test]
+async fn test_gate_user_management_requires_can_manage_users() {
+    let ctx = MockContext::new(|_| {}).await;
+    let admin_token = ctx.login_admin().await;
+
+    let (uma_id, uma_token) = create_flagged_user(
+        &ctx, &admin_token, "gate_users_on",
+        false, true, false, false, false,
+    ).await;
+    // Deleting a user needs the actor's tier strictly above the target's, so
+    // the manager also rides a manager-kind group (tier 1).
+    let uma_mgr = seed_group_kind(&ctx, "grp-mgr-users", Some("manager"), false, false, false, false, false).await;
+    add_group_member(&ctx, &uma_id, &uma_mgr).await;
+    let (plain_id, plain_token) = create_user_and_token(&ctx, &admin_token, "gate_users_off").await;
+
+    // Permitted → 2xx: list, create, and read any user.
+    assert_eq!(ctx.get_auth("/api/users", &uma_token).await.status(), 200);
+    assert_eq!(
+        ctx.post_auth("/api/users", &serde_json::json!({"username": "gate_users_managed", "password": "pass123"}), &uma_token).await.status(),
+        200
+    );
+    assert_eq!(ctx.get_auth(&format!("/api/users/{}", plain_id), &uma_token).await.status(), 200);
+
+    // A tier-1 user manager may delete a tier-0 plain user (tier guardrail).
+    let managed_id = openworkspace_api::db::UserRepository::new(&ctx.db)
+        .find_by_username("gate_users_managed").await.unwrap().unwrap().id;
+    assert_eq!(ctx.delete_auth(&format!("/api/users/{}", managed_id), &uma_token).await.status(), 204);
+
+    // Denied → 403 for a user with no flag.
+    assert_eq!(ctx.get_auth("/api/users", &plain_token).await.status(), 403);
+    assert_eq!(
+        ctx.post_auth("/api/users", &serde_json::json!({"username": "gate_users_nope", "password": "pass123"}), &plain_token).await.status(),
+        403
+    );
+    assert_eq!(ctx.delete_auth(&format!("/api/users/{}", uma_id), &plain_token).await.status(), 403);
+
+    // A plain user may still read their own profile.
+    assert_eq!(ctx.get_auth(&format!("/api/users/{}", plain_id), &plain_token).await.status(), 200);
+}
+
+#[tokio::test]
+async fn test_gate_template_create_requires_can_create_template() {
+    let ctx = MockContext::new(|_| {}).await;
+    let admin_token = ctx.login_admin().await;
+
+    let (_, creator_token) = create_flagged_user(
+        &ctx, &admin_token, "gate_tpl_creator",
+        true, false, false, false, false,
+    ).await;
+    let (_, plain_token) = create_user_and_token(&ctx, &admin_token, "gate_tpl_plain").await;
+
+    // Permitted → 2xx.
+    let resp = ctx.post_auth("/api/templates", &serde_json::json!({
+        "name": "gate-tpl-ok", "image": "busybox:1"
+    }), &creator_token).await;
+    assert_eq!(resp.status(), 200, "body: {:?}", resp.text().await);
+
+    // Denied → 403.
+    let resp = ctx.post_auth("/api/templates", &serde_json::json!({
+        "name": "gate-tpl-denied", "image": "busybox:1"
+    }), &plain_token).await;
+    assert_eq!(resp.status(), 403);
+
+    // Templates are a global browsable catalog: a plain user may list them.
+    assert_eq!(ctx.get_auth("/api/templates", &plain_token).await.status(), 200);
+}
+
+#[tokio::test]
+async fn test_gate_template_edit_delete_owner_only() {
+    let ctx = MockContext::new(|_| {}).await;
+    let admin_token = ctx.login_admin().await;
+
+    let (creator_a_id, token_a) = create_flagged_user(
+        &ctx, &admin_token, "gate_tpl_owner",
+        true, false, false, false, false,
+    ).await;
+    let (_, token_b) = create_flagged_user(
+        &ctx, &admin_token, "gate_tpl_other",
+        true, false, false, false, false,
+    ).await;
+
+    let template_id = create_template_only(&ctx, &token_a, "gate-owned-template").await;
+    let edit_body = serde_json::json!({
+        "name": "gate-owned-template", "image": "busybox:1",
+        "cores": 2, "memory": 4294967296i64, "gpu_count": 0,
+        "remote_type": "kasmvnc", "container_runtime": "docker",
+        "run_config": {}, "exec_config": {}, "volume_mappings": {},
+        "timeout_action": "remove", "keep_time_action": "pause",
+    });
+
+    // Another creator (also can_create_template) may not edit/delete → 403.
+    assert_eq!(ctx.put_auth(&format!("/api/templates/{}", template_id), &edit_body, &token_b).await.status(), 403);
+    assert_eq!(ctx.delete_auth(&format!("/api/templates/{}", template_id), &token_b).await.status(), 403);
+
+    // The owner may edit → 2xx, and delete → 204.
+    assert_eq!(ctx.put_auth(&format!("/api/templates/{}", template_id), &edit_body, &token_a).await.status(), 200);
+
+    // Re-create for the admin-legacy check: admin edits/deletes any template.
+    let second_id = create_template_only(&ctx, &token_a, "gate-owned-template-2").await;
+    assert_eq!(ctx.put_auth(&format!("/api/templates/{}", second_id), &edit_body, &admin_token).await.status(), 200);
+    assert_eq!(ctx.delete_auth(&format!("/api/templates/{}", second_id), &admin_token).await.status(), 204);
+
+    let _ = creator_a_id;
+}
+
+#[tokio::test]
+async fn test_gate_instance_lifecycle_same_group_scope() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_stop_container_by_id()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        m.expect_remove_container_by_id()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        m.expect_remove_network()
+            .returning(|_| Box::pin(async { Ok(()) }));
+    }).await;
+    let admin_token = ctx.login_admin().await;
+
+    // Owner and manager share group G (can_create_template + group scope);
+    // the manager also rides a manager-kind group so the tier guardrail (actor
+    // tier > owner tier) lets them control the tier-0 owner's instances.
+    // The outsider lives in group H with no flags.
+    let (owner_id, owner_token) = create_user_and_token(&ctx, &admin_token, "gate_owner").await;
+    let (manager_id, manager_token) = create_user_and_token(&ctx, &admin_token, "gate_manager").await;
+    let (outsider_id, outsider_token) = create_user_and_token(&ctx, &admin_token, "gate_outsider").await;
+    let group_g = seed_group(&ctx, "grp-g", true, false, true, false, false).await;
+    let mgr_kind = seed_group_kind(&ctx, "grp-mgr", Some("manager"), false, false, false, false, false).await;
+    add_group_member(&ctx, &owner_id, &group_g).await;
+    add_group_member(&ctx, &manager_id, &group_g).await;
+    add_group_member(&ctx, &manager_id, &mgr_kind).await;
+    let group_h = seed_group(&ctx, "grp-h", false, false, false, false, false).await;
+    add_group_member(&ctx, &outsider_id, &group_h).await;
+
+    // Owner creates a template (group whitelist grants launch) and launches.
+    let template_id = create_template_only(&ctx, &owner_token, "gate-scope-template").await;
+    grant_group_template(&ctx, &group_g, &template_id).await;
+    let launch = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id
+    }), &owner_token).await;
+    assert_eq!(launch.status(), 200, "body: {:?}", launch.text().await);
+    let instance_id = launch.json::<serde_json::Value>().await.unwrap()["instance"]["id"]
+        .as_str().unwrap().to_string();
+
+    // The instance JSON carries the owner's group ids (pinned contract),
+    // which now includes the default User group alongside the seeded group.
+    let owner_view = ctx.get_auth(&format!("/api/instances/{}", instance_id), &owner_token).await;
+    let body: serde_json::Value = owner_view.json().await.unwrap();
+    assert!(
+        body["instance"]["owner_group_ids"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!(group_g)),
+        "owner_group_ids must include the seeded group: {}",
+        body
+    );
+
+    // Owner keeps their powers.
+    assert_eq!(ctx.get_auth(&format!("/api/instances/{}", instance_id), &owner_token).await.status(), 200);
+
+    // A same-group manager may read.
+    let manager_view = ctx.get_auth(&format!("/api/instances/{}", instance_id), &manager_token).await;
+    assert_eq!(manager_view.status(), 200);
+
+    // The outsider shares no group with the owner → 403 on every lifecycle op.
+    assert_eq!(ctx.get_auth(&format!("/api/instances/{}", instance_id), &outsider_token).await.status(), 403);
+    assert_eq!(ctx.post_auth(&format!("/api/instances/{}/start", instance_id), &serde_json::json!({}), &outsider_token).await.status(), 403);
+    assert_eq!(ctx.post_auth(&format!("/api/instances/{}/stop", instance_id), &serde_json::json!({}), &outsider_token).await.status(), 403);
+    assert_eq!(ctx.delete_auth(&format!("/api/instances/{}", instance_id), &outsider_token).await.status(), 403);
+
+    // A same-group manager may also delete.
+    let del = ctx.delete_auth(&format!("/api/instances/{}", instance_id), &manager_token).await;
+    assert_eq!(del.status(), 204, "body: {:?}", del.text().await);
+}
+
+#[tokio::test]
+async fn test_gate_group_manager_list_includes_same_group_instances() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    }).await;
+    let admin_token = ctx.login_admin().await;
+
+    let (owner_id, owner_token) = create_user_and_token(&ctx, &admin_token, "gate_list_owner").await;
+    let (manager_id, manager_token) = create_user_and_token(&ctx, &admin_token, "gate_list_manager").await;
+    let (_, outsider_token) = create_user_and_token(&ctx, &admin_token, "gate_list_outsider").await;
+    let group_g = seed_group(&ctx, "grp-list-g", true, false, true, false, false).await;
+    let mgr_kind = seed_group_kind(&ctx, "grp-list-mgr", Some("manager"), false, false, false, false, false).await;
+    add_group_member(&ctx, &owner_id, &group_g).await;
+    add_group_member(&ctx, &manager_id, &group_g).await;
+    add_group_member(&ctx, &manager_id, &mgr_kind).await;
+
+    let template_id = create_template_only(&ctx, &owner_token, "gate-list-template").await;
+    grant_group_template(&ctx, &group_g, &template_id).await;
+    let launch = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id
+    }), &owner_token).await;
+    assert_eq!(launch.status(), 200, "body: {:?}", launch.text().await);
+    let instance_id = launch.json::<serde_json::Value>().await.unwrap()["instance"]["id"]
+        .as_str().unwrap().to_string();
+
+    // The same-group manager sees the owner's instance in the list.
+    let list = ctx.get_auth("/api/instances", &manager_token).await;
+    let body: serde_json::Value = list.json().await.unwrap();
+    assert!(
+        body["instances"].as_array().unwrap().iter().any(|i| i["id"] == instance_id),
+        "group manager list must include same-group instances"
+    );
+
+    // An unrelated user's list only has their own instances (here: none).
+    let list = ctx.get_auth("/api/instances", &outsider_token).await;
+    let body: serde_json::Value = list.json().await.unwrap();
+    assert!(body["instances"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_gate_docker_raw_requires_can_manage_docker() {
+    let ctx = MockContext::new(|m| {
+        m.expect_list_containers()
+            .returning(|_| Box::pin(async { Ok(Vec::new()) }));
+        m.expect_create_container()
+            .returning(|_, _| Box::pin(async { Ok("cid-123".to_string()) }));
+    }).await;
+    let admin_token = ctx.login_admin().await;
+
+    let (_, docker_token) = create_flagged_user(
+        &ctx, &admin_token, "gate_docker_on",
+        false, false, false, true, false,
+    ).await;
+    let (_, plain_token) = create_user_and_token(&ctx, &admin_token, "gate_docker_off").await;
+
+    // Permitted → 2xx.
+    assert_eq!(ctx.get_auth("/api/docker/containers", &docker_token).await.status(), 200);
+    assert_eq!(
+        ctx.post_auth("/api/docker/containers/create", &serde_json::json!({"name": "n", "image": "busybox:1"}), &docker_token).await.status(),
+        200
+    );
+
+    // Denied → 403.
+    assert_eq!(ctx.get_auth("/api/docker/containers", &plain_token).await.status(), 403);
+    assert_eq!(
+        ctx.post_auth("/api/docker/containers/create", &serde_json::json!({"name": "n", "image": "busybox:1"}), &plain_token).await.status(),
+        403
+    );
+}
+
+#[tokio::test]
+async fn test_gate_registry_requires_can_manage_registry() {
+    let ctx = MockContext::new(|_| {}).await;
+    let admin_token = ctx.login_admin().await;
+
+    let (_, reg_token) = create_flagged_user(
+        &ctx, &admin_token, "gate_reg_on",
+        false, false, false, false, true,
+    ).await;
+    let (_, plain_token) = create_user_and_token(&ctx, &admin_token, "gate_reg_off").await;
+
+    // Permitted → 2xx.
+    assert_eq!(ctx.get_auth("/api/registry/url", &reg_token).await.status(), 200);
+    assert_eq!(
+        ctx.put_auth("/api/registry/url", &serde_json::json!({"url": "https://example.com/registry.json"}), &reg_token).await.status(),
+        200
+    );
+
+    // Denied → 403.
+    assert_eq!(ctx.get_auth("/api/registry/url", &plain_token).await.status(), 403);
+    assert_eq!(
+        ctx.put_auth("/api/registry/url", &serde_json::json!({"url": "https://example.com/registry.json"}), &plain_token).await.status(),
+        403
+    );
+}
+
+#[tokio::test]
+async fn test_gate_admin_settings_requires_system_admin() {
+    let ctx = MockContext::new(|_| {}).await;
+    let admin_token = ctx.login_admin().await;
+
+    // A fully-flagged group member is NOT a system admin.
+    let (_, flagged_token) = create_flagged_user(
+        &ctx, &admin_token, "gate_all_flags",
+        true, true, true, true, true,
+    ).await;
+
+    let settings_body = serde_json::json!({
+        "host_instance_limit": 0,
+    });
+
+    // Admin-group membership (the seeded admin) → 2xx.
+    assert_eq!(ctx.get_auth("/api/admin/settings", &admin_token).await.status(), 200);
+    assert_eq!(ctx.put_auth("/api/admin/settings", &settings_body, &admin_token).await.status(), 200);
+
+    // Group flags alone do not unlock admin settings → 403.
+    assert_eq!(ctx.get_auth("/api/admin/settings", &flagged_token).await.status(), 403);
+    assert_eq!(ctx.put_auth("/api/admin/settings", &settings_body, &flagged_token).await.status(), 403);
 }

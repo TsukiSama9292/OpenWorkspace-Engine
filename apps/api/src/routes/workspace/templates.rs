@@ -9,7 +9,8 @@ use uuid::Uuid;
 
 use super::super::AppState;
 use crate::auth::AuthUser;
-use crate::db::{WorkspaceTemplate, WorkspaceTemplateRepository};
+use crate::db::{GroupRepository, WorkspaceTemplate, WorkspaceTemplateRepository};
+use crate::effective_context::TemplateVisibility;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -23,7 +24,11 @@ pub fn routes() -> Router<AppState> {
         )
 }
 
-fn template_to_json(template: &WorkspaceTemplate, instance_count: i64) -> serde_json::Value {
+fn template_to_json(
+    template: &WorkspaceTemplate,
+    instance_count: i64,
+    default_container_runtime: &str,
+) -> serde_json::Value {
     serde_json::json!({
         "id": template.id,
         "name": template.name,
@@ -35,7 +40,11 @@ fn template_to_json(template: &WorkspaceTemplate, instance_count: i64) -> serde_
         "gpu_count": template.gpu_count,
         "docker_registry": template.docker_registry,
         "remote_type": template.remote_type,
-        "container_runtime": if template.container_runtime.is_empty() { "docker" } else { &template.container_runtime },
+        "container_runtime": if template.container_runtime.is_empty() {
+            default_container_runtime
+        } else {
+            &template.container_runtime
+        },
         "run_config": template.run_config,
         "exec_config": template.exec_config,
         "volume_mappings": template.volume_mappings,
@@ -47,7 +56,7 @@ fn template_to_json(template: &WorkspaceTemplate, instance_count: i64) -> serde_
         "network_bandwidth_up_mbps": template.network_bandwidth_up_mbps,
         "network_bandwidth_down_mbps": template.network_bandwidth_down_mbps,
         "docker_in_instance": template.docker_in_instance,
-        "allocation_mode": template.allocation_mode,
+        "visibility": template.visibility,
         "instance_count": instance_count,
         "created_at": template.created_at,
         "updated_at": template.updated_at,
@@ -92,8 +101,8 @@ struct CreateTemplateRequest {
     network_bandwidth_down_mbps: i32,
     #[serde(default)]
     docker_in_instance: bool,
-    #[serde(default = "default_allocation_mode")]
-    allocation_mode: String,
+    #[serde(default)]
+    visibility: TemplateVisibility,
 }
 
 #[derive(Deserialize)]
@@ -128,7 +137,7 @@ struct UpdateTemplateRequest {
     #[serde(default)]
     docker_in_instance: bool,
     #[serde(default)]
-    allocation_mode: Option<String>,
+    visibility: TemplateVisibility,
 }
 
 fn default_image() -> String {
@@ -144,7 +153,7 @@ fn default_remote_type() -> String {
     "kasmvnc".to_string()
 }
 fn default_container_runtime() -> String {
-    "docker".to_string()
+    "runsc".to_string()
 }
 fn default_timeout_action() -> String {
     "remove".to_string()
@@ -152,22 +161,6 @@ fn default_timeout_action() -> String {
 
 fn default_keep_time_action() -> String {
     "pause".to_string()
-}
-
-fn default_allocation_mode() -> String {
-    "shared".to_string()
-}
-
-fn validate_allocation_mode(
-    allocation_mode: &str,
-) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    if !matches!(allocation_mode, "shared" | "dedicated") {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "allocation_mode must be one of: shared, dedicated"})),
-        ));
-    }
-    Ok(())
 }
 
 fn validate_auto_sleep(
@@ -229,21 +222,19 @@ fn validate_bandwidth(
 
 async fn list_templates(
     State(state): State<AppState>,
-    auth: AuthUser,
+    _auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let template_repo = WorkspaceTemplateRepository::new(&state.db);
 
-    let templates = if auth.role.can_view_all_instances() {
-        template_repo
-            .list_all()
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    } else {
-        template_repo
-            .list_by_owner(auth.user_id)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    };
+    // Templates are a global browsable catalog (spec Decision 5): every
+    // authenticated user lists/view the full catalog — including hidden
+    // templates, so the templates-management UI can display and restore them.
+    // Launch is gated by the effective whitelist, not by visibility; the
+    // launch/session surface (not the catalog) decides which templates to show.
+    let templates = template_repo
+        .list_all()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let mut templates_json = Vec::new();
     for template in &templates {
@@ -251,7 +242,7 @@ async fn list_templates(
             .count_instances(template.id)
             .await
             .unwrap_or(0);
-        templates_json.push(template_to_json(template, count));
+        templates_json.push(template_to_json(template, count, &state.settings.container_runtime));
     }
 
     Ok(Json(serde_json::json!({ "templates": templates_json })))
@@ -262,6 +253,13 @@ async fn create_template(
     auth: AuthUser,
     Json(input): Json<CreateTemplateRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if !auth.is_admin() && !auth.context.can_create_template {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Forbidden"})),
+        ));
+    }
+
     let repo = WorkspaceTemplateRepository::new(&state.db);
 
     let run_config = if input.run_config.is_null() {
@@ -283,18 +281,9 @@ async fn create_template(
     validate_auto_sleep(input.max_run_seconds, &input.timeout_action)?;
     validate_keep_time(input.keep_time_seconds, &input.keep_time_action)?;
     validate_bandwidth(input.network_bandwidth_up_mbps, input.network_bandwidth_down_mbps)?;
-    validate_allocation_mode(&input.allocation_mode)?;
-
-    if input.allocation_mode == "dedicated" && !auth.is_admin() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Only admin can create dedicated templates"})),
-        ));
-    }
 
     let template = repo
-        .create_with_allocation_mode(
-            &input.allocation_mode,
+        .create(
             &input.name,
             input.description.as_deref(),
             auth.user_id,
@@ -328,8 +317,57 @@ async fn create_template(
 
     tracing::info!("Template '{}' created (id={})", template.name, template.id);
 
+    // Visibility: the repository create leaves the DB default (`private`)
+    // untouched (template-visibility spec Decision 1); apply a non-default
+    // value via the dedicated writer and re-read so the response reflects it.
+    let template = if input.visibility != TemplateVisibility::Private {
+        repo.set_visibility(template.id, input.visibility)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to set template visibility: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Failed to create template"})),
+                )
+            })?;
+        repo.find_by_id(template.id)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Failed to create template"})),
+                )
+            })?
+            .ok_or((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Failed to create template"})),
+            ))?
+    } else {
+        template
+    };
+
+    // Group-only template authorization: a new template whitelists the Admin
+    // group by default (no other group), so it is admin-usable until the
+    // Admin group's whitelist is edited via the group-management API.
+    if let Ok(Some(admin_group)) = GroupRepository::new(&state.db)
+        .find_by_kind("admin")
+        .await
+    {
+        let group_repo = GroupRepository::new(&state.db);
+        let mut ids = group_repo
+            .list_template_ids(admin_group.id)
+            .await
+            .unwrap_or_default();
+        if !ids.contains(&template.id) {
+            ids.push(template.id);
+            if let Err(e) = group_repo.set_template_ids(admin_group.id, &ids).await {
+                tracing::error!("Failed to whitelist Admin group on new template: {}", e);
+            }
+        }
+    }
+
     Ok(Json(serde_json::json!({
-        "template": template_to_json(&template, 0)
+        "template": template_to_json(&template, 0, &state.settings.container_runtime)
     })))
 }
 
@@ -351,7 +389,7 @@ async fn get_template(
         .await
         .unwrap_or(0);
 
-    Ok(Json(serde_json::json!({ "template": template_to_json(&template, count) })))
+    Ok(Json(serde_json::json!({ "template": template_to_json(&template, count, &state.settings.container_runtime) })))
 }
 
 async fn update_template(
@@ -374,7 +412,11 @@ async fn update_template(
             Json(serde_json::json!({"error": "Template not found"})),
         ))?;
 
-    if !auth.role.can_manage_templates() && existing.owner_id != auth.user_id {
+    // Edit requires `can_create_template` AND ownership; a system admin may
+    // edit any template (spec Decision 5).
+    if !auth.is_admin()
+        && !(auth.context.can_create_template && existing.owner_id == auth.user_id)
+    {
         return Err((
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error": "Forbidden"})),
@@ -385,40 +427,9 @@ async fn update_template(
     validate_keep_time(input.keep_time_seconds, &input.keep_time_action)?;
     validate_bandwidth(input.network_bandwidth_up_mbps, input.network_bandwidth_down_mbps)?;
 
-    if let Some(mode) = &input.allocation_mode {
-        validate_allocation_mode(mode)?;
-
-        if mode == "dedicated" && !auth.is_admin() {
-            return Err((
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Only admin can set a template to dedicated mode"})),
-            ));
-        }
-
-        if *mode != existing.allocation_mode
-            && repo
-                .has_active_instances(id)
-                .await
-                .map_err(|_| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({"error": "Failed to check active instances"})),
-                    )
-                })?
-        {
-            return Err((
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error": "Cannot change allocation_mode while the template has active instances"
-                })),
-            ));
-        }
-    }
-
     let updated = repo
-        .update_with_allocation_mode(
+        .update(
             id,
-            input.allocation_mode.as_deref(),
             &input.name,
             input.description.as_deref(),
             &input.image,
@@ -455,6 +466,17 @@ async fn update_template(
         ));
     }
 
+    if existing.visibility != input.visibility {
+        repo.set_visibility(id, input.visibility)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Failed to update template"})),
+                )
+            })?;
+    }
+
     let template = repo
         .find_by_id(id)
         .await
@@ -471,7 +493,7 @@ async fn update_template(
 
     let count = repo.count_instances(id).await.unwrap_or(0);
 
-    Ok(Json(serde_json::json!({ "template": template_to_json(&template, count) })))
+    Ok(Json(serde_json::json!({ "template": template_to_json(&template, count, &state.settings.container_runtime) })))
 }
 
 async fn delete_template(
@@ -487,7 +509,11 @@ async fn delete_template(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    if !auth.role.can_manage_templates() && existing.owner_id != auth.user_id {
+    // Delete requires `can_create_template` AND ownership; a system admin may
+    // delete any template (spec Decision 5).
+    if !auth.is_admin()
+        && !(auth.context.can_create_template && existing.owner_id == auth.user_id)
+    {
         return Err(StatusCode::FORBIDDEN);
     }
 

@@ -64,22 +64,38 @@ describe('launchInstance', () => {
 
     const result = await launchInstance('tpl-1', 'use_persistent');
     expect(result.error).toBe('persistent storage already exists');
-    expect(result.quota).toBeUndefined();
+    expect(result.rejection).toBeUndefined();
   });
 
-  it('surfaces the quota payload on a 409 quota rejection', async () => {
+  it('surfaces a template-not-allowed rejection on a 403', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      text: () => Promise.resolve(JSON.stringify({
+        error: 'This template is not in your allowed templates list',
+        rejection: { scope: 'template_not_allowed', current: 0, limit: 0, requested: 1 }
+      }))
+    }));
+
+    const result = await launchInstance('tpl-1');
+    expect(result.error).toBe('This template is not in your allowed templates list');
+    expect(result.rejection).toEqual({ scope: 'template_not_allowed', current: 0, limit: 0, requested: 1 });
+    expect(result.instance).toBeUndefined();
+  });
+
+  it('surfaces a ceiling rejection with its numbers on a 409', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: false,
       status: 409,
       text: () => Promise.resolve(JSON.stringify({
         error: 'Per-user instance limit reached (active: 2, limit: 2)',
-        quota: { scope: 'user_instance', current: 2, limit: 2, requested: 1 }
+        rejection: { scope: 'user_instance', current: 2, limit: 2, requested: 1 }
       }))
     }));
 
     const result = await launchInstance('tpl-1');
     expect(result.error).toBe('Per-user instance limit reached (active: 2, limit: 2)');
-    expect(result.quota).toEqual({ scope: 'user_instance', current: 2, limit: 2, requested: 1 });
+    expect(result.rejection).toEqual({ scope: 'user_instance', current: 2, limit: 2, requested: 1 });
     expect(result.instance).toBeUndefined();
   });
 });
