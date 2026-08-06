@@ -136,6 +136,7 @@ Subcommands (`--verbose` supported):
 | `create_test_pg.sh` | Start/stop a throwaway Postgres container for the test suite |
 | `run_tests.sh` | Full suite: starts test Postgres, points `TRAEFIK_DYNAMIC_DIR` at `apps/api/target/traefik-dynamic`, runs `cargo nextest run --features docker`, cleans up via trap |
 | `apply_bw_smoke.sh` | End-to-end bandwidth-shaping smoke test |
+| `security_api.sh` | Dual-pass Schemathesis security fuzzing against a running dev stack (see "Security Fuzzing") |
 
 ## Testing
 
@@ -166,6 +167,25 @@ cd apps/vnc-ui
 pnpm test         # vitest run (21 tests)
 pnpm check        # svelte-check
 ```
+
+## Security Fuzzing
+
+```bash
+pnpm run dev:nosudo        # pre-condition: the dev stack must be running
+pnpm run security:api      # regenerate spec → provision fuzz-user → Pass 1 (admin) → Pass 2 (fuzz-user)
+```
+
+Fuzzes the 17 safe API endpoints against the running dev stack with Schemathesis in two passes (design in `.scratch/security-fuzzing/spec.md`):
+
+- **Pass 1 (admin session)** — asserts schema-valid 200s (or declared 4xx) and never a 5xx under malformed/extreme input.
+- **Pass 2 (fuzz-user session)** — a self-provisioned low-privilege user; the custom `admin_gated_boundary` check fails any `admin-gated` operation returning 2xx (the RBAC boundary; 403/404 pass).
+
+Mechanics:
+
+- Runs via the `ow-schemathesis` Docker image (built from `apps/api/scripts/schemathesis.Dockerfile`; the official `schemathesis:stable` bundles a broken `tracecov` plugin that crashes `run`) — no host Python / pipx.
+- The API is fuzzed directly at `http://localhost:3000` (Traefik's `/api` router can't reach `/health`).
+- The spec is regenerated from the running code each run (`cargo run --bin export_openapi`), asserted to cover exactly 17 paths, and the seed is fixed (default `20260101`, env-overridable) so failures are reproducible.
+- Runtime hardening already landed from this work: `POST /api/auth/login` documents the `400` (JSON syntax error) response, and Schemathesis's unexpected-method probing is disabled (`[phases.coverage] unexpected-methods = []` in `schemathesis.toml`) so the exported spec is the only fuzz surface.
 
 ## Zero-Warning Policy
 

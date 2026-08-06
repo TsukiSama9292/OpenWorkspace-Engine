@@ -1,4 +1,4 @@
-mod vnc;
+pub(crate) mod vnc;
 
 use axum::Router;
 

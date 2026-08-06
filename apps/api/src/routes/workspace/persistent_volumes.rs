@@ -11,6 +11,7 @@ use crate::auth::AuthUser;
 use crate::db::{
     PersistentVolume, PersistentVolumeRepository, UserRepository, VOLUME_STATUS_ORPHANED,
 };
+use crate::openapi::VolumesEnvelope;
 use crate::persistent_volume::persistent_volume_name;
 
 pub fn routes() -> Router<AppState> {
@@ -26,7 +27,18 @@ pub fn routes() -> Router<AppState> {
 /// to system admins and `can_manage_users` holders, never scoped by group.
 /// Only `orphaned` rows are returned; a still-referenced (`active`) volume is
 /// not an orphan and stays hidden here.
-async fn list_persistent_volumes(
+#[utoipa::path(
+    get,
+    path = "/api/persistent-volumes",
+    tag = "admin-gated",
+    responses(
+        (status = 200, description = "orphaned persistent volumes", body = VolumesEnvelope),
+        (status = 401, description = "missing or invalid ow_token"),
+        (status = 403, description = "requires can_manage_users or admin"),
+        (status = 500, description = "internal server error"),
+    )
+)]
+pub(crate) async fn list_persistent_volumes(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {

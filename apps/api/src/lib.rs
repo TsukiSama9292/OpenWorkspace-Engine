@@ -10,6 +10,7 @@ pub mod health_worker;
 pub mod host_port;
 pub mod instance_net;
 pub mod network_qos;
+pub mod openapi;
 pub mod persistent_volume;
 pub mod routes;
 pub mod timeout_action;

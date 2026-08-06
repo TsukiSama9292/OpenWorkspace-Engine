@@ -8,6 +8,7 @@ use serde::Deserialize;
 
 use super::super::AppState;
 use crate::auth::AuthUser;
+use crate::openapi::DockerContainersEnvelope;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -21,7 +22,18 @@ struct CreateDockerContainerRequest {
     image: String,
 }
 
-async fn list_docker_containers(
+#[utoipa::path(
+    get,
+    path = "/api/docker/containers",
+    tag = "admin-gated",
+    responses(
+        (status = 200, description = "docker containers visible to the host", body = DockerContainersEnvelope),
+        (status = 401, description = "missing or invalid ow_token"),
+        (status = 403, description = "requires can_manage_docker or admin"),
+        (status = 500, description = "internal server error"),
+    )
+)]
+pub(crate) async fn list_docker_containers(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {

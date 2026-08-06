@@ -11,6 +11,7 @@
     "analysis:unsafe": "cargo geiger 2>/dev/null || true",
     "analysis:bloat": "cargo llvm-lines --bin openworkspace-api",
     "test": "./scripts/run_tests.sh",
-    "test:cov": "./scripts/run_tests_cov.sh"
+    "test:cov": "./scripts/run_tests_cov.sh",
+    "security:api": "bash ./scripts/security_api.sh"
   }
 }

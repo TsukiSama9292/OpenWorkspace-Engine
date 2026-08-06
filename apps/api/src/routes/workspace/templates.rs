@@ -11,6 +11,7 @@ use super::super::AppState;
 use crate::auth::AuthUser;
 use crate::db::{GroupRepository, WorkspaceTemplate, WorkspaceTemplateRepository};
 use crate::effective_context::TemplateVisibility;
+use crate::openapi::{TemplateEnvelope, TemplateListEnvelope};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -218,7 +219,17 @@ fn validate_bandwidth(
     Ok(())
 }
 
-async fn list_templates(
+#[utoipa::path(
+    get,
+    path = "/api/templates",
+    tag = "templates",
+    responses(
+        (status = 200, description = "templates catalog", body = TemplateListEnvelope),
+        (status = 401, description = "missing or invalid ow_token"),
+        (status = 500, description = "internal server error"),
+    )
+)]
+pub(crate) async fn list_templates(
     State(state): State<AppState>,
     _auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -369,7 +380,22 @@ async fn create_template(
     })))
 }
 
-async fn get_template(
+#[utoipa::path(
+    get,
+    path = "/api/templates/{id}",
+    tag = "templates",
+    params(
+        ("id" = Uuid, description = "template uuid"),
+    ),
+    responses(
+        (status = 200, description = "template detail", body = TemplateEnvelope),
+        (status = 400, description = "invalid uuid"),
+        (status = 401, description = "missing or invalid ow_token"),
+        (status = 404, description = "template not found"),
+        (status = 500, description = "internal server error"),
+    )
+)]
+pub(crate) async fn get_template(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     _auth: AuthUser,

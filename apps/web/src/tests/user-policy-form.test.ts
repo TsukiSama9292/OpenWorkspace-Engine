@@ -114,5 +114,23 @@ describe('user policy form', () => {
       const result = await submitUserPolicy('u1', createInitialUserPolicyForm());
       expect(result).toEqual({ error: 'Forbidden' });
     });
+
+    it('omits group_ids when omitGroupIds is set (admin member)', async () => {
+      mockUpdateUserPolicy.mockResolvedValue({});
+
+      const result = await submitUserPolicy(
+        'u1',
+        {
+          group_ids: ['admin-group'],
+          direct_max_instances: '6',
+          loading: false,
+          error: ''
+        },
+        { omitGroupIds: true }
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(mockUpdateUserPolicy).toHaveBeenCalledWith('u1', { direct_max_instances: 6 });
+    });
   });
 });

@@ -27,7 +27,7 @@ pub fn group_kind_tier(kind: Option<&str>) -> i32 {
 /// The resolved permissions and ceilings for a user at a point in time. This
 /// struct is serialized as the `/auth/me` envelope, so its field names are
 /// part of the public API contract.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct EffectiveContext {
     pub user_id: Uuid,
     pub username: String,

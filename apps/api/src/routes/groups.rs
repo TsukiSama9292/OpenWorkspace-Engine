@@ -10,6 +10,7 @@ use uuid::Uuid;
 use super::AppState;
 use crate::auth::AuthUser;
 use crate::db::{validate_template_ids, GroupRecord, GroupRepository};
+use crate::openapi::GroupListEnvelope;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -99,7 +100,18 @@ async fn validated_template_ids(
     Ok(template_ids)
 }
 
-async fn list_groups(
+#[utoipa::path(
+    get,
+    path = "/api/groups",
+    tag = "admin-gated",
+    responses(
+        (status = 200, description = "group catalog with template whitelists", body = GroupListEnvelope),
+        (status = 401, description = "missing or invalid ow_token"),
+        (status = 403, description = "requires can_manage_users or admin"),
+        (status = 500, description = "internal server error"),
+    )
+)]
+pub(crate) async fn list_groups(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {

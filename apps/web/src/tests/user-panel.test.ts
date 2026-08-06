@@ -179,6 +179,44 @@ describe('UserManagementPanel', () => {
     expect(screen.getAllByText('Delete')).toHaveLength(1);
   });
 
+  it('hides Delete but keeps Edit on the admin row for an admin actor', async () => {
+    stubListings([userRow, adminRow]);
+    const adminCtx = context({ is_admin: true, tier: 2, can_manage_users: true });
+
+    render(UserManagementPanel, { props: { ctx: adminCtx } });
+
+    await waitFor(() => {
+      expect(screen.getByText('alice')).toBeTruthy();
+      expect(screen.getByText('root')).toBeTruthy();
+    });
+
+    // alice (non-admin) keeps Edit + Delete; root (admin) keeps Edit only —
+    // the delete action on an admin row is gone.
+    expect(screen.getAllByText('Edit')).toHaveLength(2);
+    expect(screen.getAllByText('Delete')).toHaveLength(1);
+  });
+
+  it('shows a protected-membership note (no group toggles) when editing an admin row', async () => {
+    stubListings([adminRow]);
+    const adminCtx = context({ is_admin: true, tier: 2, can_manage_users: true });
+
+    render(UserManagementPanel, { props: { ctx: adminCtx } });
+
+    await waitFor(() => {
+      expect(screen.getByText('root')).toBeTruthy();
+    });
+
+    await fireEvent.click(screen.getByText('Edit'));
+    await waitFor(() => {
+      expect(screen.getByTestId('user-policy-groups')).toBeTruthy();
+    });
+
+    expect(screen.getByText(/Admin membership is protected/)).toBeTruthy();
+    expect(screen.queryByTestId('user-policy-group-g-user')).toBeNull();
+    expect(screen.queryByTestId('user-policy-group-g1')).toBeNull();
+    expect(screen.getByLabelText(/Personal Max Instances/)).toBeTruthy();
+  });
+
   it('shows memberships and a tier-filtered policy editor with no personal whitelist', async () => {
     stubListings();
 

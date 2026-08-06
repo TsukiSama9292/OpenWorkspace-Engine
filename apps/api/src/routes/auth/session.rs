@@ -10,6 +10,7 @@ use serde::Deserialize;
 use super::super::AppState;
 use crate::auth::{clear_cookie, AuthUser};
 use crate::db::UserRepository;
+use crate::openapi::{ContextEnvelope, ValidateEnvelope};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -19,7 +20,16 @@ pub fn routes() -> Router<AppState> {
         .route("/api/auth/change-password", post(change_password))
 }
 
-async fn validate(auth: AuthUser) -> impl IntoResponse {
+#[utoipa::path(
+    get,
+    path = "/api/auth/validate",
+    tag = "auth",
+    responses(
+        (status = 200, description = "session identity", body = ValidateEnvelope),
+        (status = 401, description = "missing or invalid ow_token"),
+    )
+)]
+pub(crate) async fn validate(auth: AuthUser) -> impl IntoResponse {
     Json(serde_json::json!({
         "user_id": auth.user_id,
         "username": auth.username,
@@ -28,7 +38,17 @@ async fn validate(auth: AuthUser) -> impl IntoResponse {
     }))
 }
 
-async fn me(
+#[utoipa::path(
+    get,
+    path = "/api/auth/me",
+    tag = "auth",
+    responses(
+        (status = 200, description = "current effective context", body = ContextEnvelope),
+        (status = 401, description = "missing or invalid ow_token"),
+        (status = 500, description = "internal server error"),
+    )
+)]
+pub(crate) async fn me(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {

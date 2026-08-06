@@ -2,6 +2,7 @@
 name = "openworkspace-api"
 version = "0.1.0"
 edition = "2024"
+default-run = "openworkspace-api"
 
 [features]
 default = []
@@ -32,9 +33,10 @@ mockall = "0.13"
 base64 = "0.22"
 rand = "0.8"
 rustix = { version = "1", features = ["fs", "process"] }
+utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
 
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "rustls-tls"] }
 tower = { version = "0.5", features = ["util"] }
 postgres = "0.19"
-tokio-postgres = "0.7.18"
+tokio-postgres = { version = "0.7.18", features = ["with-uuid-1"] }

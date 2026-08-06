@@ -100,8 +100,8 @@ Tier guardrails are enforced on top of the flags, in the API layer:
 
 | Action | Guardrail |
 |---|---|
-| Delete a user | actor's tier must be **strictly greater** than the target's (admin is exempt). Only an admin can delete an admin; a manager cannot delete a manager or an admin. |
-| Write a user's policy (group memberships / personal ceiling) | actor's tier must be **strictly greater** than the target's (admin exempt). A non-admin can never write their own policy. |
+| Delete a user | actor's tier must be **strictly greater** than the target's (admin is exempt), **and** the target must not be an Admin-group member — **no one** (not another admin, not the account itself) can delete an Admin member, so the root account can never be removed in one request (403). A manager cannot delete a manager or an admin. |
+| Write a user's policy (group memberships / personal ceiling) | actor's tier must be **strictly greater** than the target's (admin exempt). A non-admin can never write their own policy. Additionally, an Admin member's membership list is **immutable**: any `group_ids` payload for an Admin member is rejected (403) — payloads carrying the Admin group id fail the assignability rule below, payloads dropping it fail the demotion guard — so no one, including the admin, can demote the root account. Identity (username/password) and personal-ceiling edits on an Admin member remain allowed. |
 | Assign a user to groups | the actor may place the target only into groups whose tier is **strictly below** the actor's — a manager cannot assign anyone to Manager/Admin groups, and an admin cannot assign anyone to the Admin group. |
 | Control an instance owned by someone else | owner==self and admin always allowed; a group-instance holder may control instances owned by a **strictly lower** tier even when a group is shared. |
 | Create/edit/delete groups | admin only. |

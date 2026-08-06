@@ -9,6 +9,7 @@ use serde::Deserialize;
 use super::super::AppState;
 use crate::auth::AuthUser;
 use crate::db::RegistryRepository;
+use crate::openapi::RegistryUrlEnvelope;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -22,7 +23,19 @@ struct SetRegistryUrlRequest {
     url: String,
 }
 
-async fn get_registry(
+#[utoipa::path(
+    get,
+    path = "/api/registry",
+    tag = "admin-gated",
+    responses(
+        (status = 200, description = "cached registry payload", body = serde_json::Value),
+        (status = 401, description = "missing or invalid ow_token"),
+        (status = 403, description = "requires can_manage_registry or admin"),
+        (status = 404, description = "no registry payload cached yet"),
+        (status = 500, description = "internal server error"),
+    )
+)]
+pub(crate) async fn get_registry(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -81,7 +94,18 @@ async fn sync_registry(
     Ok(Json(body))
 }
 
-async fn get_registry_url(
+#[utoipa::path(
+    get,
+    path = "/api/registry/url",
+    tag = "admin-gated",
+    responses(
+        (status = 200, description = "configured registry url", body = RegistryUrlEnvelope),
+        (status = 401, description = "missing or invalid ow_token"),
+        (status = 403, description = "requires can_manage_registry or admin"),
+        (status = 500, description = "internal server error"),
+    )
+)]
+pub(crate) async fn get_registry_url(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {

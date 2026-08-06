@@ -1,5 +1,5 @@
-mod login;
-mod session;
+pub(crate) mod login;
+pub(crate) mod session;
 
 use axum::Router;
 

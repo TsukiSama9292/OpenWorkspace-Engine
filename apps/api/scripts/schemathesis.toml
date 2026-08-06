@@ -1,0 +1,17 @@
+# Schemathesis project config for the apps/api security fuzzing harness (02-be).
+#
+# Loads the custom check module (schemathesis_pre_run.py, resolved via the
+# container's PYTHONPATH). All other options are passed on the CLI by
+# security_api.sh so the two passes share one config file.
+hooks = "schemathesis_pre_run"
+
+# The security harness exports ONLY the safe, read-only endpoints (GET + login)
+# as the fuzz surface. By default Schemathesis's coverage phase also sends
+# "unexpected method" requests (e.g. DELETE /api/users/{id}) to every path even
+# when that method is not in the spec — and those requests are sent regardless
+# of whether the `unsupported_method` check is enabled. The real API implements
+# the mutating handlers at the same paths, so with the admin cookie attached the
+# fuzzer would execute real deletes (this is what destroyed the admin user in
+# the 2026-08-06 run). Disable unsupported-method testing entirely.
+[phases.coverage]
+unexpected-methods = []

@@ -16,6 +16,7 @@ use crate::db::{PolicyRepository, PersistentVolumeRepository, UserRepository, Wo
 use crate::docker::{ContainerConfig, RemoteType};
 use crate::effective_context::PreflightReject;
 use crate::host_port::ReservedPort;
+use crate::openapi::{InstanceEnvelope, InstanceListEnvelope};
 use crate::persistent_volume::{persistent_volume_name, resolve_persistent_host_path, resolve_persistent_host_path_opt};
 use chrono::{DateTime, Utc};
 
@@ -161,7 +162,17 @@ struct LaunchInstanceRequest {
     mount_persistent: Option<bool>,
 }
 
-async fn list_instances(
+#[utoipa::path(
+    get,
+    path = "/api/instances",
+    tag = "instances",
+    responses(
+        (status = 200, description = "instances visible to the caller", body = InstanceListEnvelope),
+        (status = 401, description = "missing or invalid ow_token"),
+        (status = 500, description = "internal server error"),
+    )
+)]
+pub(crate) async fn list_instances(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -713,7 +724,23 @@ async fn launch_instance(
     }
 }
 
-async fn get_instance(
+#[utoipa::path(
+    get,
+    path = "/api/instances/{id}",
+    tag = "instances",
+    params(
+        ("id" = Uuid, description = "instance uuid"),
+    ),
+    responses(
+        (status = 200, description = "instance detail (includes access credentials)", body = InstanceEnvelope),
+        (status = 400, description = "invalid uuid"),
+        (status = 401, description = "missing or invalid ow_token"),
+        (status = 403, description = "not allowed to view this instance"),
+        (status = 404, description = "instance not found"),
+        (status = 500, description = "internal server error"),
+    )
+)]
+pub(crate) async fn get_instance(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     auth: AuthUser,

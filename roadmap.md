@@ -82,6 +82,31 @@
 | Turbo 修復 | `turbo.json` 宣告 `test` task，`pnpm test` 恢復可用 |
 | 無 sudo dev | `pnpm run dev:nosudo`（跳過 gVisor 註冊 + `network:allow`） |
 
+### ✅ Security Fuzzing（API 安全模糊測試）
+
+非產品階段，屬安全工程里程碑（`.scratch/security-fuzzing/`）。
+
+| 交付 | 內容 |
+|---|---|
+| Code-first OpenAPI | 17 個安全端點 `#[utoipa::path]` 註解 + build-time export 至已提交的 `security/openapi.json`（runtime 不外露）+ drift-check 單元測試 |
+| 雙 Pass Schemathesis | `pnpm run security:api`：admin session（schema 合規、永不 5xx）＋ fuzz-user session（`admin-gated` 永不 2xx，RBAC/BOLA/IDOR 邊界）；固定 seed（20260101）可重現 |
+| 自訂 RBAC check | `admin_gated_boundary` hook（`OW_ENFORCE_RBAC` gating）；mutation test 證明非 no-op |
+| 自建 fuzz 映像 | `ow-schemathesis`（官方 `:stable` 的 tracecov 壞掉）；無 host Python / pipx |
+| 被 fuzzer 抓到並修掉的 | login 補 400 宣告（JSON 語法錯誤）；停用 unexpected-method 探測（曾以 `DELETE /api/users/{id}` 刪掉 admin） |
+
+### ✅ Admin Protection（admin 帳號不可刪除／不可降級）
+
+非產品階段，屬 RBAC 安全強化里程碑（`.scratch/admin-protection/`）——把 fuzzer 抓到的「admin 可被刪除」產品漏洞關起來，並讓 harness 無法再被靜默破壞。
+
+| 交付 | 內容 |
+|---|---|
+| `delete_user` 守衛 | 目標為 Admin 系統群組成員（`kind='admin'`，非硬編碼 username）→ 403；涵蓋自刪、admin 刪 admin、非 admin 刪 admin |
+| `update_user` 守衛 | 目標目前為 Admin 成員且 payload 帶 `group_ids` → 403（任何 Admin 成員的名單重寫皆被拒：含 Admin group id 由既有 `validate_assignable_groups` 擋、移除由新守衛擋）；與既有 tier 升級守衛共用一次 `load_user_tier`，無 fail-open |
+| UI 鏡像 | `is_admin` 列隱藏 Delete、保留 Edit；admin 列的 policy 對話框改為「membership protected」提示並省略 `group_ids`（ceiling 仍可編輯） |
+| Pre-flight config guard | harness 檢查 `schemathesis.toml` 的 `[phases.coverage]` 內仍有生效的 `unexpected-methods = []`（section-scoped，擋 relocation bypass），否則拒絕執行 |
+| Post-run integrity check | 快照 admin 存在 + `is_admin` + templates/instances 行數，跑完比對；pass 失敗也照跑、計數不可讀視為失敗；mismatch 即 `die` 指名受損資源 |
+| Mutation 驗證 | 移除/搬移 config 行 → pre-flight `die`；直接刪 dev DB 的 admin row → post-run `die` 指名 admin；復原後全綠 |
+
 ---
 
 ## 進行中／規劃中階段
@@ -153,6 +178,8 @@
 - ✅ JWT cookie + ForwardAuth
 - ✅ 伺服器端 Basic 注入（瀏覽器不見密鑰）
 - ✅ 群組制 RBAC（旗標 + 白名單 + ceiling，逐請求重算）
+- ✅ API 安全模糊測試（Schemathesis 雙 Pass，`admin-gated` RBAC 邊界，mutation-verified）
+- ✅ Admin 帳號不可刪除／不可降級（API 守衛 + UI 鏡像 + fuzz harness integrity 快照）
 
 ### 資源治理
 - ✅ Auto-Sleep（執行時限 + timeout_action）
@@ -178,7 +205,7 @@
 任何階段宣告完成前，必須全部滿足：
 
 1. **功能**：階段內所有交付項可從瀏覽器實際操作，非僅 API 存在。
-2. **測試**：`cd apps/api && bash scripts/check.sh`（零警告）+ `bash scripts/run_tests.sh`（nextest，Docker）；`cd apps/web && pnpm check && pnpm test`（287 測試）全綠。
+2. **測試**：`cd apps/api && bash scripts/check.sh`（零警告）+ `bash scripts/run_tests.sh`（nextest，Docker）；`cd apps/web && pnpm check && pnpm test`（290 測試）全綠。
 3. **文件**：對應的 docs（architecture / api-reference / rbac / frontend / mission / tech-stack）同步更新，無過時敘述。
 4. **部署**：`pnpm run docker:up` 在乾淨主機上可成功部屬並建立第一個實例。
 5. **安全**：新功能未破壞 Zero-Trust 隔離（網段、憑證、RBAC 三層仍生效）。

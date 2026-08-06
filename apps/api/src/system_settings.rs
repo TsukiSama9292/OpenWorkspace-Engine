@@ -22,7 +22,7 @@ pub mod entity {
 /// The single global-policy knob exposed by the admin settings API: the host
 /// instance ceiling (`0` = unlimited). The host-capacity / shared-fuse fields
 /// were dropped with the old quota pipeline.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct SystemSettings {
     pub host_instance_limit: i32,
 }

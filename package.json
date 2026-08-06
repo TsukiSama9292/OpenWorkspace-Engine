@@ -21,6 +21,7 @@
     "test:web": "pnpm --filter web test",
     "test:e2e": "pnpm --filter e2e e2e",
     "test:e2e:full": "pnpm --filter e2e e2e:full",
+    "security:api": "pnpm --filter api security:api",
     "docker:dev:up": "docker compose -f docker/openworkspace_dev/docker-compose.yml up -d",
     "docker:dev:down": "docker compose -f docker/openworkspace_dev/docker-compose.yml down",
     "docker:up": "pnpm run init && pnpm run build:template-images && docker compose -f docker/openworkspace/docker-compose.yml up -d",

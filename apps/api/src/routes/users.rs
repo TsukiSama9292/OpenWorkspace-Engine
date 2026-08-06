@@ -13,6 +13,7 @@ use crate::db::{
     validate_group_ids, GroupRepository, PolicyRepository, UserRepository, UserWithPolicy,
 };
 use crate::effective_context::can_assign_groups;
+use crate::openapi::{UserEnvelope, UserListEnvelope};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -127,7 +128,18 @@ fn user_to_json(user: &UserWithPolicy) -> serde_json::Value {
     })
 }
 
-async fn list_users(
+#[utoipa::path(
+    get,
+    path = "/api/users",
+    tag = "admin-gated",
+    responses(
+        (status = 200, description = "user catalog with policy overrides", body = UserListEnvelope),
+        (status = 401, description = "missing or invalid ow_token"),
+        (status = 403, description = "requires can_manage_users or admin"),
+        (status = 500, description = "internal server error"),
+    )
+)]
+pub(crate) async fn list_users(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -147,7 +159,23 @@ async fn list_users(
     Ok(Json(serde_json::json!({ "users": users_json })))
 }
 
-async fn get_user(
+#[utoipa::path(
+    get,
+    path = "/api/users/{id}",
+    tag = "admin-gated",
+    params(
+        ("id" = Uuid, description = "user uuid"),
+    ),
+    responses(
+        (status = 200, description = "user detail with policy overrides", body = UserEnvelope),
+        (status = 400, description = "invalid uuid"),
+        (status = 401, description = "missing or invalid ow_token"),
+        (status = 403, description = "not allowed to view this user"),
+        (status = 404, description = "user not found"),
+        (status = 500, description = "internal server error"),
+    )
+)]
+pub(crate) async fn get_user(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     auth: AuthUser,
@@ -193,6 +221,14 @@ async fn delete_user(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     if !auth.is_admin() && auth.context.tier <= target_tier {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    // Admin protection (admin-protection spec): the Admin system group holds
+    // the root account, and no one — not another admin, not the account
+    // itself — may delete an Admin-group member. Tier 2 is only reachable
+    // through Admin-group membership, and no tier exceeds it, so >= is exact.
+    if target_tier >= crate::effective_context::TIER_ADMIN {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -326,13 +362,22 @@ async fn update_user(
     // (including a privileged one) or a personal ceiling is exactly the
     // self-join escalation the flat model forbids.
     let has_policy_write = input.group_ids.is_some() || input.direct_max_instances.is_some();
-    if has_policy_write && !auth.is_admin() {
+    let needs_target_tier = !auth.is_admin() || input.group_ids.is_some();
+    if has_policy_write && needs_target_tier {
         let target_tier = PolicyRepository::new(&state.db)
             .load_user_tier(id)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             .ok_or(StatusCode::NOT_FOUND)?;
-        if auth.context.tier <= target_tier {
+        if !auth.is_admin() && auth.context.tier <= target_tier {
+            return Err(StatusCode::FORBIDDEN);
+        }
+        // Admin protection (admin-protection spec): an Admin-group member's
+        // membership list is immutable via this API. validate_assignable_groups
+        // rejects any payload that carries the Admin group id, so any rewrite
+        // of an Admin member necessarily drops it; reject regardless of actor —
+        // an admin may not demote themselves or another admin.
+        if input.group_ids.is_some() && target_tier >= crate::effective_context::TIER_ADMIN {
             return Err(StatusCode::FORBIDDEN);
         }
     }

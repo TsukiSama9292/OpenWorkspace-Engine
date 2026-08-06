@@ -1,0 +1,1294 @@
+{
+  "components": {
+    "schemas": {
+      "ContextEnvelope": {
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/EffectiveContext"
+          }
+        },
+        "required": [
+          "context"
+        ],
+        "type": "object"
+      },
+      "DockerContainerSchema": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "names": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "state": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "names",
+          "image",
+          "status",
+          "state"
+        ],
+        "type": "object"
+      },
+      "DockerContainersEnvelope": {
+        "properties": {
+          "containers": {
+            "items": {
+              "$ref": "#/components/schemas/DockerContainerSchema"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "containers"
+        ],
+        "type": "object"
+      },
+      "EffectiveContext": {
+        "description": "The resolved permissions and ceilings for a user at a point in time. This\nstruct is serialized as the `/auth/me` envelope, so its field names are\npart of the public API contract.",
+        "properties": {
+          "allowed_template_ids": {
+            "description": "Union of every member group's whitelist (group-only authorization). No\npersonal whitelist and no creator self-whitelist (spec Decision 4/5).\nHidden templates are always excluded — they never appear in the\nwhitelist, so clients can treat this list as \"everything I may launch\".",
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "can_create_template": {
+            "type": "boolean"
+          },
+          "can_manage_docker": {
+            "type": "boolean"
+          },
+          "can_manage_group_instances": {
+            "type": "boolean"
+          },
+          "can_manage_registry": {
+            "type": "boolean"
+          },
+          "can_manage_users": {
+            "type": "boolean"
+          },
+          "direct_max_instances": {
+            "description": "The personal override, if any. The effective ceiling is the max of this\nand the group maxima, so a personal ceiling can only raise, never lower,\nwhat the groups grant.",
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "effective_max_instances": {
+            "description": "`0` means \"no ceiling\" (matches the `host_instance_limit = 0`\nconvention). Non-zero values are exact per-user limits. Resolved as the\n*maximum* of the personal ceiling and every group ceiling, where 0/NULL\n= unlimited is the highest (spec Decision 4).",
+            "format": "int32",
+            "type": "integer"
+          },
+          "group_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "is_admin": {
+            "description": "Root: derived from Admin-group membership, never stored (spec Decision\n4). Replaces the dropped `is_system_admin` column.",
+            "type": "boolean"
+          },
+          "tier": {
+            "description": "The maximum tier across the user's group memberships (0/1/2).",
+            "format": "int32",
+            "type": "integer"
+          },
+          "user_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "username",
+          "is_admin",
+          "tier",
+          "can_create_template",
+          "can_manage_users",
+          "can_manage_group_instances",
+          "can_manage_docker",
+          "can_manage_registry",
+          "effective_max_instances",
+          "allowed_template_ids",
+          "group_ids"
+        ],
+        "type": "object"
+      },
+      "GroupListEnvelope": {
+        "properties": {
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/GroupSchema"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "groups"
+        ],
+        "type": "object"
+      },
+      "GroupSchema": {
+        "properties": {
+          "can_create_template": {
+            "type": "boolean"
+          },
+          "can_manage_docker": {
+            "type": "boolean"
+          },
+          "can_manage_group_instances": {
+            "type": "boolean"
+          },
+          "can_manage_registry": {
+            "type": "boolean"
+          },
+          "can_manage_users": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "max_instances": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "template_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "can_create_template",
+          "can_manage_users",
+          "can_manage_group_instances",
+          "can_manage_docker",
+          "can_manage_registry",
+          "template_ids"
+        ],
+        "type": "object"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "InstanceEnvelope": {
+        "properties": {
+          "instance": {
+            "$ref": "#/components/schemas/InstanceSchema"
+          }
+        },
+        "required": [
+          "instance"
+        ],
+        "type": "object"
+      },
+      "InstanceListEnvelope": {
+        "properties": {
+          "instances": {
+            "items": {
+              "$ref": "#/components/schemas/InstanceSchema"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "instances"
+        ],
+        "type": "object"
+      },
+      "InstanceSchema": {
+        "properties": {
+          "access_password": {
+            "type": "string"
+          },
+          "access_token": {
+            "type": "string"
+          },
+          "auto_sleeps_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "container_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "host_port": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "instance_number": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "keep_time_action": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "keep_time_deadline": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "keep_time_seconds": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "mount_persistent": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "network_name": {
+            "type": "string"
+          },
+          "owner_group_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "owner_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "owner_tier": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "owner_username": {
+            "type": "string"
+          },
+          "remote_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolved_volume_host_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "template_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "template_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timeout_action": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "template_id",
+          "name",
+          "instance_number",
+          "owner_id",
+          "owner_username",
+          "owner_group_ids",
+          "owner_tier",
+          "network_name",
+          "status",
+          "access_token",
+          "access_password",
+          "mount_persistent",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "LoginRequest": {
+        "properties": {
+          "password": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "type": "object"
+      },
+      "RegistryUrlEnvelope": {
+        "properties": {
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SettingsEnvelope": {
+        "properties": {
+          "settings": {
+            "$ref": "#/components/schemas/SystemSettings"
+          }
+        },
+        "required": [
+          "settings"
+        ],
+        "type": "object"
+      },
+      "SystemSettings": {
+        "description": "The single global-policy knob exposed by the admin settings API: the host\ninstance ceiling (`0` = unlimited). The host-capacity / shared-fuse fields\nwere dropped with the old quota pipeline.",
+        "properties": {
+          "host_instance_limit": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "host_instance_limit"
+        ],
+        "type": "object"
+      },
+      "TemplateEnvelope": {
+        "properties": {
+          "template": {
+            "$ref": "#/components/schemas/TemplateSchema"
+          }
+        },
+        "required": [
+          "template"
+        ],
+        "type": "object"
+      },
+      "TemplateListEnvelope": {
+        "properties": {
+          "templates": {
+            "items": {
+              "$ref": "#/components/schemas/TemplateSchema"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "templates"
+        ],
+        "type": "object"
+      },
+      "TemplateSchema": {
+        "properties": {
+          "container_runtime": {
+            "type": "string"
+          },
+          "cores": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "docker_in_instance": {
+            "type": "boolean"
+          },
+          "docker_registry": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "exec_config": {},
+          "gpu_count": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "instance_count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "keep_time_action": {
+            "type": "string"
+          },
+          "keep_time_seconds": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "max_run_seconds": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "memory": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "network_bandwidth_down_mbps": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "network_bandwidth_up_mbps": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "owner_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "persistent_storage_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "remote_type": {
+            "type": "string"
+          },
+          "run_config": {},
+          "timeout_action": {
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string"
+          },
+          "volume_mappings": {}
+        },
+        "required": [
+          "id",
+          "name",
+          "owner_id",
+          "image",
+          "cores",
+          "memory",
+          "gpu_count",
+          "remote_type",
+          "container_runtime",
+          "run_config",
+          "exec_config",
+          "volume_mappings",
+          "timeout_action",
+          "keep_time_action",
+          "network_bandwidth_up_mbps",
+          "network_bandwidth_down_mbps",
+          "docker_in_instance",
+          "visibility",
+          "instance_count",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "UserEnvelope": {
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/UserSchema"
+          }
+        },
+        "required": [
+          "user"
+        ],
+        "type": "object"
+      },
+      "UserListEnvelope": {
+        "properties": {
+          "users": {
+            "items": {
+              "$ref": "#/components/schemas/UserSchema"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "users"
+        ],
+        "type": "object"
+      },
+      "UserSchema": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "direct_max_instances": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "group_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "is_admin": {
+            "type": "boolean"
+          },
+          "tier": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "created_at",
+          "group_ids",
+          "is_admin",
+          "tier"
+        ],
+        "type": "object"
+      },
+      "ValidateEnvelope": {
+        "properties": {
+          "is_admin": {
+            "type": "boolean"
+          },
+          "tier": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "user_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "username",
+          "is_admin",
+          "tier"
+        ],
+        "type": "object"
+      },
+      "VolumeSchema": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "host_path": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "owner_id": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner_username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "host_path",
+          "status",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "VolumesEnvelope": {
+        "properties": {
+          "volumes": {
+            "items": {
+              "$ref": "#/components/schemas/VolumeSchema"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "volumes"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "OpenAPI spec for the 17 security-fuzzable endpoints (see .scratch/security-fuzzing). The 8 admin-gated operations are tagged `admin-gated` for the low-privilege RBAC-boundary pass. The spec is export-only and never served.",
+    "license": {
+      "name": ""
+    },
+    "title": "OpenWorkspace API — security fuzz surface",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/admin/settings": {
+      "get": {
+        "operationId": "get_settings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsEnvelope"
+                }
+              }
+            },
+            "description": "global policy settings"
+          },
+          "401": {
+            "description": "missing or invalid ow_token"
+          },
+          "403": {
+            "description": "requires admin"
+          },
+          "500": {
+            "description": "internal server error"
+          }
+        },
+        "tags": [
+          "admin-gated"
+        ]
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContextEnvelope"
+                }
+              }
+            },
+            "description": "authenticated; sets the ow_token cookie"
+          },
+          "400": {
+            "description": "request body is not valid JSON (syntax error)"
+          },
+          "401": {
+            "description": "invalid credentials"
+          },
+          "415": {
+            "description": "missing Content-Type: application/json"
+          },
+          "422": {
+            "description": "malformed JSON body"
+          },
+          "500": {
+            "description": "internal server error"
+          }
+        },
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "operationId": "me",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContextEnvelope"
+                }
+              }
+            },
+            "description": "current effective context"
+          },
+          "401": {
+            "description": "missing or invalid ow_token"
+          },
+          "500": {
+            "description": "internal server error"
+          }
+        },
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/validate": {
+      "get": {
+        "operationId": "validate",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidateEnvelope"
+                }
+              }
+            },
+            "description": "session identity"
+          },
+          "401": {
+            "description": "missing or invalid ow_token"
+          }
+        },
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/docker/containers": {
+      "get": {
+        "operationId": "list_docker_containers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DockerContainersEnvelope"
+                }
+              }
+            },
+            "description": "docker containers visible to the host"
+          },
+          "401": {
+            "description": "missing or invalid ow_token"
+          },
+          "403": {
+            "description": "requires can_manage_docker or admin"
+          },
+          "500": {
+            "description": "internal server error"
+          }
+        },
+        "tags": [
+          "admin-gated"
+        ]
+      }
+    },
+    "/api/groups": {
+      "get": {
+        "operationId": "list_groups",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupListEnvelope"
+                }
+              }
+            },
+            "description": "group catalog with template whitelists"
+          },
+          "401": {
+            "description": "missing or invalid ow_token"
+          },
+          "403": {
+            "description": "requires can_manage_users or admin"
+          },
+          "500": {
+            "description": "internal server error"
+          }
+        },
+        "tags": [
+          "admin-gated"
+        ]
+      }
+    },
+    "/api/instances": {
+      "get": {
+        "operationId": "list_instances",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceListEnvelope"
+                }
+              }
+            },
+            "description": "instances visible to the caller"
+          },
+          "401": {
+            "description": "missing or invalid ow_token"
+          },
+          "500": {
+            "description": "internal server error"
+          }
+        },
+        "tags": [
+          "instances"
+        ]
+      }
+    },
+    "/api/instances/{id}": {
+      "get": {
+        "operationId": "get_instance",
+        "parameters": [
+          {
+            "description": "instance uuid",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceEnvelope"
+                }
+              }
+            },
+            "description": "instance detail (includes access credentials)"
+          },
+          "400": {
+            "description": "invalid uuid"
+          },
+          "401": {
+            "description": "missing or invalid ow_token"
+          },
+          "403": {
+            "description": "not allowed to view this instance"
+          },
+          "404": {
+            "description": "instance not found"
+          },
+          "500": {
+            "description": "internal server error"
+          }
+        },
+        "tags": [
+          "instances"
+        ]
+      }
+    },
+    "/api/persistent-volumes": {
+      "get": {
+        "operationId": "list_persistent_volumes",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VolumesEnvelope"
+                }
+              }
+            },
+            "description": "orphaned persistent volumes"
+          },
+          "401": {
+            "description": "missing or invalid ow_token"
+          },
+          "403": {
+            "description": "requires can_manage_users or admin"
+          },
+          "500": {
+            "description": "internal server error"
+          }
+        },
+        "summary": "The orphaned-volumes view (spec Decision 7 + user story 16): available only\nto system admins and `can_manage_users` holders, never scoped by group.\nOnly `orphaned` rows are returned; a still-referenced (`active`) volume is\nnot an orphan and stays hidden here.",
+        "tags": [
+          "admin-gated"
+        ]
+      }
+    },
+    "/api/registry": {
+      "get": {
+        "operationId": "get_registry",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "cached registry payload"
+          },
+          "401": {
+            "description": "missing or invalid ow_token"
+          },
+          "403": {
+            "description": "requires can_manage_registry or admin"
+          },
+          "404": {
+            "description": "no registry payload cached yet"
+          },
+          "500": {
+            "description": "internal server error"
+          }
+        },
+        "tags": [
+          "admin-gated"
+        ]
+      }
+    },
+    "/api/registry/url": {
+      "get": {
+        "operationId": "get_registry_url",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryUrlEnvelope"
+                }
+              }
+            },
+            "description": "configured registry url"
+          },
+          "401": {
+            "description": "missing or invalid ow_token"
+          },
+          "403": {
+            "description": "requires can_manage_registry or admin"
+          },
+          "500": {
+            "description": "internal server error"
+          }
+        },
+        "tags": [
+          "admin-gated"
+        ]
+      }
+    },
+    "/api/templates": {
+      "get": {
+        "operationId": "list_templates",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateListEnvelope"
+                }
+              }
+            },
+            "description": "templates catalog"
+          },
+          "401": {
+            "description": "missing or invalid ow_token"
+          },
+          "500": {
+            "description": "internal server error"
+          }
+        },
+        "tags": [
+          "templates"
+        ]
+      }
+    },
+    "/api/templates/{id}": {
+      "get": {
+        "operationId": "get_template",
+        "parameters": [
+          {
+            "description": "template uuid",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateEnvelope"
+                }
+              }
+            },
+            "description": "template detail"
+          },
+          "400": {
+            "description": "invalid uuid"
+          },
+          "401": {
+            "description": "missing or invalid ow_token"
+          },
+          "404": {
+            "description": "template not found"
+          },
+          "500": {
+            "description": "internal server error"
+          }
+        },
+        "tags": [
+          "templates"
+        ]
+      }
+    },
+    "/api/users": {
+      "get": {
+        "operationId": "list_users",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserListEnvelope"
+                }
+              }
+            },
+            "description": "user catalog with policy overrides"
+          },
+          "401": {
+            "description": "missing or invalid ow_token"
+          },
+          "403": {
+            "description": "requires can_manage_users or admin"
+          },
+          "500": {
+            "description": "internal server error"
+          }
+        },
+        "tags": [
+          "admin-gated"
+        ]
+      }
+    },
+    "/api/users/{id}": {
+      "get": {
+        "operationId": "get_user",
+        "parameters": [
+          {
+            "description": "user uuid",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserEnvelope"
+                }
+              }
+            },
+            "description": "user detail with policy overrides"
+          },
+          "400": {
+            "description": "invalid uuid"
+          },
+          "401": {
+            "description": "missing or invalid ow_token"
+          },
+          "403": {
+            "description": "not allowed to view this user"
+          },
+          "404": {
+            "description": "user not found"
+          },
+          "500": {
+            "description": "internal server error"
+          }
+        },
+        "tags": [
+          "admin-gated"
+        ]
+      }
+    },
+    "/api/vnc/verify": {
+      "get": {
+        "operationId": "vnc_verify",
+        "responses": {
+          "200": {
+            "description": "verified; VNC websockify forwarding headers returned"
+          },
+          "401": {
+            "description": "missing or invalid ow_token / forwarded uri"
+          },
+          "404": {
+            "description": "unknown or non-running instance"
+          },
+          "500": {
+            "description": "internal server error"
+          }
+        },
+        "tags": [
+          "vnc"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "service is healthy"
+          }
+        },
+        "summary": "Liveness probe. Part of the fuzz surface, so it is a named handler with an\nexported OpenAPI operation (the spec only covers the 17 safe endpoints).",
+        "tags": [
+          "system"
+        ]
+      }
+    }
+  }
+}

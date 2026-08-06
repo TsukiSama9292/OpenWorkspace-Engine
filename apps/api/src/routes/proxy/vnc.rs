@@ -14,7 +14,18 @@ pub fn routes() -> Router<AppState> {
     Router::new().route("/api/vnc/verify", get(vnc_verify))
 }
 
-async fn vnc_verify(
+#[utoipa::path(
+    get,
+    path = "/api/vnc/verify",
+    tag = "vnc",
+    responses(
+        (status = 200, description = "verified; VNC websockify forwarding headers returned"),
+        (status = 401, description = "missing or invalid ow_token / forwarded uri"),
+        (status = 404, description = "unknown or non-running instance"),
+        (status = 500, description = "internal server error"),
+    )
+)]
+pub(crate) async fn vnc_verify(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
 ) -> Result<axum::http::HeaderMap, StatusCode> {

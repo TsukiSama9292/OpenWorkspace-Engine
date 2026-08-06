@@ -1,8 +1,8 @@
-mod templates;
-mod docker_raw;
-mod instances;
-mod persistent_volumes;
-mod registry;
+pub(crate) mod templates;
+pub(crate) mod docker_raw;
+pub(crate) mod instances;
+pub(crate) mod persistent_volumes;
+pub(crate) mod registry;
 
 use axum::Router;
 

@@ -158,7 +158,9 @@
     if (!target) return;
     policyError = '';
     policyForm.loading = true;
-    const result = await submitUserPolicy(target.id, policyForm);
+    const result = await submitUserPolicy(target.id, policyForm, {
+      omitGroupIds: !!target.is_admin
+    });
     policyForm.loading = false;
     if (result.error) {
       policyError = result.error;
@@ -274,7 +276,9 @@
                   <td class="td-actions">
                     <div class="action-buttons">
                       <button class="launch-btn edit" onclick={() => openPolicy(user)}>Edit</button>
-                      <button class="launch-btn remove" onclick={() => onDelete(user)}>Delete</button>
+                      {#if !user.is_admin}
+                        <button class="launch-btn remove" onclick={() => onDelete(user)}>Delete</button>
+                      {/if}
                     </div>
                   </td>
                 {/if}
@@ -337,7 +341,9 @@
     <form onsubmit={(e) => { e.preventDefault(); onSavePolicy(); }}>
       <div class="modal-field" data-testid="user-policy-groups">
         <span class="modal-label">Group Memberships</span>
-        {#if assignable.length === 0}
+        {#if policyTarget.is_admin}
+          <p class="empty-text">Admin membership is protected — memberships cannot be changed here.</p>
+        {:else if assignable.length === 0}
           <p class="empty-text">No assignable groups.</p>
         {:else}
           {#each assignable as group (group.id)}

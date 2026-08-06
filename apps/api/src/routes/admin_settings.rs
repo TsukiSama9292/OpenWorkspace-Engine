@@ -8,6 +8,7 @@ use serde::Deserialize;
 
 use super::AppState;
 use crate::auth::AuthUser;
+use crate::openapi::SettingsEnvelope;
 use crate::system_settings::{SystemSettings, SystemSettingsRepository};
 
 pub fn routes() -> Router<AppState> {
@@ -34,7 +35,18 @@ impl UpdateSettingsRequest {
     }
 }
 
-async fn get_settings(
+#[utoipa::path(
+    get,
+    path = "/api/admin/settings",
+    tag = "admin-gated",
+    responses(
+        (status = 200, description = "global policy settings", body = SettingsEnvelope),
+        (status = 401, description = "missing or invalid ow_token"),
+        (status = 403, description = "requires admin"),
+        (status = 500, description = "internal server error"),
+    )
+)]
+pub(crate) async fn get_settings(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
