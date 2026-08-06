@@ -244,31 +244,12 @@ mod tests {
     }
 
     #[test]
-    fn test_settings_new_reads_env() {
-        let prev_db = std::env::var("DATABASE_URL").ok();
-        let prev_jwt = std::env::var("JWT_SECRET").ok();
-
-        unsafe {
-            std::env::set_var("DATABASE_URL", "postgres://localhost/new_test_db");
-            std::env::set_var("JWT_SECRET", "new_secret");
-        }
-
-        let result = Settings::new();
-
-        unsafe {
-            if let Some(v) = prev_db {
-                std::env::set_var("DATABASE_URL", v);
-            } else {
-                std::env::remove_var("DATABASE_URL");
-            }
-            if let Some(v) = prev_jwt {
-                std::env::set_var("JWT_SECRET", v);
-            } else {
-                std::env::remove_var("JWT_SECRET");
-            }
-        }
-
-        let settings = result.unwrap();
+    fn test_settings_reads_provided_env_vars() {
+        let settings = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://localhost/new_test_db"),
+            ("JWT_SECRET", "new_secret"),
+        ]))
+        .unwrap();
         assert_eq!(settings.database_url, "postgres://localhost/new_test_db");
         assert_eq!(settings.jwt_secret, "new_secret");
     }

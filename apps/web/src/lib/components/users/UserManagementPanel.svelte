@@ -127,9 +127,9 @@
       createError = 'Username and password are required';
       return;
     }
-    const assigned = new Set<string>();
-    if (userGroup) assigned.add(userGroup.id);
-    for (const id of createForm.group_ids) assigned.add(id);
+    const assigned: string[] = [];
+    if (userGroup) assigned.push(userGroup.id);
+    for (const id of createForm.group_ids) if (!assigned.includes(id)) assigned.push(id);
     const res = await api.post<{ user: UserRow }>('/users', {
       username: createForm.username,
       password: createForm.password,
@@ -239,7 +239,7 @@
             </tr>
           </thead>
           <tbody>
-            {#each filteredUsers as user}
+            {#each filteredUsers as user (user.id)}
               <tr>
                 <td class="td-name">
                   <span class="td-name-text">{user.username}</span>

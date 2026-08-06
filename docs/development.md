@@ -28,6 +28,8 @@ pnpm run dev                  # full dev stack (API + web + Traefik + Postgres)
 
 Stop with `pnpm run dev:stop` (compose down + revoke caps) or `pnpm run dev:remove` (full wipe incl. volumes).
 
+**No-sudo variant:** `pnpm run dev:nosudo` skips both privileged steps — the gVisor `runsc` registration (`init`) and `network:allow` (capability grants). It still ensures `ow-network`, starts Traefik + Postgres, and runs API + web, so no password prompt is needed. Trade-offs: bandwidth shaping (tc/nsenter) fails open (logged, not enforced), and `runsc`-pinned templates cannot launch unless gVisor was registered previously. Stop with `pnpm run dev:stop:nosudo` (compose down only).
+
 > **Dev routing note:** the dev Traefik proxies to the **host-run** servers via `host.docker.internal` (`:5173` / `:3000`), and the host-run API writes route YAMLs to `docker/openworkspace_dev/traefik/dynamic` (its compile-time default when `TRAEFIK_DYNAMIC_DIR` is unset). Instances are still created by the host-run API via the Docker socket, and Traefik reaches them through host-published ports.
 
 ### Dev Compose Stack

@@ -68,6 +68,20 @@
 | 管理介面 | Groups / Users / Volumes / Settings tab、密碼變更、登出 |
 | 範本白名單 UI | 群組 ↔ 範本關聯編輯 |
 
+### ✅ 工程品質門檻（Quality Gates）
+
+非產品階段，屬開發者體驗／工程紀律里程碑（`.scratch/quality-gates/`）。
+
+| 交付 | 內容 |
+|---|---|
+| Rust Clippy 硬閘 | `check.sh` 與 `apps/api` `check` 皆跑 `cargo clippy --all-targets --all-features -- -D warnings`；既有警告全數修掉（無 `#[allow]`） |
+| 禁止 unsafe | `#![forbid(unsafe_code)]` 於 crate root；`set_var` 測試改為注入式來源 |
+| 軟性分析報表 | `analysis:rust`（too_many_lines 100 / cognitive_complexity 25）、`analysis:unsafe`（cargo geiger）、`analysis:bloat`（cargo llvm-lines）——exit 0 |
+| Web lint | `apps/web` ESLint flat config；`lint` / `check` / `analysis:web` |
+| 獨立 E2E | `e2e/` Playwright 套件（smoke + full）、root `test:e2e` / `test:e2e:full` |
+| Turbo 修復 | `turbo.json` 宣告 `test` task，`pnpm test` 恢復可用 |
+| 無 sudo dev | `pnpm run dev:nosudo`（跳過 gVisor 註冊 + `network:allow`） |
+
 ---
 
 ## 進行中／規劃中階段

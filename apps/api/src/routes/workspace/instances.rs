@@ -144,11 +144,14 @@ async fn can_manage_instance(
 #[serde(rename_all = "snake_case")]
 enum PersistenceMode {
     /// Mount a persistent volume and reuse its data across launches.
-    UsePersistent,
+    #[serde(rename = "use_persistent")]
+    Use,
     /// Do not mount a persistent volume.
-    NoPersistent,
+    #[serde(rename = "no_persistent")]
+    No,
     /// Wipe any existing data, then mount a fresh persistent volume.
-    ResetPersistent,
+    #[serde(rename = "reset_persistent")]
+    Reset,
 }
 
 #[derive(Deserialize)]
@@ -197,11 +200,10 @@ async fn list_instances(
             if member == auth.user_id {
                 continue;
             }
-            if let Ok(Some(owner_tier)) = policy_repo.load_user_tier(member).await {
-                if auth.context.tier > owner_tier {
+            if let Ok(Some(owner_tier)) = policy_repo.load_user_tier(member).await
+                && auth.context.tier > owner_tier {
                     manageable.push(member);
                 }
-            }
         }
         if !manageable.is_empty() {
             let same_group = instance_repo
@@ -223,8 +225,8 @@ async fn list_instances(
     let mut template_keep_time_seconds = std::collections::HashMap::new();
     let mut template_keep_time_actions = std::collections::HashMap::new();
     for inst in &instances {
-        if !template_names.contains_key(&inst.template_id) {
-            if let Ok(Some(template)) = template_repo.find_by_id(inst.template_id).await {
+        if !template_names.contains_key(&inst.template_id)
+            && let Ok(Some(template)) = template_repo.find_by_id(inst.template_id).await {
                 template_names.insert(inst.template_id, template.name);
                 template_remote_types.insert(inst.template_id, template.remote_type);
                 template_max_run_seconds.insert(inst.template_id, template.max_run_seconds);
@@ -232,7 +234,6 @@ async fn list_instances(
                 template_keep_time_seconds.insert(inst.template_id, template.keep_time_seconds);
                 template_keep_time_actions.insert(inst.template_id, template.keep_time_action);
             }
-        }
     }
 
     let mut owner_usernames = std::collections::HashMap::new();
@@ -240,18 +241,17 @@ async fn list_instances(
     let mut owner_tiers: std::collections::HashMap<Uuid, i32> = std::collections::HashMap::new();
     let policy_repo = PolicyRepository::new(&state.db);
     for inst in &instances {
-        if !owner_usernames.contains_key(&inst.owner_id) {
-            if let Ok(Some(user)) = user_repo.find_by_id(inst.owner_id).await {
+        if !owner_usernames.contains_key(&inst.owner_id)
+            && let Ok(Some(user)) = user_repo.find_by_id(inst.owner_id).await {
                 owner_usernames.insert(inst.owner_id, user.username);
             }
-        }
-        if !owner_group_ids.contains_key(&inst.owner_id) {
+        if let std::collections::hash_map::Entry::Vacant(e) = owner_group_ids.entry(inst.owner_id) {
             let ids = user_repo.list_group_ids(inst.owner_id).await.unwrap_or_default();
-            owner_group_ids.insert(inst.owner_id, ids);
+            e.insert(ids);
         }
-        if !owner_tiers.contains_key(&inst.owner_id) {
+        if let std::collections::hash_map::Entry::Vacant(e) = owner_tiers.entry(inst.owner_id) {
             let tier = policy_repo.load_user_tier(inst.owner_id).await.ok().flatten().unwrap_or(0);
-            owner_tiers.insert(inst.owner_id, tier);
+            e.insert(tier);
         }
     }
 
@@ -405,13 +405,13 @@ async fn launch_instance(
 
     let mode = input.persistence.unwrap_or_else(|| {
         if input.mount_persistent.unwrap_or(false) {
-            PersistenceMode::UsePersistent
+            PersistenceMode::Use
         } else {
-            PersistenceMode::NoPersistent
+            PersistenceMode::No
         }
     });
 
-    let wants_persistence = matches!(mode, PersistenceMode::UsePersistent | PersistenceMode::ResetPersistent);
+    let wants_persistence = matches!(mode, PersistenceMode::Use | PersistenceMode::Reset);
     let resolved_path = if wants_persistence {
         match resolve_persistent_host_path_opt(
             template.persistent_storage_path.as_deref(),
@@ -497,9 +497,9 @@ async fn launch_instance(
     // (error) record being replaced is wiped first, then re-prepared.
     if let Some(host_path) = resolved_path.as_deref() {
         let volume_name = persistent_volume_name(host_path);
-        let wipe = replace_broken || mode == PersistenceMode::ResetPersistent;
-        if wipe {
-            if let Err(e) = state.docker
+        let wipe = replace_broken || mode == PersistenceMode::Reset;
+        if wipe
+            && let Err(e) = state.docker
                 .remove_persistent_volume(host_path, &volume_name)
                 .await
             {
@@ -512,7 +512,6 @@ async fn launch_instance(
                 instance_repo.update_status(instance.id, "error").await.ok();
                 return Ok(Json(launch_error_response(&state, instance, &template, &e).await));
             }
-        }
         if let Err(e) = state.docker
             .prepare_persistent_volume(host_path, &volume_name)
             .await
@@ -533,8 +532,8 @@ async fn launch_instance(
     // `error` — an unrecorded volume would be invisible to the orphaned
     // cleanup view and could never be reclaimed. Keyed by the resolved path,
     // so a re-launch of the same template/owner reuses the row.
-    if let Some(host_path) = resolved_path.as_deref() {
-        if let Err(e) = PersistentVolumeRepository::new(&state.db)
+    if let Some(host_path) = resolved_path.as_deref()
+        && let Err(e) = PersistentVolumeRepository::new(&state.db)
             .upsert(host_path, instance.owner_id)
             .await
         {
@@ -556,7 +555,6 @@ async fn launch_instance(
                 .await,
             ));
         }
-    }
 
     tracing::info!(
         "Instance '{}' launched (id={}, template={})",
@@ -744,9 +742,9 @@ async fn get_instance(
 
     let template_name = template.as_ref().map(|t| t.name.clone());
     let remote_type = template.as_ref().map(|t| t.remote_type.clone());
-    let max_run_seconds = template.as_ref().map(|t| t.max_run_seconds).flatten();
+    let max_run_seconds = template.as_ref().and_then(|t| t.max_run_seconds);
     let timeout_action = template.as_ref().map(|t| t.timeout_action.clone());
-    let keep_time_seconds = template.as_ref().map(|t| t.keep_time_seconds).flatten();
+    let keep_time_seconds = template.as_ref().and_then(|t| t.keep_time_seconds);
     let keep_time_action = template.as_ref().map(|t| t.keep_time_action.clone());
 
     let owner = user_repo.find_by_id(instance.owner_id).await.ok().flatten();
@@ -823,8 +821,8 @@ async fn delete_instance(
             // no other active instance still references the host path (spec
             // Decision 7). Best-effort: a sync failure keeps the row `active`
             // and is logged, never a deletion error.
-            if let Some(host_path) = registry_host_path.as_deref() {
-                if let Err(e) = PersistentVolumeRepository::new(&state.db)
+            if let Some(host_path) = registry_host_path.as_deref()
+                && let Err(e) = PersistentVolumeRepository::new(&state.db)
                     .sync_status_for_host_path(host_path)
                     .await
                 {
@@ -834,7 +832,6 @@ async fn delete_instance(
                         e
                     );
                 }
-            }
             Ok(StatusCode::NO_CONTENT)
         }
         Ok(false) => Err(StatusCode::NOT_FOUND),
@@ -951,13 +948,13 @@ async fn start_instance(
     }
 
     let template = Some(template);
-    let remote_type: RemoteType = template.as_ref().map(|t| t.remote_type.parse().ok()).flatten().unwrap_or(RemoteType::KasmVnc);
+    let remote_type: RemoteType = template.as_ref().and_then(|t| t.remote_type.parse().ok()).unwrap_or(RemoteType::KasmVnc);
 
     // Migration backfill: a legacy `mount_persistent = true` instance may have
     // no stored host path. Resolve it from the template now and persist it so
     // the volume can be ensured and mounted.
-    if instance.mount_persistent && instance.resolved_volume_host_path.is_none() {
-        if let Some(t) = template.as_ref() {
+    if instance.mount_persistent && instance.resolved_volume_host_path.is_none()
+        && let Some(t) = template.as_ref() {
             match t.persistent_storage_path.as_deref() {
                 Some(root) => match resolve_persistent_host_path(root, &t.name, &auth.user_id.to_string()) {
                     Ok(path) => {
@@ -984,7 +981,6 @@ async fn start_instance(
                 ),
             }
         }
-    }
     let resolved_host_path = instance.resolved_volume_host_path.as_deref();
 
     // Migration backfill: a legacy instance created before the host-port pool
@@ -1058,11 +1054,10 @@ async fn start_instance(
         // Rewrite the route only when the published port changed (a legacy
         // backfill or a recreate-on-stolen-port). On an unchanged restart the
         // route survives stop and needs no rewrite.
-        if persisted_host_port != Some(host_port) {
-            if let Err(e) = crate::route_writer::write_route(&remote_type, &instance.access_token, host_port, &instance.access_password) {
+        if persisted_host_port != Some(host_port)
+            && let Err(e) = crate::route_writer::write_route(&remote_type, &instance.access_token, host_port, &instance.access_password) {
                 tracing::error!("Failed to write Traefik route: {}", e);
             }
-        }
         state.vnc_cache.insert(&instance.access_token, "starting");
     }
     instance_repo.update_status(instance.id, "starting").await.map_err(|e| {
@@ -1290,7 +1285,7 @@ async fn build_and_create_container(
 /// stale container to drop first so its name is free for re-creation. The
 /// container always attaches to `network_name` (already ensured by the caller),
 /// so a recreate-on-stolen-port reuses the same network and subnet.
-async fn create_container_with_port_retry<'a>(
+async fn create_container_with_port_retry(
     state: &AppState,
     template: &WorkspaceTemplate,
     instance: &WorkspaceInstance,
@@ -1299,7 +1294,7 @@ async fn create_container_with_port_retry<'a>(
     initial_port: u16,
     initial_reservation: Option<ReservedPort>,
     used_ports: &mut BTreeSet<u16>,
-    to_remove: Option<&'a str>,
+    to_remove: Option<&str>,
     network_name: &str,
 ) -> Result<(String, u16), (StatusCode, Json<serde_json::Value>)> {
     let instance_repo = WorkspaceInstanceRepository::new(&state.db);
@@ -1494,9 +1489,9 @@ async fn ensure_container_running(
                 }
                 // Docker recreates the veth pair on start, destroying any
                 // prior qdisc — re-apply the template's bandwidth limit.
-                if let Some(t) = template.as_ref() {
-                    if t.network_bandwidth_up_mbps > 0 || t.network_bandwidth_down_mbps > 0 {
-                        if let Err(e) = state.docker
+                if let Some(t) = template.as_ref()
+                    && (t.network_bandwidth_up_mbps > 0 || t.network_bandwidth_down_mbps > 0)
+                        && let Err(e) = state.docker
                             .apply_bandwidth_limit(cid, t.network_bandwidth_up_mbps, t.network_bandwidth_down_mbps)
                             .await
                         {
@@ -1505,8 +1500,6 @@ async fn ensure_container_running(
                                 instance.name, e
                             );
                         }
-                    }
-                }
                 Some(cid.clone())
             }
             _ => {
@@ -1599,11 +1592,10 @@ async fn stop_instance(
         ));
     }
 
-    if instance.status == "paused" {
-        if let Some(ref cid) = instance.container_id {
+    if instance.status == "paused"
+        && let Some(ref cid) = instance.container_id {
             let _ = state.docker.unpause_container_by_id(cid).await;
         }
-    }
 
     if let Some(ref cid) = instance.container_id {
         match state.docker.stop_container_by_id(cid).await {

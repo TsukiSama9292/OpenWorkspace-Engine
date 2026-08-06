@@ -167,14 +167,13 @@ fn validate_auto_sleep(
     max_run_seconds: Option<i64>,
     timeout_action: &str,
 ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    if let Some(seconds) = max_run_seconds {
-        if seconds < 60 {
+    if let Some(seconds) = max_run_seconds
+        && seconds < 60 {
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({"error": "max_run_seconds must be at least 60"})),
             ));
         }
-    }
     if !matches!(timeout_action, "remove" | "stop" | "pause") {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -188,14 +187,13 @@ fn validate_keep_time(
     keep_time_seconds: Option<i64>,
     keep_time_action: &str,
 ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    if let Some(seconds) = keep_time_seconds {
-        if seconds < 60 {
+    if let Some(seconds) = keep_time_seconds
+        && seconds < 60 {
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({"error": "keep_time_seconds must be at least 60"})),
             ));
         }
-    }
     if !matches!(keep_time_action, "remove" | "stop" | "pause") {
         return Err((
             StatusCode::BAD_REQUEST,

@@ -1,3 +1,3 @@
-export function goto(path: string) {
+export function goto(_path: string) {
   return Promise.resolve();
 }

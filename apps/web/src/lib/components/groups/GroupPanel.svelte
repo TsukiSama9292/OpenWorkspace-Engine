@@ -190,7 +190,7 @@
               </tr>
             </thead>
             <tbody>
-              {#each filteredGroups as group}
+              {#each filteredGroups as group (group.id)}
                 <tr>
                   <td class="td-name">
                     <span class="td-name-text">{group.name}</span>

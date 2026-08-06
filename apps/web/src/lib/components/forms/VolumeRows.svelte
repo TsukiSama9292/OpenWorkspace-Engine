@@ -13,7 +13,7 @@
 </script>
 
 <h2 class="text-base font-semibold text-surface-200">Volume Mappings</h2>
-{#each volumeMappings as _, i}
+{#each volumeMappings as _, i (i)}
   <div class="flex gap-2 items-center">
     <input type="text" bind:value={volumeMappings[i].host} placeholder="/host/path" class="flex-1 px-3 py-2 bg-black/40 border border-white/10 rounded text-white placeholder:text-zinc-500 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/25" />
     <input type="text" bind:value={volumeMappings[i].container} placeholder="/container/path" class="flex-1 px-3 py-2 bg-black/40 border border-white/10 rounded text-white placeholder:text-zinc-500 focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/25" />

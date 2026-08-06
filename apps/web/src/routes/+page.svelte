@@ -139,11 +139,6 @@
     };
   });
 
-  function copySshCommand(id: string) {
-    const cmd = `ssh -J gateway.openworkspace.engine:2222 instance@${id}`;
-    navigator.clipboard.writeText(cmd);
-  }
-
   function openLaunch(config: Template) {
     if (!mayLaunchTemplate($auth, config)) return;
     launchModal = { open: true, config };
@@ -236,10 +231,6 @@
   }
 
   const myInstances = $derived(instances.filter(i => mayControlInstance($auth, i)));
-  const runningInstances = $derived(myInstances.filter(i => i.status === 'running'));
-  const pausedInstances = $derived(myInstances.filter(i => i.status === 'paused'));
-  const stoppedInstances = $derived(myInstances.filter(i => i.status === 'stopped'));
-  const errorInstances = $derived(myInstances.filter(i => i.status === 'error'));
 
   const uniqueUsers = $derived([...new Set(myInstances.map(i => i.owner_username).filter(Boolean))].sort());
   const filteredInstances = $derived(
@@ -524,7 +515,7 @@
           <p class="empty-text">No instances yet. Launch a template to get started.</p>
         {:else}
           <div class="instance-grid">
-            {#each myInstances as inst}
+            {#each myInstances as inst (inst.id)}
               <div class="ws-card" class:dimmed={inst.status !== 'running'}>
                 <div class="ws-card-header">
                   <div>
@@ -571,7 +562,7 @@
         <h2 class="section-title">Quick Launch</h2>
         <p class="section-desc">Pick a template to spin up a new instance.</p>
         <div class="template-grid">
-          {#each quickLaunchTemplates as config}
+          {#each quickLaunchTemplates as config (config.id)}
             {@const launchable = mayLaunchTemplate($auth, config)}
             <button class="template-card" class:locked={!launchable} onclick={() => openLaunch(config)}>
               <span class="template-icon">{getTemplateIcon(config.name)}</span>
@@ -591,7 +582,7 @@
             <label class="filter-label" for="filter-user">User</label>
             <select id="filter-user" class="filter-select" bind:value={filterUser}>
               <option value="">All Users</option>
-              {#each uniqueUsers as user}
+              {#each uniqueUsers as user (user)}
                 <option value={user}>{user}</option>
               {/each}
             </select>
@@ -630,7 +621,7 @@
                 </tr>
               </thead>
               <tbody>
-                {#each filteredInstances as inst}
+                {#each filteredInstances as inst (inst.id)}
                   <tr>
                     <td class="td-name">
                       <span class="td-name-text">{inst.name}</span>

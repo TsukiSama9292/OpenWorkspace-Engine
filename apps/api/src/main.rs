@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use openworkspace_api::core::Settings;
 use openworkspace_api::db::{WorkspaceInstanceRepository, UserRepository};
 use openworkspace_api::docker::{DockerClient, DockerService};

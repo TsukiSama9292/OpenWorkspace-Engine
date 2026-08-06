@@ -1,7 +1,7 @@
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{DatabaseConnection, EntityTrait, Insert, Set};
 
-pub mod system_settings {
+pub mod entity {
     use sea_orm::entity::prelude::*;
     use serde::{Deserialize, Serialize};
 
@@ -27,15 +27,15 @@ pub struct SystemSettings {
     pub host_instance_limit: i32,
 }
 
-impl From<system_settings::Model> for SystemSettings {
-    fn from(m: system_settings::Model) -> Self {
+impl From<entity::Model> for SystemSettings {
+    fn from(m: entity::Model) -> Self {
         Self {
             host_instance_limit: m.host_instance_limit,
         }
     }
 }
 
-impl From<&SystemSettings> for system_settings::ActiveModel {
+impl From<&SystemSettings> for entity::ActiveModel {
     fn from(s: &SystemSettings) -> Self {
         Self {
             id: Set(1),
@@ -58,7 +58,7 @@ impl<'a> SystemSettingsRepository<'a> {
 
     /// Fetch the singleton row, or `None` when absent.
     pub async fn get(&self) -> Result<Option<SystemSettings>, sea_orm::DbErr> {
-        let model = system_settings::Entity::find_by_id(1)
+        let model = entity::Entity::find_by_id(1)
             .one(self.db)
             .await?;
         Ok(model.map(Into::into))
@@ -69,10 +69,10 @@ impl<'a> SystemSettingsRepository<'a> {
         &self,
         settings: &SystemSettings,
     ) -> Result<SystemSettings, sea_orm::DbErr> {
-        Insert::one(system_settings::ActiveModel::from(settings))
+        Insert::one(entity::ActiveModel::from(settings))
             .on_conflict(
-                OnConflict::column(system_settings::Column::Id)
-                    .update_column(system_settings::Column::HostInstanceLimit)
+                OnConflict::column(entity::Column::Id)
+                    .update_column(entity::Column::HostInstanceLimit)
                     .to_owned(),
             )
             .exec(self.db)

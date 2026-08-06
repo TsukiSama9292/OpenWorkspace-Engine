@@ -333,7 +333,7 @@ async fn test_membership_and_personal_overrides_round_trip_into_me() {
         "rt-group",
         &[("can_manage_docker", true)],
         5,
-        &[tpl.clone()],
+        std::slice::from_ref(&tpl),
     )
     .await;
     let target = create_user(&ctx, "rt-user").await;

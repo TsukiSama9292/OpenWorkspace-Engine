@@ -1,0 +1,12 @@
+# Thresholds for Clippy lints (see `.scratch/quality-gates/spec.md`).
+#
+# `too-many-lines` and `cognitive_complexity` are restriction lints enabled only
+# in the analysis invocation (never in crate attributes), so these values tune
+# the soft report.
+#
+# `too-many-arguments` is a default Clippy lint that participates in the hard
+# `-D warnings` gate. The threshold (25) accommodates the wide repository create
+# / update signatures (e.g. WorkspaceTemplateRepository::create, 22 args).
+too-many-lines-threshold = 100
+cognitive-complexity-threshold = 25
+too-many-arguments-threshold = 25

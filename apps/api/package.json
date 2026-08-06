@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "RUST_LOG=info cargo watch -x run",
     "build": "cargo build --release",
-    "check": "cargo check",
+    "check": "bash ./scripts/check.sh",
+    "analysis:rust": "cargo clippy --all-targets --all-features -- -W clippy::too_many_lines -W clippy::cognitive_complexity",
+    "analysis:unsafe": "cargo geiger 2>/dev/null || true",
+    "analysis:bloat": "cargo llvm-lines --bin openworkspace-api",
     "test": "./scripts/run_tests.sh",
     "test:cov": "./scripts/run_tests_cov.sh"
   }

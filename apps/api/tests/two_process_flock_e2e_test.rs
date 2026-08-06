@@ -138,11 +138,10 @@ async fn wait_until_ready(base_url: &str) {
                 .json(&json!({ "username": "admin", "password": "admin" }))
                 .send()
                 .await;
-            if let Ok(resp) = login {
-                if resp.status().is_success() {
+            if let Ok(resp) = login
+                && resp.status().is_success() {
                     return;
                 }
-            }
         }
         assert!(
             tokio::time::Instant::now() < deadline,

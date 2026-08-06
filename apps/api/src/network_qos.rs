@@ -68,7 +68,7 @@ pub fn parse_ifindex(output: &str) -> Option<u32> {
 /// veth: the container-side ifindex (`2` here) is duplicated in every container
 /// netns, so it cannot identify which veth belongs to this container.
 pub fn parse_peer_ifindex(output: &str) -> Option<u32> {
-    let name_peer = output.splitn(2, ':').nth(1)?.trim();
+    let name_peer = output.split_once(':')?.1.trim();
     let peer = name_peer.split('@').nth(1)?.trim_start_matches("if");
     let peer = peer.split(':').next()?.trim();
     peer.parse().ok()

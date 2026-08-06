@@ -210,11 +210,9 @@ async fn update_group(
         .find_by_name(&input.name)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    {
-        if other.id != id {
+        && other.id != id {
             return Err(StatusCode::CONFLICT);
         }
-    }
 
     // System-group permission flags are fixed: Admin always all-on, User always
     // all-off. `max_instances` stays editable for all three. Custom groups

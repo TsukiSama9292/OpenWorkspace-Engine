@@ -542,7 +542,7 @@ impl DockerService for DockerClient {
                 owned_env.push(pw_env);
             }
             RemoteType::Ttyd => {
-                owned_env.push(format!("TTYD_USERNAME=ow_user"));
+                owned_env.push("TTYD_USERNAME=ow_user".to_string());
                 owned_env.push(format!("TTYD_PASSWORD={}", password));
             }
             RemoteType::Jupyter => {
@@ -599,11 +599,10 @@ impl DockerService for DockerClient {
         // Persistent storage volume: mount the named local-bind volume at the
         // per-remote-type home dir (whole home). Docker populates the volume
         // from the image's built-in home files on first (empty) mount.
-        if let Some(ref volume_name) = config.persistent_volume_name {
-            if let Some(target) = crate::persistent_volume::persistent_container_target(config.remote_type.as_str()) {
+        if let Some(ref volume_name) = config.persistent_volume_name
+            && let Some(target) = crate::persistent_volume::persistent_container_target(config.remote_type.as_str()) {
                 binds.push(format!("{}:{}:rw", volume_name, target));
             }
-        }
 
         // ── DNS ──
         let dns: Option<Vec<String>> = config
@@ -1457,7 +1456,7 @@ mod tests {
         };
         assert!(!is_container_not_found(&conflict));
 
-        let io = std::io::Error::new(std::io::ErrorKind::Other, "network down");
+        let io = std::io::Error::other("network down");
         let io_err: bollard::errors::Error = io.into();
         assert!(!is_container_not_found(&io_err));
     }
@@ -1652,7 +1651,7 @@ mod tests {
 
     #[test]
     fn test_network_error_transport_failure_is_real() {
-        let io = std::io::Error::new(std::io::ErrorKind::Other, "daemon unreachable");
+        let io = std::io::Error::other("daemon unreachable");
         let io_err: bollard::errors::Error = io.into();
         assert!(!network_error_is_idempotent_success(&io_err, NetworkOp::Create));
         assert!(!network_error_is_idempotent_success(&io_err, NetworkOp::Remove));

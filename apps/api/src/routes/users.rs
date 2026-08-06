@@ -361,11 +361,10 @@ async fn update_user(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
     if let Some(direct) = input.direct_max_instances {
-        if let Some(ceiling) = direct {
-            if ceiling < 0 {
+        if let Some(ceiling) = direct
+            && ceiling < 0 {
                 return Err(StatusCode::BAD_REQUEST);
             }
-        }
         repo.set_direct_max_instances(id, direct)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

@@ -237,7 +237,7 @@ impl WorkerTestContext {
 }
 
 fn docker_err(msg: &str) -> bollard::errors::Error {
-    std::io::Error::new(std::io::ErrorKind::Other, msg).into()
+    std::io::Error::other(msg).into()
 }
 
 impl Drop for WorkerTestContext {

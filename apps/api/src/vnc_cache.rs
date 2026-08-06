@@ -11,6 +11,12 @@ pub struct VncCache {
     inner: Arc<DashMap<String, CacheEntry>>,
 }
 
+impl Default for VncCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VncCache {
     pub fn new() -> Self {
         Self {

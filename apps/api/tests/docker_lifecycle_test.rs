@@ -98,7 +98,7 @@ async fn launch_instance(ctx: &TestContext, template_id: &str) -> String {
     }
     let instance_id = body["instance"]["id"].as_str().unwrap().to_string();
     if launch_status == Some("starting") {
-        wait_until_running(&ctx, &instance_id).await;
+        wait_until_running(ctx, &instance_id).await;
     }
     instance_id
 }

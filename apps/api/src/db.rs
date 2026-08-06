@@ -380,9 +380,9 @@ impl From<workspace_template::Model> for WorkspaceTemplate {
             docker_registry: m.docker_registry,
             remote_type: m.remote_type,
             container_runtime: m.container_runtime,
-            run_config: m.run_config.into(),
-            exec_config: m.exec_config.into(),
-            volume_mappings: m.volume_mappings.into(),
+            run_config: m.run_config,
+            exec_config: m.exec_config,
+            volume_mappings: m.volume_mappings,
             persistent_storage_path: m.persistent_storage_path,
             max_run_seconds: m.max_run_seconds,
             timeout_action: m.timeout_action,
@@ -1018,9 +1018,9 @@ impl<'a> WorkspaceTemplateRepository<'a> {
             docker_registry: Set(docker_registry.map(|s| s.to_string())),
             remote_type: Set(remote_type.to_string()),
             container_runtime: Set(container_runtime.to_string()),
-            run_config: Set(run_config.clone().into()),
-            exec_config: Set(exec_config.clone().into()),
-            volume_mappings: Set(volume_mappings.clone().into()),
+            run_config: Set(run_config.clone()),
+            exec_config: Set(exec_config.clone()),
+            volume_mappings: Set(volume_mappings.clone()),
             persistent_storage_path: Set(persistent_storage_path.map(|s| s.to_string())),
             max_run_seconds: Set(max_run_seconds),
             timeout_action: Set(timeout_action.to_string()),
@@ -1100,9 +1100,9 @@ impl<'a> WorkspaceTemplateRepository<'a> {
             docker_registry: Set(docker_registry.map(|s| s.to_string())),
             remote_type: Set(remote_type.to_string()),
             container_runtime: Set(container_runtime.to_string()),
-            run_config: Set(run_config.clone().into()),
-            exec_config: Set(exec_config.clone().into()),
-            volume_mappings: Set(volume_mappings.clone().into()),
+            run_config: Set(run_config.clone()),
+            exec_config: Set(exec_config.clone()),
+            volume_mappings: Set(volume_mappings.clone()),
             persistent_storage_path: Set(persistent_storage_path.map(|s| s.to_string())),
             max_run_seconds: Set(max_run_seconds),
             timeout_action: Set(timeout_action.to_string()),
@@ -1485,13 +1485,13 @@ impl<'a> RegistryRepository<'a> {
 
     pub async fn get_cached(&self) -> Result<Option<serde_json::Value>, sea_orm::DbErr> {
         let model = registry_cache::Entity::find_by_id(1).one(self.db).await?;
-        Ok(model.map(|m| m.registry_json.into()))
+        Ok(model.map(|m| m.registry_json))
     }
 
     pub async fn set_cached(&self, json: &serde_json::Value) -> Result<(), sea_orm::DbErr> {
         let model = registry_cache::ActiveModel {
             id: Set(1),
-            registry_json: Set(json.clone().into()),
+            registry_json: Set(json.clone()),
             ..Default::default()
         };
         Insert::one(model)

@@ -119,8 +119,8 @@ fn prepare_lock_dir(dir: &Path) -> bool {
     let Ok(stat) = statat(CWD, dir, AtFlags::SYMLINK_NOFOLLOW) else {
         return false;
     };
-    let mode = stat.st_mode as u32;
-    stat.st_uid as u32 == getuid().as_raw()
+    let mode = stat.st_mode;
+    stat.st_uid == getuid().as_raw()
         && mode & S_IFMT == S_IFDIR
         && mode & 0o700 == 0o700
         && mode & 0o077 == 0
@@ -182,10 +182,7 @@ pub fn try_allocate_port(
 ) -> Option<ReservedPort> {
     let mut busy = used.clone();
     loop {
-        let candidate = match lowest_free_port_from(&busy, start, end, from) {
-            None => return None,
-            Some(c) => c,
-        };
+        let candidate = lowest_free_port_from(&busy, start, end, from)?;
         let Some(lock) = acquire_lock(lock_dir, &candidate.to_string()) else {
             busy.insert(candidate);
             continue;
@@ -498,8 +495,8 @@ mod tests {
     #[test]
     fn try_allocate_port_flock_held_all_returns_none() {
         let dir = temp_lock_dir("allheld");
-        let _a = acquire_lock(&dir, &"42008".to_string()).unwrap();
-        let _b = acquire_lock(&dir, &"42009".to_string()).unwrap();
+        let _a = acquire_lock(&dir, "42008").unwrap();
+        let _b = acquire_lock(&dir, "42009").unwrap();
         assert!(
             try_allocate_port(&set(&[]), 42008, 42010, "127.0.0.1", 42008, &dir).is_none()
         );

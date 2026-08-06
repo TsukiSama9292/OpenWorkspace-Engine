@@ -256,7 +256,7 @@ async fn test_flat_rbac_end_to_end() {
     let _manager_id = create_user(&ctx, "e2e_manager").await;
     let _outsider_id = create_user(&ctx, "e2e_outsider").await;
 
-    assign_user_policy(&ctx, &member_id, &[group_g.clone()], None).await;
+    assign_user_policy(&ctx, &member_id, std::slice::from_ref(&group_g), None).await;
     assign_user_policy(
         &ctx,
         &_manager_id,
@@ -555,11 +555,11 @@ async fn test_flat_rbac_2_tiers_end_to_end() {
 
     // ── Max-rule ceiling: personal raises, never lowers; unlimited wins ──
     ctx.login_admin().await;
-    assign_user_policy(&ctx, &carol_id, &[user_group.clone()], Some(3)).await;
+    assign_user_policy(&ctx, &carol_id, std::slice::from_ref(&user_group), Some(3)).await;
     assert_eq!(effective_ceiling(&ctx, "rbac2_carol").await, 3, "personal ceiling raises");
-    assign_user_policy(&ctx, &carol_id, &[user_group.clone()], Some(1)).await;
+    assign_user_policy(&ctx, &carol_id, std::slice::from_ref(&user_group), Some(1)).await;
     assert_eq!(effective_ceiling(&ctx, "rbac2_carol").await, 1, "ties with the group cap");
-    assign_user_policy(&ctx, &carol_id, &[user_group.clone()], Some(0)).await;
+    assign_user_policy(&ctx, &carol_id, std::slice::from_ref(&user_group), Some(0)).await;
     assert_eq!(effective_ceiling(&ctx, "rbac2_carol").await, 0, "0 = unlimited wins");
 
     // A group ceiling raises above a lower personal ceiling (never lowers).
@@ -583,7 +583,7 @@ async fn test_flat_rbac_2_tiers_end_to_end() {
     let admin_id = admin_user_id(&ctx).await;
     // team shares tpl1 with everyone in it (the whitelist grant), so the
     // manager's tier-guard instance control over the tier-0 owner is reachable.
-    let team = create_group(&ctx, "rbac2_team", 5, &[tpl1.clone()]).await;
+    let team = create_group(&ctx, "rbac2_team", 5, std::slice::from_ref(&tpl1)).await;
     let mike_id = create_user(&ctx, "rbac2_mike").await;
     let mike2_id = create_user(&ctx, "rbac2_mike2").await;
     assign_user_policy(&ctx, &alice_id, &[user_group.clone(), team.clone()], None).await;
@@ -747,7 +747,7 @@ async fn test_template_visibility_end_to_end() {
     // template is excluded from `allowed_template_ids` by the API (so the
     // client never advertises it), and a direct launch attempt carries the
     // machine-readable template_hidden scope.
-    let group_whitelist = create_group(&ctx, "vis_team", 1, &[tpl_hidden.clone()]).await;
+    let group_whitelist = create_group(&ctx, "vis_team", 1, std::slice::from_ref(&tpl_hidden)).await;
     let member_id = create_user(&ctx, "vis_member").await;
     assign_user_policy(&ctx, &member_id, &[group_whitelist], None).await;
     assert_eq!(ctx.login_user("vis_member", "pw123456").await.status(), 200);
@@ -785,7 +785,7 @@ async fn test_template_visibility_end_to_end() {
 
     // A group that whitelists the private template can launch it for real.
     ctx.login_admin().await;
-    let whitelist_group = create_group(&ctx, "vis_trusted", 1, &[tpl_plain.clone()]).await;
+    let whitelist_group = create_group(&ctx, "vis_trusted", 1, std::slice::from_ref(&tpl_plain)).await;
     let trusted_id = create_user(&ctx, "vis_trusted").await;
     assign_user_policy(&ctx, &trusted_id, &[whitelist_group], None).await;
     assert_eq!(ctx.login_user("vis_trusted", "pw123456").await.status(), 200);

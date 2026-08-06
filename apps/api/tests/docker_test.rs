@@ -262,7 +262,7 @@ async fn runsc_supported() -> bool {
                 Err(_) => return false,
             };
             match docker.info().await {
-                Ok(info) => info.runtimes.map_or(false, |r| r.contains_key("runsc")),
+                Ok(info) => info.runtimes.is_some_and(|r| r.contains_key("runsc")),
                 Err(_) => false,
             }
         })
@@ -1594,12 +1594,11 @@ async fn exec_cmd(
     // The daemon records the exec's exit code once the process has finished.
     let mut exit_code: Option<i64> = None;
     for _ in 0..10 {
-        if let Ok(info) = docker.inspect_exec(&exec.id).await {
-            if let Some(code) = info.exit_code {
+        if let Ok(info) = docker.inspect_exec(&exec.id).await
+            && let Some(code) = info.exit_code {
                 exit_code = Some(code);
                 break;
             }
-        }
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 
@@ -1969,12 +1968,10 @@ async fn test_runsc_dns_rewrite_in_instance() {
         for _ in 0..30 {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             if let Ok((0, out)) = exec_cmd(&docker, &container.id, &["cat", "/etc/resolv.conf"]).await
-            {
-                if out.contains("8.8.8.8") && out.contains("1.1.1.1") {
+                && out.contains("8.8.8.8") && out.contains("1.1.1.1") {
                     resolv = out;
                     break;
                 }
-            }
         }
         if resolv.is_empty() {
             return Err(

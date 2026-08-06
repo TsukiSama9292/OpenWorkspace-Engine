@@ -1,18 +1,17 @@
 use crate::docker::RemoteType;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub fn default_dynamic_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("TRAEFIK_DYNAMIC_DIR") {
-        if !dir.is_empty() {
+    if let Ok(dir) = std::env::var("TRAEFIK_DYNAMIC_DIR")
+        && !dir.is_empty() {
             return PathBuf::from(dir);
         }
-    }
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     PathBuf::from(manifest_dir)
         .join("../../docker/openworkspace_dev/traefik/dynamic")
 }
 
-fn write_route_to(dir: &PathBuf, remote_type: &RemoteType, token: &str, host_port: u16, password: &str) -> Result<(), String> {
+fn write_route_to(dir: &Path, remote_type: &RemoteType, token: &str, host_port: u16, password: &str) -> Result<(), String> {
     match remote_type {
         RemoteType::KasmVnc => write_vnc_route_to(dir, token, host_port, password),
         RemoteType::Ttyd => write_ttyd_route_to(dir, token, host_port, password),
@@ -20,7 +19,7 @@ fn write_route_to(dir: &PathBuf, remote_type: &RemoteType, token: &str, host_por
     }
 }
 
-fn write_vnc_route_to(dir: &PathBuf, token: &str, host_port: u16, vnc_password: &str) -> Result<(), String> {
+fn write_vnc_route_to(dir: &Path, token: &str, host_port: u16, vnc_password: &str) -> Result<(), String> {
     use base64::Engine;
     let auth_header = format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(format!("kasm_user:{}", vnc_password)));
 
@@ -62,7 +61,7 @@ fn write_vnc_route_to(dir: &PathBuf, token: &str, host_port: u16, vnc_password: 
     Ok(())
 }
 
-fn write_ttyd_route_to(dir: &PathBuf, token: &str, host_port: u16, password: &str) -> Result<(), String> {
+fn write_ttyd_route_to(dir: &Path, token: &str, host_port: u16, password: &str) -> Result<(), String> {
     use base64::Engine;
     let auth_header = format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(format!("ow_user:{}", password)));
 
@@ -104,7 +103,7 @@ fn write_ttyd_route_to(dir: &PathBuf, token: &str, host_port: u16, password: &st
     Ok(())
 }
 
-fn write_jupyter_route_to(dir: &PathBuf, token: &str, host_port: u16) -> Result<(), String> {
+fn write_jupyter_route_to(dir: &Path, token: &str, host_port: u16) -> Result<(), String> {
     let ws_path = dir.join(format!("jupyter-{}-ws.yml", token));
     let ws_yaml = format!(
         r#"http:
@@ -134,7 +133,7 @@ pub fn write_route(remote_type: &RemoteType, token: &str, host_port: u16, passwo
     write_route_to(&default_dynamic_dir(), remote_type, token, host_port, password)
 }
 
-fn delete_route_from(dir: &PathBuf, token: &str) -> Result<(), String> {
+fn delete_route_from(dir: &Path, token: &str) -> Result<(), String> {
     for prefix in &["kasmvnc-", "ttyd-", "jupyter-"] {
         let path = dir.join(format!("{}{}-ws.yml", prefix, token));
         if path.exists() {

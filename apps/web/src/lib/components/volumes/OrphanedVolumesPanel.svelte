@@ -121,7 +121,7 @@
               </tr>
             </thead>
             <tbody>
-              {#each filteredVolumes as volume}
+              {#each filteredVolumes as volume (volume.id)}
                 <tr>
                   <td class="td-path">
                     <span class="td-name-text">{volume.host_path}</span>

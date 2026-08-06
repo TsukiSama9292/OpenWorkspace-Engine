@@ -187,8 +187,10 @@ pub enum PreflightReject {
 /// the API contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum TemplateVisibility {
     Public,
+    #[default]
     Private,
     Hidden,
 }
@@ -203,11 +205,6 @@ impl TemplateVisibility {
     }
 }
 
-impl Default for TemplateVisibility {
-    fn default() -> Self {
-        TemplateVisibility::Private
-    }
-}
 
 impl FromStr for TemplateVisibility {
     type Err = String;

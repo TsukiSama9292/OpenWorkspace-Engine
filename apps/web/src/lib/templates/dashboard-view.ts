@@ -25,7 +25,7 @@ export function parseDashboardHash(hash: string): DashboardView {
     case 'templates':
       if (parts[1] === 'new') return { tab: 'templates', editor: 'new' };
       if (parts[1] === 'edit' && parts[2]) {
-        let templateId = parts[2];
+        let templateId: string;
         try {
           templateId = decodeURIComponent(parts[2]);
         } catch {

@@ -197,7 +197,7 @@
     <p class="empty-text">No templates yet. Create one to get started.</p>
   {:else}
     <div class="instance-grid">
-      {#each configs ?? [] as config}
+      {#each configs ?? [] as config (config.id)}
         <div class="ws-card">
           <div class="ws-card-header">
             <div>

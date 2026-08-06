@@ -24,7 +24,7 @@ struct MockContext {
 }
 
 fn docker_err(msg: &str) -> bollard::errors::Error {
-    std::io::Error::new(std::io::ErrorKind::Other, msg).into()
+    std::io::Error::other(msg).into()
 }
 
 fn docker_404() -> bollard::errors::Error {
@@ -1477,7 +1477,7 @@ async fn test_list_instances() {
     let resp = ctx.get_auth("/api/instances", &token).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(body["instances"].as_array().unwrap().len() >= 1);
+    assert!(!body["instances"].as_array().unwrap().is_empty());
 }
 
 // ── Test 21: get_instance (lines 210-234) ──
@@ -2596,18 +2596,22 @@ async fn test_start_backfills_resolved_path_and_ensures_volume() {
     let expected_path = format!("/mnt/ow_dir/{}/{}", "persist-legacy-start", owner_id);
     let expected_volume = openworkspace_api::persistent_volume::persistent_volume_name(&expected_path);
 
-    let ensured = ensured.lock().unwrap();
-    assert_eq!(
-        ensured.as_slice(),
-        &[format!("{}|{}", expected_path, expected_volume)],
-        "start must ensure the persistent volume for the resolved path"
-    );
-    let captured = captured.lock().unwrap();
-    assert_eq!(
-        captured.as_slice(),
-        &[Some(expected_volume.clone())],
-        "the recreated container must mount the persistent volume"
-    );
+    {
+        let ensured = ensured.lock().unwrap();
+        assert_eq!(
+            ensured.as_slice(),
+            &[format!("{}|{}", expected_path, expected_volume)],
+            "start must ensure the persistent volume for the resolved path"
+        );
+    }
+    {
+        let captured = captured.lock().unwrap();
+        assert_eq!(
+            captured.as_slice(),
+            &[Some(expected_volume.clone())],
+            "the recreated container must mount the persistent volume"
+        );
+    }
 
     let inst = instance_by_name(&ctx, &token, "legacy-start").await;
     assert_eq!(inst["resolved_volume_host_path"], expected_path, "restart must backfill the resolved path");

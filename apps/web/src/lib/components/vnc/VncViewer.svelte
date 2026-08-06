@@ -10,11 +10,30 @@
     onClipboardText?: ((text: string) => void) | null;
   }
 
+  // Minimal structural type for the vendored, untyped noVNC RFB client
+  // (src/lib/vnc/rfb.js). The real object emits CustomEvent-like events whose
+  // `detail` carries connection/clipboard payloads.
+  interface RfbEvent {
+    detail?: { clean?: boolean; text?: string };
+  }
+
+  interface RfbInstance {
+    addEventListener(type: string, listener: (e: RfbEvent) => void): void;
+    removeEventListener(type: string, listener: (e: RfbEvent) => void): void;
+    disconnect(): void;
+    sendCredentials(creds: { username: string; password: string }): void;
+    sendCtrlAltDel(): void;
+    clipboardPasteFrom(text: string): void;
+    mouseButtonMapper: unknown;
+    resizeSession: boolean;
+    updateConnectionSettings(): void;
+  }
+
   let { url = '', password = 'password', status = $bindable('idle'), onClipboardText = null }: Props = $props();
 
   let container = $state<HTMLDivElement | null>(null);
   let touchInput = $state<HTMLInputElement | null>(null);
-  let rfb = $state<any>(null);
+  let rfb = $state<RfbInstance | null>(null);
   let errorMessage = $state('');
   let retryCount = $state(0);
   const MAX_RETRIES = 30;
@@ -26,9 +45,9 @@
 
   let handlers: {
     onConnect: (() => void) | null;
-    onDisconnect: ((e: any) => void) | null;
+    onDisconnect: ((e: RfbEvent) => void) | null;
     onCredentials: (() => void) | null;
-    onClipboard: ((e: any) => void) | null;
+    onClipboard: ((e: RfbEvent) => void) | null;
     onError: (() => void) | null;
   } = { onConnect: null, onDisconnect: null, onCredentials: null, onClipboard: null, onError: null };
 
@@ -79,7 +98,7 @@
     if (handlers.onClipboard) rfb.removeEventListener('clipboard', handlers.onClipboard);
     if (handlers.onError) rfb.removeEventListener('error', handlers.onError);
     handlers = { onConnect: null, onDisconnect: null, onCredentials: null, onClipboard: null, onError: null };
-    try { rfb.disconnect(); } catch {}
+    try { rfb.disconnect(); } catch { /* already disconnected */ }
     rfb = null;
   }
 
@@ -117,7 +136,8 @@
     try {
       rfb = new RFB(container, touchInput, url, {
         credentials: { username: '', password }
-      });
+      }) as unknown as RfbInstance;
+      const instance = rfb;
 
       const mapper = new MouseButtonMapper();
       mapper.set(0, XVNC_BUTTONS.LEFT_BUTTON);
@@ -125,18 +145,18 @@
       mapper.set(2, XVNC_BUTTONS.RIGHT_BUTTON);
       mapper.set(3, XVNC_BUTTONS.BACK_BUTTON);
       mapper.set(4, XVNC_BUTTONS.FORWARD_BUTTON);
-      rfb.mouseButtonMapper = mapper;
+      instance.mouseButtonMapper = mapper;
 
       handlers.onConnect = () => {
         clearConnectTimeout();
         status = 'connected';
         errorMessage = '';
         retryCount = 0;
-        rfb.resizeSession = true;
-        rfb.updateConnectionSettings();
+        instance.resizeSession = true;
+        instance.updateConnectionSettings();
       };
 
-      handlers.onDisconnect = (e: any) => {
+      handlers.onDisconnect = (e: RfbEvent) => {
         clearConnectTimeout();
         if (e.detail && !e.detail.clean) {
           scheduleRetry();
@@ -144,10 +164,10 @@
       };
 
       handlers.onCredentials = () => {
-        rfb.sendCredentials({ username: '', password });
+        instance.sendCredentials({ username: '', password });
       };
 
-      handlers.onClipboard = (e: any) => {
+      handlers.onClipboard = (e: RfbEvent) => {
         if (onClipboardText && e.detail && e.detail.text) {
           onClipboardText(e.detail.text);
         }
@@ -158,16 +178,16 @@
         scheduleRetry();
       };
 
-      rfb.addEventListener('connect', handlers.onConnect);
-      rfb.addEventListener('disconnect', handlers.onDisconnect);
-      rfb.addEventListener('credentialsrequired', handlers.onCredentials);
-      rfb.addEventListener('clipboard', handlers.onClipboard);
-      rfb.addEventListener('error', handlers.onError);
+      instance.addEventListener('connect', handlers.onConnect);
+      instance.addEventListener('disconnect', handlers.onDisconnect);
+      instance.addEventListener('credentialsrequired', handlers.onCredentials);
+      instance.addEventListener('clipboard', handlers.onClipboard);
+      instance.addEventListener('error', handlers.onError);
 
       status = 'connecting';
       startConnectTimeout();
-    } catch (e: any) {
-      errorMessage = e.message;
+    } catch (e) {
+      errorMessage = e instanceof Error ? e.message : String(e);
       status = 'error';
       scheduleRetry();
     }

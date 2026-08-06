@@ -37,22 +37,39 @@ Two active apps: `apps/web/` (SvelteKit frontend) and `apps/api/` (Rust API). pn
 ```bash
 # Root (turbo)
 pnpm run dev          # full dev stack: kill-dev → init → compose dev up → network:allow → api+web concurrently
+pnpm run dev:nosudo   # same, skipping gVisor registration + network:allow (no sudo; bandwidth/tc fails open)
 pnpm run build        # turbo build all packages
 pnpm test             # turbo run test
 pnpm check            # turbo run check
+pnpm run test:e2e     # Playwright smoke against a RUNNING dev stack (login/dashboard/permission-gated tabs)
+pnpm run test:e2e:full# Playwright full: launch real instance → KasmVNC viewer → WebSocket → teardown
 
 # web only
 cd apps/web
 pnpm test             # vitest run — 23 files, 287 tests
-pnpm check            # svelte-check (typecheck)
+pnpm check            # svelte-kit sync + svelte-check (typecheck) + eslint . (hard lint gate)
+pnpm lint             # eslint . — flat config (eslint-plugin-svelte + typescript-eslint recommended)
+pnpm run analysis:web # soft report: eslint complexity / max-lines-per-function warnings — exit 0
 
 # api only
 cd apps/api
 bash scripts/check.sh          # zero-warning gate (both feature sets) — must produce NO output
 bash scripts/run_tests.sh      # cargo nextest run --features docker (158 unit + 324 integration tests)
+
+# Rust quality gates & analysis reports
+cd apps/api
+bash scripts/check.sh          # also runs `cargo clippy --all-targets --all-features -- -D warnings` (hard lint gate)
+pnpm run analysis:rust         # soft report: clippy too_many_lines (100) / cognitive_complexity (25) — exit 0
+pnpm run analysis:unsafe       # soft report: cargo geiger (third-party unsafe surface) — exit 0
+pnpm run analysis:bloat        # soft report: cargo llvm-lines (monomorphization hotspots) — exit 0
 ```
 
-No lint script exists. Root `turbo lint` runs only if configured per-package (`web` only).
+Rust quality-gate model (see `.scratch/quality-gates/spec.md`):
+- **Hard gates**: Clippy base lints via `-D warnings` inside `check.sh` + the api `check` script (they agree); `#![forbid(unsafe_code)]` in `lib.rs`/`main.rs` — our own code cannot contain `unsafe` (compiler-enforced). Thresholds live in `apps/api/clippy.toml` (`too-many-arguments-threshold = 25`, plus the two soft-report thresholds).
+- **Soft reports** (non-blocking, exit 0, run via root `pnpm analysis:*`): clippy complexity rules (`too_many_lines`/`cognitive_complexity` are CLI-only — never in crate attributes, so `-D warnings` can't promote them), `cargo geiger`, `cargo llvm-lines`.
+- Dev tooling: `cargo-geiger` and `cargo-llvm-lines` are installed via `cargo install`.
+
+`pnpm lint` runs `eslint .` in `apps/web` only; root `turbo lint` runs per-package (web only).
 
 ## Build/deploy flow (production: `docker/openworkspace/`)
 
