@@ -107,6 +107,17 @@
 | Post-run integrity check | 快照 admin 存在 + `is_admin` + templates/instances 行數，跑完比對；pass 失敗也照跑、計數不可讀視為失敗；mismatch 即 `die` 指名受損資源 |
 | Mutation 驗證 | 移除/搬移 config 行 → pre-flight `die`；直接刪 dev DB 的 admin row → post-run `die` 指名 admin；復原後全綠 |
 
+### ✅ Production Benchmark（生產堆疊 CPU/RAM 基準測試）
+
+非產品階段，屬營運可觀測性里程碑（`.scratch/archive/production-benchmark/`）——第一個「平台本身與每實例到底吃掉多少資源」的可重現答案。
+
+| 交付 | 內容 |
+|---|---|
+| 純 bash 基準腳本 | `scripts/benchmark/benchmark-prod.sh`：preflight → host-before → compose up → 平台視窗 → 6 實例並發視窗 → teardown；`--phase` / `--smoke` / `--seconds` / `--out` |
+| 純函式函式庫 | `scripts/benchmark/benchlib.sh`：`/proc` 取樣、`docker stats` JSON 解析、CSV、峰值/平均聚合、Markdown 表格——fixture 單元測試（免 Docker） |
+| 四表報告 | 平台容器峰值、每實例峰值（remote type × runtime）、runC vs runsc 聚合、host before→after delta + provenance（timestamp / default runtime / compose commit / image digests） |
+| 即時 E2E smoke | `scripts/benchmark/smoke_test.sh`：短視窗跑完整管線，驗證平台健康、6 實例 running、報告產出、teardown 後主機乾淨（含 DB 行復查） |
+
 ---
 
 ## 進行中／規劃中階段

@@ -47,3 +47,6 @@ yarn-error.log*
 .mimocode
 
 .pnpm-store
+
+# Benchmark transient reports
+scripts/benchmark/reports/

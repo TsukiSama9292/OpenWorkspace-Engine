@@ -116,6 +116,32 @@ In dev, the API process reads a `.env` file next to the workspace root (loaded v
 | `apply_bw_smoke.sh` (in `apps/api/scripts/`) | Verify a live host actually shapes bandwidth (uses `python3`, `busybox:1` image) |
 | `network_isolation_smoke_test.sh` | Smoke test that instance networks are isolated from the control plane |
 | `dini_smoke_test.sh` | Smoke test for the `_dini` (Docker-in-instance) images |
+| `benchmark/benchmark-prod.sh` | Production stack CPU/RAM benchmark (pure bash): preflight → compose up → platform window → six concurrent instances → teardown → CSV + Markdown report |
+| `benchmark/smoke_test.sh` | Live end-to-end verification of the benchmark (`--smoke`): platform healthy, six instances running, report produced, host clean afterwards |
+
+### `scripts/benchmark/`
+
+Measure the production compose stack's CPU/RAM — idle baseline, per-instance cost by
+remote type (KasmVNC / ttyd / Jupyter) and container runtime (runC vs runsc/gVisor),
+and the host before→after delta. Pure bash (bash + docker + curl + jq; no Node/Python).
+
+```bash
+# Fast end-to-end check (short windows, ~5s each) — also run by smoke_test.sh
+./scripts/benchmark/benchmark-prod.sh --smoke
+
+# Full run: 60s per window, six instances under both runtimes
+./scripts/benchmark/benchmark-prod.sh
+
+# Just the platform-idle phase (compose up + 60s platform window)
+./scripts/benchmark/benchmark-prod.sh --phase 2
+```
+
+Requirements: `runsc` registered (`pnpm run init`), port 80 free (no dev stack), the
+six dini images present (auto-built by the repo image script when missing), and admin
+creds via `OW_ADMIN_USER` / `OW_ADMIN_PASSWORD` (defaults `admin`/`admin`). Output lands
+in `scripts/benchmark/reports/bench-<timestamp>/` (gitignored). The pure sampling /
+parsing / aggregation / Markdown functions live in `benchlib.sh`, unit-tested with
+fixtures in `scripts/benchmark/tests/` (no Docker needed).
 
 ### `scripts/cleanup.sh`
 

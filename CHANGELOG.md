@@ -4,6 +4,16 @@ Chronological, user-visible changes. Append, don't rewrite history.
 
 ## [Unreleased]
 
+### Production benchmark: measure the compose stack's CPU/RAM (`.scratch/production-benchmark/`)
+
+A pure-bash benchmark (`scripts/benchmark/benchmark-prod.sh`) that brings up the production compose stack and reports what it and six concurrent instances consume — the first reproducible resource-cost numbers for the platform (no product code changed).
+
+- **Four-table report** (`report.md` + per-second CSVs under `scripts/benchmark/reports/`): platform container peaks, per-instance peaks (KasmVNC / ttyd / Jupyter × runC / runsc, with `docker_in_instance`), runC-vs-runsc aggregate per remote type, and host before→after delta — plus provenance (timestamp, Docker default runtime, compose commit, image digests).
+- **Real API path**: logs in with the admin cookie, creates six templates, launches six `no_persistent` instances, and samples all six in one synchronized window only after every instance reports `running`.
+- **Self-cleaning**: deletes instances/templates and `docker compose down` on success and on any failure (EXIT trap); preflight fails fast with fix instructions (runsc missing, port 80 busy, images missing — auto-built via the repo image script).
+- **`--smoke` mode** + `scripts/benchmark/smoke_test.sh`: short-window end-to-end verification — platform healthy, six instances running, report produced, and the host (containers, networks, DB rows, compose stack) clean afterwards.
+- **Unit-testable pure library** (`benchlib.sh`): `/proc` host sampling, `docker stats --format '{{json .}}'` parsing (both PascalCase and snake_case keys), CSV/aggregation/Markdown — fixture-tested without Docker.
+
 ### Admin protection: the admin account can no longer be deleted or demoted (`.scratch/archive/admin-protection/`)
 
 Follow-up to the security-fuzzing incident where the fuzzer's unexpected-method probing executed `DELETE /api/users/{id}` with the admin session and permanently deleted the `admin` user.
