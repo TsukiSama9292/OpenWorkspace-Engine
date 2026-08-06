@@ -61,7 +61,7 @@ Because ports and `/30`s are finite pools shared by all instances on a host, the
 |---|---|
 | **Template** | Pre-configured settings bundle (image, resources, env vars) to launch instances from |
 | **Instance** | A running VNC container launched from a template |
-| **User** | Person with an account (admin / manager / user roles) |
+| **User** | Person with an account. Authorization is **group-based** — permissions live on groups (flags, template whitelist, instance ceiling) and are resolved into an effective context per request (see [docs/rbac.md](docs/rbac.md)) |
 
 See [docs/architecture.md](docs/architecture.md) for the canonical naming and lifecycle details.
 
@@ -227,7 +227,7 @@ See [docs/persistent-storage.md](docs/persistent-storage.md) for the full design
 
 ### Instance & Account Management
 - **Lifecycle control** — Admins start, pause, and remove instances from the dashboard
-- **Account administration** — Admins create accounts with role assignment (admin / manager / user)
+- **Account administration** — Admins create accounts and manage group memberships / per-user instance ceilings; group-based permissions (see [docs/rbac.md](docs/rbac.md))
 
 ### UI/UX
 - **Single-page Dashboard** — All management in one view; no page-switching latency

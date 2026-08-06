@@ -14,9 +14,9 @@ This project uses three canonical domain concepts:
 |---------|---------------|-------------|
 | Template | **Template** | A pre-configured settings bundle (image, resources, env vars) that users launch instances from |
 | Instance | **Instance** | A running container (KasmVNC / ttyd / Jupyter) launched from a template |
-| User | **User** | A person with an account (admin/manager/user roles) |
+| User | **User** | A person with an account. Authorization is **group-based** (no per-user role column): users belong to groups carrying permission flags, a template whitelist, and an instance ceiling, resolved into an effective context on every request (see [RBAC](rbac.md)) |
 
-Sidebar tabs: **Instances** (own instance cards, everyone), **Templates** (template cards with launch, Admin + Manager), **Sessions** (full instance table for all users, Admin + Manager), **Users** (user table with CRUD, Admin + Manager).
+Sidebar tabs (gated by the effective context): **Instances** (own instance cards + quick launch, everyone), **Templates** and **Sessions** (shown for any `can_create_template` / `can_manage_users` / `can_manage_group_instances` holder or admin; template management itself requires `can_create_template` and the all-instances table requires `can_manage_group_instances`), **Volumes** (orphaned persistent volumes, `can_manage_users`), **Groups** (admin), **Users** (user table with policy CRUD, `can_manage_users`), **Settings**/**Monitor**/**Logs** (admin).
 
 These names replaced legacy terminology (`WorkspaceConfig`→**Template**, `configs`/`config_id`/`config_name`→**templates**/`template_id`/`template_name`, `workspace_configs`→`workspace_templates`, `Workspaces` tab→**Instances**, old admin "Instances" tab→**Sessions**). New templates use the `_dini` images so the in-instance Docker switch works out of the box.
 
@@ -199,16 +199,18 @@ sequenceDiagram
 
 ### JWT Claims
 
+The JWT is **identity-only** — user id and expiry, nothing else:
+
 ```json
 {
   "sub": "91c5b69a-6955-4256-8182-fe3002059630",
-  "role": "admin",
   "exp": 1784870936
 }
 ```
 
 - **Cookie:** `ow_token` (HttpOnly, Secure, SameSite=Lax, Path=/, Max-Age=604800 = 7 days)
 - **Secret:** `JWT_SECRET` environment variable
+- Permissions are **never** carried in the token: every request resolves the user's effective context (flags, template whitelist, ceiling, tier) from the database, so a permission change takes effect on the next request — a stale token cannot outlive a policy edit. See [RBAC](rbac.md).
 - **VNC cache:** the `vnc_verify` path (`/api/vnc/verify`) decodes the JWT directly from the `Cookie` header (not Axum's cookie jar) and validates the instance via the `VncCache` DashMap, falling back to the DB on cache miss. See [Caching Strategy](caching-strategy.md) and [VNC Authentication](vnc-auth.md).
 
 ## Instance Lifecycle
@@ -366,9 +368,42 @@ erDiagram
         uuid id PK
         varchar username UK
         varchar password_hash
-        varchar role
+        integer direct_max_instances
         timestamptz created_at
         timestamptz updated_at
+    }
+
+    groups {
+        uuid id PK
+        varchar name UK
+        text description
+        varchar kind
+        boolean can_create_template
+        boolean can_manage_users
+        boolean can_manage_group_instances
+        boolean can_manage_docker
+        boolean can_manage_registry
+        integer max_instances
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    user_groups {
+        uuid user_id FK
+        uuid group_id FK
+    }
+
+    group_templates {
+        uuid group_id FK
+        uuid template_id FK
+    }
+
+    persistent_volumes {
+        uuid id PK
+        uuid owner_id FK
+        varchar host_path
+        varchar status
+        timestamptz created_at
     }
 
     workspace_templates {
@@ -390,6 +425,7 @@ erDiagram
         integer network_bandwidth_up_mbps
         integer network_bandwidth_down_mbps
         boolean docker_in_instance
+        varchar visibility
         json run_config
         json exec_config
         json volume_mappings
@@ -423,10 +459,17 @@ erDiagram
         timestamptz updated_at
     }
 
+    users ||--o{ user_groups : "member of"
+    groups ||--o{ user_groups : "has members"
+    groups ||--o{ group_templates : "whitelists"
+    workspace_templates ||--o{ group_templates : "is whitelisted on"
     users ||--o{ workspace_templates : "owns"
     users ||--o{ workspace_instances : "owns"
     workspace_templates ||--o{ workspace_instances : "launches"
+    users ||--o{ persistent_volumes : "owner"
 ```
+
+Authorization lives in the group tables: `users.role`, `users.is_system_admin`, and `user_templates` were dropped (migrations `000018`–`000020`); admin status is **Admin-group membership**, the template whitelist is the union of each member group's `group_templates` rows, and `groups.max_instances`/`users.direct_max_instances` feed the effective instance ceiling. See [RBAC](rbac.md).
 
 Access credentials are `access_token` / `access_password` (renamed from `vnc_token` / `vnc_password` by migration `000008` when ttyd/Jupyter support landed).
 

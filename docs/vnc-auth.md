@@ -127,7 +127,7 @@ The original design used Traefik **ForwardAuth** pointing at `GET /api/vnc/verif
 1. **WebSocket headers can't be set by the browser** — JS `WebSocket` doesn't support custom headers.
 2. **ForwardAuth can validate, but can't inject** — it can't add `Authorization` to the proxied request.
 
-`/api/vnc/verify` still exists (it decodes the `ow_token` cookie, looks up the instance by the `/kasmvnc/{token}/websockify` path via the `VncCache`, and returns `X-Forwarded-User` / `X-Forwarded-Role`), and the `vnc-auth` ForwardAuth middleware is still declared in `static-routers.yml`. However, **it is currently not attached to any router** — the active per-route gate is the per-token Basic header injection above.
+`/api/vnc/verify` still exists (it decodes the `ow_token` cookie, looks up the instance by the `/kasmvnc/{token}/websockify` path via the `VncCache`, and returns `X-Forwarded-User`), and the `vnc-auth` ForwardAuth middleware is still declared in `static-routers.yml`. However, **it is currently not attached to any router** — the active per-route gate is the per-token Basic header injection above.
 
 ### Container Isolation
 
@@ -178,7 +178,7 @@ No `?pw=` query parameter — the password never appears in the URL bar.
 - Can open the VNC page, but the page still needs a valid `ow_token` JWT (dashboard `+layout` guard redirects to `/login`), and the instance data (incl. `access_password`) is only returned to authorized users.
 
 **Attacker steals a JWT cookie:**
-- Can open VNC pages for instances they can manage (owner/admin/manager-over-user) — intended behavior.
+- Can open VNC pages for instances they can control — owner, admin, or a group-instance holder whose target owner shares a group and is of a strictly lower tier (see [RBAC](rbac.md#permission-gates)) — intended behavior.
 
 **Attacker reads `access_password` from DB:**
 - Can generate the Basic header, but still needs Traefik routing (can't bypass to the container directly); DB access is a full compromise anyway.

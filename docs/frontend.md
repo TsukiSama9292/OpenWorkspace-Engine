@@ -19,31 +19,42 @@ src/
 │   ├── api/
 │   │   ├── client.ts            # fetch wrapper → ApiResult<T> = {data} | {error}
 │   │   ├── template-actions.ts  # launchInstance, deleteTemplate
-│   │   └── instance-actions.ts  # performAction (start/stop/pause/unpause), deleteInstance
+│   │   ├── instance-actions.ts  # performAction (start/stop/pause/unpause), deleteInstance
+│   │   └── rbac-actions.ts      # fetchEffectiveContext, groups CRUD, updateUserPolicy, orphaned-volume list/cleanup
 │   ├── stores/
-│   │   └── auth.ts              # Svelte auth store + derived isAdmin/isManager
+│   │   └── auth.ts              # Svelte store over EffectiveContext + derived permission flags (isAdmin, canManage*, …)
+│   ├── permissions.ts           # pure helpers: mayControlInstance, mayLaunchTemplate, mayManageUsers, assignableGroups, …
+│   ├── preflight.ts             # client-side launch pre-flight mirror (visibility → whitelist → ceilings)
+│   ├── system-settings.ts       # admin settings (host_instance_limit)
 │   ├── components/
 │   │   ├── templates/TemplatePanel.svelte
 │   │   ├── instances/KeepTimeLine.svelte
+│   │   ├── groups/GroupPanel.svelte          # group CRUD + template-whitelist editor
+│   │   ├── users/UserManagementPanel.svelte  # user CRUD + group memberships + personal ceiling
+│   │   ├── volumes/OrphanedVolumesPanel.svelte
+│   │   ├── AdminSettings.svelte
+│   │   ├── RejectionNotice.svelte            # renders the launch pre-flight `rejection` body
 │   │   ├── forms/               # TemplateBasics/Resources/Advanced, EnvVarRows, VolumeRows
 │   │   ├── vnc/                 # VncSession, VncViewer, Clipboard, Settings, StatusBar
 │   │   └── ui/                  # Button, Modal
 │   ├── countdown/               # CountdownOverlay.svelte + countdown.ts
 │   ├── keepalive/keepalive.ts   # heartbeat scheduler
 │   ├── templates/               # dashboard-view.ts, template-form.ts
+│   ├── groups/group-form.ts     # GroupInput builder + system-group flag pinning
+│   ├── users/user-policy-form.ts
 │   ├── utils/                   # format.ts, template-icons.ts
-│   ├── types.ts                 # shared TS types
+│   ├── types.ts                 # shared TS types (EffectiveContext, Group, Template, Instance, …)
 │   └── vnc/                     # noVNC protocol core + shims (assets/ decoders/ renderers/ input/ util/)
 ├── routes/
 │   ├── +layout.js               # ssr=false, trailingSlash
 │   ├── +layout.svelte           # auth guard, nav shell
-│   ├── +page.svelte             # Dashboard (instances/templates/sessions/users)
+│   ├── +page.svelte             # Dashboard (instances/templates/sessions/volumes/groups/users/settings)
 │   ├── dashboard-data.ts        # loadDashboard() → {configs, instances}
 │   ├── login/+page.svelte
 │   ├── instances/[id]/+page.svelte
 │   ├── open/[token]/+page.svelte
 │   └── kasmvnc/[token]/+page.svelte
-└── tests/                       # vitest suites (10 files, 154 tests)
+└── tests/                       # vitest suites (23 files, 287 tests)
 ```
 
 > Note: there is **no** `+page.ts` route logic. Data loading happens inside the `+page.svelte` scripts, delegating to plain modules like `dashboard-data.ts` and the `lib/api/*` action helpers.
@@ -63,14 +74,22 @@ Single-page dashboard driven by `window.location.hash` (`parseDashboardHash`/`se
 | Tab | Shows | Access |
 |-----|-------|--------|
 | `#instances` | Own instance cards (status dot, persist badge, sleep countdown, actions) + Quick Launch template grid | everyone |
-| `#templates` | `TemplatePanel` (list/editor) | Admin, Manager |
-| `#sessions` | All-instances table with user/status filters | Admin, Manager |
-| `#users` | User CRUD table | Admin, Manager |
+| `#templates` | `TemplatePanel` (list/editor) | `can_create_template` or admin |
+| `#sessions` | All-instances table with user/status filters | `can_manage_group_instances` or admin |
+| `#volumes` | Orphaned persistent-volume list + thorough cleanup | `can_manage_users` |
+| `#groups` | `GroupPanel` (group CRUD + template whitelist) | admin |
+| `#users` | `UserManagementPanel` (user CRUD + memberships + ceilings) | `can_manage_users` |
+| `#settings` | `AdminSettings` (host ceiling) | admin |
+| `#monitor` / `#logs` | Placeholders | admin |
+
+The tab list itself is gated by the effective context: **Templates**/**Sessions** render for any `can_create_template` / `can_manage_users` / `can_manage_group_instances` holder (or admin), **Volumes**/**Users** for `can_manage_users`, and **Groups**/**Settings**/**Monitor**/**Logs** for admins only.
 
 - Loads data via `loadDashboard()` (`Promise.all` of `GET /api/templates` + `GET /api/instances`), then polls `GET /api/instances` every 5 s.
-- Instance control (`canControlInstance`) mirrors server RBAC: owner, admin, or manager-over-`user`-owner.
+- Instance control (`mayControlInstance` in `lib/permissions.ts`) mirrors server RBAC: owner, admin, or a group-instance holder whose target owner shares a group and is of a strictly lower tier.
+- Launch is gated client-side by `mayLaunchTemplate` (template visibility + the effective whitelist from `/auth/me`) and server-side by the launch pre-flight; a `403`/`409` `rejection` body is rendered by `RejectionNotice`.
+- The Quick Launch grid excludes `hidden` templates (they stay visible in the management panel so admins can restore them).
 - Launch modal offers `use_persistent` / `no_persistent` / `reset_persistent` (only shown for templates with `persistent_storage_path`), with a confirm dialog before reset.
-- User tab: create/edit/delete via `lib/api/client` against `/api/users`.
+- User tab: create/edit/delete + group membership + personal ceiling via `lib/api/rbac-actions.ts` against `/api/users` and `/api/groups`.
 
 ### `/login` — `login/+page.svelte`
 
@@ -99,7 +118,7 @@ Calls `auth.login(username, password)`; on success `goto('/')`.
 
 ### `lib/types.ts`
 
-`Role` (`admin|manager|user`), `RemoteType` (`kasmvnc|ttyd|jupyter`), `TimeoutAction` (`remove|stop|pause`), `Template`, `Instance`, `VncSettings`, `ApiResult<T>`.
+`EffectiveContext` (the `/auth/me` envelope: `user_id`, `username`, `is_admin`, `tier`, the five `can_*` flags, `effective_max_instances`, `allowed_template_ids`, `group_ids`, `direct_max_instances`), `Group` / `GroupInput`, `RemoteType` (`kasmvnc|ttyd|jupyter`), `TimeoutAction` (`remove|stop|pause`), `Template`, `Instance`, `VncSettings`, `ApiResult<T>`.
 
 ### `lib/api/client.ts`
 
@@ -120,12 +139,14 @@ export const api = {
 
 ### `lib/stores/auth.ts`
 
-`writable<User | null>` store:
+`writable<EffectiveContext | null>` store:
 
-- `login(username, password)` → `POST /api/auth/login`, sets the user on success
+- `login(username, password)` → `POST /api/auth/login`, sets the context on success
 - `logout()` → `POST /api/auth/logout`, clears
-- `check()` → `GET /api/auth/me`, sets or nulls
-- Derived: `isAuthenticated`, `isAdmin` (`role === 'admin'`), `isManager` (`admin` or `manager`)
+- `check()` → `GET /api/auth/me` (recomputes the context server-side), sets or nulls
+- Derived: `isAuthenticated`, `isAdmin` (`context.is_admin`), `userTier`, and one derived flag per permission — `canCreateTemplate`, `canManageUsers`, `canManageGroupInstances`, `canManageDocker`, `canManageRegistry` — plus `effectiveMaxInstances` and `allowedTemplateIds`.
+
+There is no `role` on the store: authorization decisions read the effective context (or `lib/permissions.ts` helpers) on demand, so a permission change in the DB is reflected after the next `/auth/me` refresh without re-login.
 
 ### `lib/keepalive/keepalive.ts`
 
@@ -147,9 +168,11 @@ export const api = {
 
 ## Testing
 
-`pnpm test` runs Vitest (jsdom/happy-dom) — **10 files, 154 tests**:
+`pnpm test` runs Vitest (jsdom/happy-dom) — **23 files, 287 tests**:
 
-- `api-client`, `auth-store`, `template-actions`, `dashboard-view`, `template-form`, `template-panel`, `keepalive`, `keep-time-line`, `countdown`, `format`
+- Auth/RBAC: `auth-store`, `permissions`, `rbac-actions`, `group-form`, `group-panel`, `user-panel`, `user-policy-form`, `preflight`, `rejection-notice`, `admin-settings`
+- Instances/templates: `api-client`, `template-actions`, `dashboard-view`, `template-form`, `template-panel`, `template-resources`, `quick-launch`, `keepalive`, `keep-time-line`
+- Misc: `orphaned-volumes-nav`, `orphaned-volumes-panel`, `countdown`, `format`
 - `tests/mocks/` provides `app-navigation` (`goto`) and `app-stores` (`page`) stubs
 
 `pnpm check` runs `svelte-kit sync && svelte-check` (typecheck). Playwright E2E is configured but requires live containers to run.
