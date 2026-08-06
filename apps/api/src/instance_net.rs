@@ -6,10 +6,18 @@
 //! be unit-tested without Docker or a database. The orchestration (listing the
 //! subnets already in use, creating/removing networks, attaching containers)
 //! lives in `docker.rs`.
+//!
+//! Subnet allocation carries the same cross-process arbitration as host ports:
+//! `try_allocate_subnet` takes a non-blocking `flock` on a per-block lockfile
+//! (key = the `/30` network address) in the shared per-UID lock directory, so
+//! concurrent launches across API processes can never claim the same `/30`.
 
 use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
+use std::path::Path;
 use std::str::FromStr;
+
+use rustix::fd::OwnedFd;
 
 /// A parsed base CIDR from which aligned `/30` blocks are allocated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,6 +115,48 @@ pub fn lowest_free_subnet_from(
     None
 }
 
+/// A reserved `/30` block: the network address plus the `OwnedFd` whose open
+/// file description holds the exclusive `flock` on its lockfile. The caller
+/// owns the subnet for as long as the handle lives; dropping it releases the
+/// lock (RAII), so a process that dies mid-allocation never blocks the block
+/// permanently.
+pub struct ReservedSubnet {
+    pub subnet: Ipv4Addr,
+    pub lock: OwnedFd,
+}
+
+/// Allocate a `/30` block under the flock registry: skip the Docker-derived
+/// `used` set, then for each candidate in circular order from `from_block` try
+/// a non-blocking `flock` on the block's lockfile (key = the network address,
+/// e.g. `10.200.0.0`). Returns the reservation, or `None` when every block in
+/// the pool is taken. No Docker probe is needed — the used set already contains
+/// every existing network; the residual stale-snapshot race (a subnet created
+/// after our snapshot but whose block is now free again) is absorbed upstream by
+/// the bounded `Pool overlaps` retry.
+pub fn try_allocate_subnet(
+    used: &BTreeSet<Ipv4Addr>,
+    base: &NetBase,
+    from_block: u64,
+    lock_dir: &Path,
+) -> Option<ReservedSubnet> {
+    let mut busy = used.clone();
+    loop {
+        let candidate = if from_block == 0 {
+            lowest_free_subnet(&busy, base)
+        } else {
+            lowest_free_subnet_from(&busy, base, from_block)
+        }?;
+        let Some(lock) = crate::host_port::acquire_lock(lock_dir, &candidate.to_string()) else {
+            busy.insert(candidate);
+            continue;
+        };
+        return Some(ReservedSubnet {
+            subnet: candidate,
+            lock,
+        });
+    }
+}
+
 /// Deterministic per-instance spread across the pool (FNV-1a over the access
 /// token), as a `/30` block index. A retrying launch re-scans from here so it
 /// doesn't re-collide with every other concurrent retry on the same block.
@@ -142,6 +192,8 @@ pub fn network_name(instance_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
 
     fn ip(s: &str) -> Ipv4Addr {
         s.parse().unwrap()
@@ -149,6 +201,14 @@ mod tests {
 
     fn set(nets: &[&str]) -> BTreeSet<Ipv4Addr> {
         nets.iter().map(|s| s.parse().unwrap()).collect()
+    }
+
+    fn temp_lock_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ow_flock_sub_{}_{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        dir
     }
 
     #[test]
@@ -300,5 +360,81 @@ mod tests {
         assert_eq!(network_name("abc"), "ow-abc");
         assert_eq!(network_name("abc"), network_name("abc"));
         assert_ne!(network_name("abc"), network_name("abd"));
+    }
+
+    #[test]
+    fn try_allocate_subnet_skips_flock_held_candidate() {
+        let dir = temp_lock_dir("sub-flockskip");
+        let base = NetBase::parse("10.200.0.0/29").unwrap();
+        let _held = crate::host_port::acquire_lock(&dir, "10.200.0.0").unwrap();
+        let r = try_allocate_subnet(&set(&[]), &base, 0, &dir).expect("next free block");
+        assert_eq!(r.subnet, ip("10.200.0.4"));
+        drop(r);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn try_allocate_subnet_respects_used_set() {
+        let dir = temp_lock_dir("sub-usedset");
+        let base = NetBase::parse("10.200.0.0/29").unwrap();
+        let r = try_allocate_subnet(&set(&["10.200.0.4"]), &base, 0, &dir).expect("free block");
+        assert_eq!(r.subnet, ip("10.200.0.0"));
+        drop(r);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn try_allocate_subnet_from_block_scans_circularly() {
+        let dir = temp_lock_dir("sub-circ");
+        let base = NetBase::parse("10.200.0.0/29").unwrap();
+        let r = try_allocate_subnet(&set(&["10.200.0.4"]), &base, 1, &dir).expect("free block");
+        assert_eq!(r.subnet, ip("10.200.0.0"), "wraps past the used block");
+        drop(r);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn try_allocate_subnet_exhausted_returns_none() {
+        let dir = temp_lock_dir("sub-exhausted");
+        let base = NetBase::parse("10.200.0.0/30").unwrap();
+        assert!(try_allocate_subnet(&set(&["10.200.0.0"]), &base, 0, &dir).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn try_allocate_subnet_flock_held_all_returns_none() {
+        let dir = temp_lock_dir("sub-allheld");
+        let base = NetBase::parse("10.200.0.0/29").unwrap();
+        let _a = crate::host_port::acquire_lock(&dir, "10.200.0.0").unwrap();
+        let _b = crate::host_port::acquire_lock(&dir, "10.200.0.4").unwrap();
+        assert!(try_allocate_subnet(&set(&[]), &base, 0, &dir).is_none());
+        drop(_a);
+        drop(_b);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reserved_subnet_drop_releases_like_crashed_process() {
+        let dir = temp_lock_dir("sub-crash");
+        let base = NetBase::parse("10.200.0.0/29").unwrap();
+        {
+            let _r = try_allocate_subnet(&set(&[]), &base, 0, &dir).expect("first acquisition");
+        }
+        let r = try_allocate_subnet(&set(&[]), &base, 0, &dir).expect("re-acquirable after drop");
+        assert_eq!(r.subnet, ip("10.200.0.0"));
+        drop(r);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn subnet_lockfile_never_unlinked_after_release() {
+        let dir = temp_lock_dir("sub-nolink");
+        let base = NetBase::parse("10.200.0.0/30").unwrap();
+        {
+            let _r = try_allocate_subnet(&set(&[]), &base, 0, &dir).expect("first acquisition");
+        }
+        let path = dir.join("10.200.0.0.lock");
+        assert!(path.exists(), "lockfile must persist after release");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

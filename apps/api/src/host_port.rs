@@ -146,12 +146,15 @@ pub fn resolve_lock_dir(settings_dir: &str) -> Option<PathBuf> {
     usable_lock_dir(&candidates)
 }
 
-/// Try to reserve `port` by taking a non-blocking exclusive `flock` on its
-/// lockfile inside `lock_dir`. Returns `Some` (and owns the port) on success;
-/// `None` when the file cannot be opened or another holder owns the lock. The
-/// lockfile is created if absent and **never unlinked**.
-pub fn acquire_lock(lock_dir: &Path, port: u16) -> Option<OwnedFd> {
-    let path = lock_dir.join(format!("{}.lock", port));
+/// Try to reserve `key` by taking a non-blocking exclusive `flock` on its
+/// lockfile inside `lock_dir`. Returns `Some` (and owns the resource) on
+/// success; `None` when the file cannot be opened or another holder owns the
+/// lock. The lockfile is created if absent and **never unlinked**. Shared by
+/// the host-port registry (keys are numeric ports) and the instance-subnet
+/// registry (keys are `/30` network addresses), so both arbitrate through the
+/// same per-UID lock directory.
+pub fn acquire_lock(lock_dir: &Path, key: &str) -> Option<OwnedFd> {
+    let path = lock_dir.join(format!("{}.lock", key));
     let Ok(fd) = rustix::fs::open(
         &path,
         OFlags::RDWR | OFlags::CREATE | OFlags::CLOEXEC | OFlags::NOFOLLOW,
@@ -183,7 +186,7 @@ pub fn try_allocate_port(
             None => return None,
             Some(c) => c,
         };
-        let Some(lock) = acquire_lock(lock_dir, candidate) else {
+        let Some(lock) = acquire_lock(lock_dir, &candidate.to_string()) else {
             busy.insert(candidate);
             continue;
         };
@@ -330,10 +333,10 @@ mod tests {
     fn reserved_port_per_ofd_contention_exactly_one_winner() {
         let dir = temp_lock_dir("contention");
         let port = 42000;
-        let a = acquire_lock(&dir, port).expect("first acquisition wins");
-        assert!(acquire_lock(&dir, port).is_none(), "second open must lose the flock");
+        let a = acquire_lock(&dir, &port.to_string()).expect("first acquisition wins");
+        assert!(acquire_lock(&dir, &port.to_string()).is_none(), "second open must lose the flock");
         drop(a);
-        assert!(acquire_lock(&dir, port).is_some(), "port must be re-acquirable after drop");
+        assert!(acquire_lock(&dir, &port.to_string()).is_some(), "port must be re-acquirable after drop");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -342,9 +345,9 @@ mod tests {
         let dir = temp_lock_dir("crash");
         let port = 42001;
         {
-            let _lock = acquire_lock(&dir, port).unwrap();
+            let _lock = acquire_lock(&dir, &port.to_string()).unwrap();
         }
-        assert!(acquire_lock(&dir, port).is_some());
+        assert!(acquire_lock(&dir, &port.to_string()).is_some());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -353,7 +356,7 @@ mod tests {
         let dir = temp_lock_dir("nolink");
         let port = 42002;
         {
-            let _lock = acquire_lock(&dir, port).unwrap();
+            let _lock = acquire_lock(&dir, &port.to_string()).unwrap();
         }
         let path = dir.join(format!("{}.lock", port));
         assert!(path.exists(), "lockfile must persist after release");
@@ -455,7 +458,7 @@ mod tests {
     fn try_allocate_port_skips_flock_held_candidate() {
         let dir = temp_lock_dir("flockskip");
         let port = 42003;
-        let _held = acquire_lock(&dir, port).unwrap();
+        let _held = acquire_lock(&dir, &port.to_string()).unwrap();
         let r = try_allocate_port(&set(&[]), port, port + 5, "127.0.0.1", port, &dir)
             .expect("next free port");
         assert_eq!(r.port, port + 1);
@@ -495,8 +498,8 @@ mod tests {
     #[test]
     fn try_allocate_port_flock_held_all_returns_none() {
         let dir = temp_lock_dir("allheld");
-        let _a = acquire_lock(&dir, 42008).unwrap();
-        let _b = acquire_lock(&dir, 42009).unwrap();
+        let _a = acquire_lock(&dir, &"42008".to_string()).unwrap();
+        let _b = acquire_lock(&dir, &"42009".to_string()).unwrap();
         assert!(
             try_allocate_port(&set(&[]), 42008, 42010, "127.0.0.1", 42008, &dir).is_none()
         );

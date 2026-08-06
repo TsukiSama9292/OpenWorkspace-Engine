@@ -80,7 +80,6 @@ async fn main() {
         docker,
         vnc_cache: vnc_cache.clone(),
         settings: settings.clone(),
-        network_lock: Arc::new(tokio::sync::Mutex::new(())),
     };
 
     // ── Spawn health worker ──

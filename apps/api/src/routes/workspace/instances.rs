@@ -998,7 +998,7 @@ async fn start_instance(
             Some(p) => {
                 let lock_dir = crate::host_port::resolve_lock_dir(&state.settings.port_lock_dir);
                 let reservation = lock_dir
-                    .and_then(|dir| crate::host_port::acquire_lock(&dir, p))
+                    .and_then(|dir| crate::host_port::acquire_lock(&dir, &p.to_string()))
                     .map(|lock| ReservedPort { port: p, lock });
                 (p, reservation)
             }
@@ -1143,11 +1143,15 @@ fn is_network_pool_overlap(err: &str) -> bool {
 /// Ensure `instance`'s dedicated `/30` network exists (spec §5) and return its
 /// name. Idempotent: if the network already exists, its subnet is reused
 /// unchanged; otherwise the lowest free `/30` from the base range is allocated
-/// and created. The `network_lock` serializes concurrent ensures in this
-/// process; a concurrent pool-overlap (cross-process or a manual
-/// `docker network create` landing between list and create) triggers a bounded
-/// re-allocation from a per-instance spread so retries don't stampede the same
-/// block. Shared by the `launch` and `start` (backfill) paths.
+/// and created. Allocation carries a `flock` reservation on the block's
+/// lockfile (shared per-UID lock directory with the host-port registry), held
+/// for the duration of the `create_network` call — Docker's pool commit is the
+/// release boundary, so a success drops the reservation immediately and a
+/// crashed process releases it via the kernel. A concurrent pool-overlap (a
+/// stale snapshot that wins the `flock` on a subnet already created by a peer)
+/// triggers a bounded re-allocation from a per-instance spread so retries don't
+/// stampede the same block. Allocation fails closed when no usable lock
+/// directory resolves. Shared by the `launch` and `start` (backfill) paths.
 async fn ensure_instance_network(
     state: &AppState,
     instance: &WorkspaceInstance,
@@ -1156,66 +1160,73 @@ async fn ensure_instance_network(
         .map_err(|e| format!("Invalid instance network base: {}", e))?;
     let network_name = crate::instance_net::network_name(&instance.id.to_string());
     let max_network_attempts = 4;
-    {
-        let _network_guard = state.network_lock.lock().await;
-        for attempt in 0..max_network_attempts {
-            let networks = state.docker
-                .list_networks()
-                .await
-                .map_err(|e| format!("Failed to list Docker networks: {}", e))?;
-            // Reuse the existing network (idempotent ensure / legacy backfill):
-            // a pre-existing instance keeps its subnet across stops and starts.
-            if let Some(_existing) = networks
-                .iter()
-                .find(|info| info.name == network_name)
-                .and_then(|info| info.subnet.as_deref())
-                .and_then(subnet_network_address)
-            {
-                return Ok(network_name);
+    let Some(lock_dir) = crate::host_port::resolve_lock_dir(&state.settings.port_lock_dir) else {
+        tracing::error!(
+            "No usable lock directory; instance subnet allocation fails closed (settings={})",
+            state.settings.port_lock_dir
+        );
+        return Err("No usable lock directory for instance subnet allocation".to_string());
+    };
+    for attempt in 0..max_network_attempts {
+        let networks = state.docker
+            .list_networks()
+            .await
+            .map_err(|e| format!("Failed to list Docker networks: {}", e))?;
+        // Reuse the existing network (idempotent ensure / legacy backfill):
+        // a pre-existing instance keeps its subnet across stops and starts.
+        if let Some(_existing) = networks
+            .iter()
+            .find(|info| info.name == network_name)
+            .and_then(|info| info.subnet.as_deref())
+            .and_then(subnet_network_address)
+        {
+            return Ok(network_name);
+        }
+        let used_subnets: BTreeSet<Ipv4Addr> = networks
+            .iter()
+            .filter_map(|info| info.subnet.as_deref())
+            .filter_map(subnet_network_address)
+            .collect();
+        // After a pool-overlap collision, re-scan from a per-instance spread so
+        // concurrent retries don't all stampede the same lowest free block.
+        let from_block = if attempt == 0 {
+            0
+        } else {
+            crate::instance_net::spread_block_offset(&instance.access_token, &base)
+        };
+        let Some(reservation) = crate::instance_net::try_allocate_subnet(
+            &used_subnets,
+            &base,
+            from_block,
+            &lock_dir,
+        ) else {
+            return Err("Instance subnet pool exhausted".to_string());
+        };
+        let instance_network = reservation.subnet;
+        let subnet_cidr = format!("{}/30", instance_network);
+        let gateway_ip = crate::instance_net::gateway_ip(instance_network).to_string();
+        match state.docker
+            .create_network(&network_name, &subnet_cidr, &gateway_ip)
+            .await
+        {
+            Ok(()) => return Ok(network_name),
+            Err(e) if attempt + 1 < max_network_attempts && is_network_pool_overlap(&e) => {
+                drop(reservation);
+                tracing::warn!(
+                    "Instance network subnet {} for '{}' collided with a concurrent launch, re-allocating: {}",
+                    subnet_cidr,
+                    instance.name,
+                    e
+                );
             }
-            let used_subnets: BTreeSet<Ipv4Addr> = networks
-                .iter()
-                .filter_map(|info| info.subnet.as_deref())
-                .filter_map(subnet_network_address)
-                .collect();
-            let instance_network = match if attempt == 0 {
-                crate::instance_net::lowest_free_subnet(&used_subnets, &base)
-            } else {
-                // After a pool-overlap collision, re-scan from a per-instance
-                // spread so concurrent retries don't all stampede the same
-                // lowest free block.
-                crate::instance_net::lowest_free_subnet_from(
-                    &used_subnets,
-                    &base,
-                    crate::instance_net::spread_block_offset(&instance.access_token, &base),
-                )
-            } {
-                Some(network) => network,
-                None => return Err("Instance subnet pool exhausted".to_string()),
-            };
-            let subnet_cidr = format!("{}/30", instance_network);
-            let gateway_ip = crate::instance_net::gateway_ip(instance_network).to_string();
-            match state.docker
-                .create_network(&network_name, &subnet_cidr, &gateway_ip)
-                .await
-            {
-                Ok(()) => return Ok(network_name),
-                Err(e) if attempt + 1 < max_network_attempts && is_network_pool_overlap(&e) => {
-                    tracing::warn!(
-                        "Instance network subnet {} for '{}' collided with a concurrent launch, re-allocating: {}",
-                        subnet_cidr,
-                        instance.name,
-                        e
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to create instance network for '{}': {} (DB record kept)",
-                        instance.name,
-                        e
-                    );
-                    return Err(format!("Failed to create network '{}': {}", network_name, e));
-                }
+            Err(e) => {
+                drop(reservation);
+                tracing::warn!(
+                    "Failed to create instance network for '{}': {} (DB record kept)",
+                    instance.name,
+                    e
+                );
+                return Err(format!("Failed to create network '{}': {}", network_name, e));
             }
         }
     }

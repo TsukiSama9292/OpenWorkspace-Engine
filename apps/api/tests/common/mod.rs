@@ -112,7 +112,6 @@ impl TestContext {
             docker: std::sync::Arc::new(docker),
             vnc_cache,
             settings: settings.clone(),
-            network_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
         };
 
         let cors = tower_http::cors::CorsLayer::new()

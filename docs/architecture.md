@@ -440,7 +440,7 @@ Access credentials are `access_token` / `access_password` (renamed from `vnc_tok
 
 **Instance networks:**
 - Each instance consumes a `/30` (4 IPs) from `OW_INSTANCE_NET_BASE`. Default `10.200.0.0/16` provides 16,384 instance subnets.
-- Host ports are drawn from a configurable pool (default 10000–20000); the allocator (`host_port.rs`, `instance_net.rs`) avoids collisions with a token-derived spread on retry, and a `network_lock` serializes allocation within the process.
+- Host ports are drawn from a configurable pool (default 10000–20000) and instance `/30` subnets from `OW_INSTANCE_NET_BASE`; both allocators (`host_port.rs`, `instance_net.rs`) arbitrate across processes with non-blocking `flock` lockfiles in a shared per-UID lock directory, with a token-derived spread on retry.
 
 **In-memory VNC cache (`DashMap`):**
 - `access_token → { status }` mapping stored in a lock-free concurrent HashMap

@@ -111,7 +111,6 @@ impl MockContext {
             docker: Arc::new(mock_docker),
             vnc_cache: VncCache::new(),
             settings,
-            network_lock: Arc::new(tokio::sync::Mutex::new(())),
         };
 
         let cors = tower_http::cors::CorsLayer::new()
@@ -232,12 +231,26 @@ fn assert_port_released(port: u16) {
     let dir = openworkspace_api::host_port::resolve_lock_dir("")
         .expect("test suite must resolve a shared lock directory");
     for _ in 0..40 {
-        if let Some(_lock) = openworkspace_api::host_port::acquire_lock(&dir, port) {
+        if let Some(_lock) = openworkspace_api::host_port::acquire_lock(&dir, &port.to_string()) {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     panic!("host port {} was not released within the grace window", port);
+}
+
+/// Same as `assert_port_released`, but for a `/30` subnet block's lockfile —
+/// proves a successful launch dropped its subnet reservation (RAII).
+fn assert_subnet_released(subnet: &str) {
+    let dir = openworkspace_api::host_port::resolve_lock_dir("")
+        .expect("test suite must resolve a shared lock directory");
+    for _ in 0..40 {
+        if let Some(_lock) = openworkspace_api::host_port::acquire_lock(&dir, subnet) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!("instance subnet {} was not released within the grace window", subnet);
 }
 
 #[tokio::test]
@@ -386,7 +399,20 @@ async fn test_launch_creates_network_before_container_with_ow_dns() {
     let order = order.lock().unwrap();
     assert_eq!(order.len(), 3);
     assert_eq!(order[0], "list_networks");
-    assert_eq!(order[1], format!("create_network|{}|10.200.0.0/30|10.200.0.1", expected_net));
+    // The lowest free block is only deterministic in the unit tests (isolated
+    // lock dir). In this shared registry a parallel real-Docker test binary may
+    // transiently hold `10.200.0.0`'s flock, so assert an aligned `/30` inside
+    // the base range with the gateway one address up instead of the exact block.
+    let parts: Vec<&str> = order[1].split('|').collect();
+    assert_eq!(parts[0], "create_network");
+    assert_eq!(parts[1], expected_net.as_str());
+    let subnet_addr: std::net::Ipv4Addr = parts[2].split('/').next().unwrap().parse().unwrap();
+    let octets = subnet_addr.octets();
+    assert_eq!(octets[0..2], [10, 200], "subnet must stay inside the base range");
+    assert_eq!(octets[3] % 4, 0, "subnet must be an aligned /30 block");
+    assert_eq!(parts[2], format!("{}/30", subnet_addr));
+    let gateway = std::net::Ipv4Addr::new(octets[0], octets[1], octets[2], octets[3] + 1);
+    assert_eq!(parts[3], gateway.to_string());
     assert_eq!(order[2], "create_container");
 
     let captured = captured.lock().unwrap();
@@ -567,13 +593,19 @@ async fn test_launch_network_overlap_reallocates_subnet() {
     let create_calls = Arc::new(AtomicU32::new(0));
     let created_networks = Arc::new(std::sync::Mutex::new(Vec::new()));
     let captured_network = Arc::new(std::sync::Mutex::new(None::<String>));
+    // Subnet the first create attempt tried — the "concurrent launch's network"
+    // that a re-list must reveal (mirrors real Docker: the overlap error only
+    // happened because that block got committed by a peer).
+    let first_attempt = Arc::new(std::sync::Mutex::new(None::<String>));
     let list_calls_for_mock = list_calls.clone();
     let create_calls_for_mock = create_calls.clone();
     let created_networks_for_mock = created_networks.clone();
     let captured_network_for_mock = captured_network.clone();
+    let first_attempt_for_mock = first_attempt.clone();
 
     let ctx = MockContext::new(move |m| {
         let list_calls = list_calls_for_mock.clone();
+        let first_attempt_for_list = first_attempt_for_mock.clone();
         m.expect_list_networks()
             .returning(move || {
                 let call = list_calls.fetch_add(1, Ordering::Relaxed);
@@ -581,22 +613,28 @@ async fn test_launch_network_overlap_reallocates_subnet() {
                     // Both launches see the same empty snapshot.
                     Box::pin(async { Ok(Vec::new()) })
                 } else {
-                    // After the overlap, the concurrent launch's network is visible.
-                    Box::pin(async {
+                    // After the overlap, the concurrent launch's network (the
+                    // subnet the first attempt actually collided on) is visible.
+                    let first_attempt = first_attempt_for_list.clone();
+                    Box::pin(async move {
+                        let subnet = first_attempt.lock().unwrap().clone()
+                            .expect("first create attempt must have run");
                         Ok(vec![NetworkInfo {
                             name: "ow-other".to_string(),
-                            subnet: Some("10.200.0.0/30".to_string()),
+                            subnet: Some(subnet),
                         }])
                     })
                 }
             });
         let create_calls = create_calls_for_mock.clone();
         let created_networks = created_networks_for_mock.clone();
+        let first_attempt = first_attempt_for_mock.clone();
         m.expect_create_network()
             .returning(move |name, subnet, gateway| {
                 let call = create_calls.fetch_add(1, Ordering::Relaxed);
                 created_networks.lock().unwrap().push(format!("{}|{}|{}", name, subnet, gateway));
                 if call == 0 {
+                    *first_attempt.lock().unwrap() = Some(subnet.to_string());
                     Box::pin(async { Err("invalid pool request: Pool overlaps with other one on this address space".to_string()) })
                 } else {
                     Box::pin(async { Ok(()) })
@@ -626,15 +664,167 @@ async fn test_launch_network_overlap_reallocates_subnet() {
     let second: Vec<&str> = created[1].split('|').collect();
     assert_eq!(first[0], expected_net);
     assert_eq!(second[0], expected_net, "retry must reuse the same network name");
-    assert_eq!(first[1], "10.200.0.0/30", "first attempt takes the lowest free block");
-    assert_eq!(first[2], "10.200.0.1");
+    let parse_subnet = |spec: &str| {
+        let addr: std::net::Ipv4Addr = spec.split('/').next().unwrap().parse().unwrap();
+        addr.octets()
+    };
+    let first_octets = parse_subnet(first[1]);
+    assert_eq!(first_octets[0..2], [10, 200], "first attempt stays inside the base range");
+    assert_eq!(first_octets[3] % 4, 0, "first attempt is an aligned /30 block");
+    assert_eq!(first[2], format!("{}.{}.{}.{}", first_octets[0], first_octets[1], first_octets[2], first_octets[3] + 1));
     assert_ne!(second[1], first[1], "re-allocation must pick a different subnet");
-    let second_net: std::net::Ipv4Addr = second[1].split('/').next().unwrap().parse().unwrap();
-    let octets = second_net.octets();
-    assert_eq!(octets[0..2], [10, 200], "retry must stay inside the base range");
-    assert_eq!(octets[3] % 4, 0, "retry must pick an aligned /30 block");
-    assert_ne!(second_net, std::net::Ipv4Addr::new(10, 200, 0, 0), "retry must skip the subnet the concurrent launch took");
+    let second_octets = parse_subnet(second[1]);
+    assert_eq!(second_octets[0..2], [10, 200], "retry must stay inside the base range");
+    assert_eq!(second_octets[3] % 4, 0, "retry must pick an aligned /30 block");
     assert_eq!(captured_network.lock().unwrap().as_deref(), Some(expected_net.as_str()));
+}
+
+// ── Ticket 01 (Seam 2): flock arbitration of /30 subnets through the real HTTP
+//    stack. Both launches see the same empty snapshot, yet the flock forces
+//    distinct blocks even under overlap. ──
+
+#[tokio::test]
+async fn test_concurrent_launches_allocate_distinct_subnets() {
+    use openworkspace_api::docker::NetworkInfo;
+
+    let created = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let gate = Arc::new(tokio::sync::Barrier::new(2));
+    let created_for_mock = created.clone();
+    let gate_for_mock = gate.clone();
+
+    let ctx = MockContext::new(move |m| {
+        m.expect_list_networks()
+            .returning(|| Box::pin(async { Ok(Vec::<NetworkInfo>::new()) }));
+        m.expect_create_network()
+            .returning(move |_, subnet, _| {
+                let created = created_for_mock.clone();
+                let gate = gate_for_mock.clone();
+                let subnet = subnet.to_string();
+                Box::pin(async move {
+                    created.lock().unwrap().push(subnet);
+                    // Hold the reservation until the sibling launch has also
+                    // arrived, so its allocator must skip our block even though
+                    // both launched from the same empty snapshot.
+                    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), gate.wait()).await;
+                    Ok(())
+                })
+            });
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    }).await;
+
+    let admin_token = ctx.login_admin().await;
+    let template_id = create_template_only(&ctx, &admin_token, "conc-subnet").await;
+    for (username, ceiling) in [("subnet_x", 5), ("subnet_y", 5)] {
+        let user_id = create_quota_user(&ctx, &admin_token, username, ceiling).await;
+        grant_template_whitelist(&ctx, &user_id, &template_id).await;
+    }
+    let token_x = ctx.login_user("subnet_x", "password123").await;
+    let token_y = ctx.login_user("subnet_y", "password123").await;
+
+    let client = ctx.client.clone();
+    let url = format!("{}/api/instances", ctx.base_url);
+    let body = serde_json::json!({ "template_id": template_id });
+    let mut handles = Vec::new();
+    for token in [token_x, token_y] {
+        let client = client.clone();
+        let url = url.clone();
+        let body = body.clone();
+        handles.push(tokio::spawn(async move {
+            client
+                .post(&url)
+                .header("Cookie", format!("ow_token={}", token))
+                .json(&body)
+                .send()
+                .await
+                .unwrap()
+                .status()
+        }));
+    }
+    for handle in handles {
+        assert_eq!(handle.await.unwrap(), reqwest::StatusCode::OK);
+    }
+
+    let created = created.lock().unwrap();
+    assert_eq!(created.len(), 2, "both concurrent launches must create a network");
+    assert_ne!(created[0], created[1], "concurrent launches must allocate distinct /30 subnets");
+    for subnet in created.iter() {
+        let addr: std::net::Ipv4Addr = subnet.split('/').next().unwrap().parse().unwrap();
+        let octets = addr.octets();
+        assert_eq!(octets[0..2], [10, 200], "subnet must stay inside the base range");
+        assert_eq!(octets[3] % 4, 0, "subnet must be an aligned /30 block");
+    }
+}
+
+#[tokio::test]
+async fn test_launch_releases_subnet_reservation_on_success() {
+    let used_subnet = Arc::new(std::sync::Mutex::new(None::<String>));
+    let used_for_mock = used_subnet.clone();
+    let ctx = MockContext::new(move |m| {
+        m.expect_create_network()
+            .returning(move |_, subnet, _| {
+                *used_for_mock.lock().unwrap() = Some(subnet.split('/').next().unwrap().to_string());
+                Box::pin(async { Ok(()) })
+            });
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    create_config_and_instance(&ctx, &token, "release-subnet").await;
+
+    let subnet = used_subnet.lock().unwrap().clone().expect("launch must allocate a subnet");
+    assert_subnet_released(&subnet);
+}
+
+#[tokio::test]
+async fn test_start_reuses_existing_network_without_allocation() {
+    use openworkspace_api::docker::NetworkInfo;
+
+    let existing = Arc::new(std::sync::Mutex::new(None::<String>));
+    let create_calls = Arc::new(AtomicU32::new(0));
+    let existing_for_mock = existing.clone();
+    let create_calls_for_mock = create_calls.clone();
+
+    let ctx = MockContext::new(move |m| {
+        m.expect_list_networks()
+            .returning(move || {
+                let existing = existing_for_mock.clone();
+                Box::pin(async move {
+                    match existing.lock().unwrap().clone() {
+                        Some(name) => Ok(vec![NetworkInfo { name, subnet: Some("10.200.0.0/30".to_string()) }]),
+                        None => Ok(Vec::new()),
+                    }
+                })
+            });
+        m.expect_create_network()
+            .returning(move |_, _, _| {
+                create_calls_for_mock.fetch_add(1, Ordering::Relaxed);
+                Box::pin(async { Ok(()) })
+            });
+        m.expect_inspect_container_state()
+            .returning(|_| Box::pin(async { Ok(Some("exited".to_string())) }));
+        m.expect_start_container_by_id()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        m.expect_apply_bandwidth_limit()
+            .never();
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    }).await;
+
+    let token = ctx.login_admin().await;
+    let (_, instance_id) = create_config_and_instance(&ctx, &token, "reuse-net").await;
+    *existing.lock().unwrap() = Some(format!("ow-{}", instance_id));
+
+    set_instance_status(&ctx.db, &instance_id, "stopped", Some("abc123def456")).await;
+
+    let resp = ctx.post_auth(&format!("/api/instances/{}/start", instance_id), &serde_json::json!({}), &token).await;
+    assert_eq!(resp.status(), 200, "start failed: {:?}", resp.text().await);
+    assert_eq!(
+        create_calls.load(Ordering::Relaxed),
+        1,
+        "start must reuse the existing instance network without allocating a new one"
+    );
 }
 
 #[tokio::test]
