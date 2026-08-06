@@ -10,6 +10,16 @@ Issues and specs (you may know a spec as a PRD) for this repo live as markdown f
 - Triage state is recorded as a `Status:` line near the top of each issue file (see `triage-labels.md` for the role strings)
 - Comments and conversation history append to the bottom of the file under a `## Comments` heading
 
+## Archiving a completed feature
+
+When a feature is fully delivered and committed:
+
+1. Flip its `Status:` line (and any ticket `**Status:**` lines) from `ready-for-agent` to `completed` in the spec — see the archive workflow in AGENTS.md stage 6.
+2. `git mv .scratch/<feature-slug>/ .scratch/archive/<feature-slug>/`.
+3. Update any live-doc references to the old path (AGENTS.md, `docs/*.md`, `roadmap.md`, `CHANGELOG.md`) to the `.scratch/archive/…` path.
+
+Only *planned* features stay live at `.scratch/<feature-slug>/`; the archive is the closed-ticket record (history is also in git).
+
 ## When a skill says "publish to the issue tracker"
 
 Create a new file under `.scratch/<feature-slug>/` (creating the directory if needed).

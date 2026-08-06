@@ -31,7 +31,7 @@ To reduce the attack surface at the network layer *before* it becomes a problem:
 
 This is network-level isolation taken to its extreme: each container lives in its own bubble, and the only entrance to it is the single Traefik-controlled published port.
 
-Because ports and `/30`s are finite pools shared by all instances on a host, they are handed out under non-blocking `flock` lockfiles (see [docs/lock-registry.md](docs/lock-registry.md)) — no two API processes can ever allocate the same port or subnet, even under concurrent launches.
+Because ports and `/30`s are finite pools shared by all instances on a host, they are handed out under non-blocking `flock` lockfiles (see [docs/developer-guide/lock-registry.md](docs/developer-guide/lock-registry.md)) — no two API processes can ever allocate the same port or subnet, even under concurrent launches.
 
 ---
 
@@ -61,9 +61,9 @@ Because ports and `/30`s are finite pools shared by all instances on a host, the
 |---|---|
 | **Template** | Pre-configured settings bundle (image, resources, env vars) to launch instances from |
 | **Instance** | A running VNC container launched from a template |
-| **User** | Person with an account. Authorization is **group-based** — permissions live on groups (flags, template whitelist, instance ceiling) and are resolved into an effective context per request (see [docs/rbac.md](docs/rbac.md)) |
+| **User** | Person with an account. Authorization is **group-based** — permissions live on groups (flags, template whitelist, instance ceiling) and are resolved into an effective context per request (see [docs/user-guide/rbac.md](docs/user-guide/rbac.md)) |
 
-See [docs/architecture.md](docs/architecture.md) for the canonical naming and lifecycle details.
+See [docs/user-guide/architecture.md](docs/user-guide/architecture.md) for the canonical naming and lifecycle details.
 
 ---
 
@@ -77,7 +77,7 @@ Browser ──> Traefik :80 ──> Rust API :3000 (Axum)
 
 **Key mechanism:** The API generates per-instance Traefik route YAML files into a watched directory. Traefik hot-reloads them via inotify — new VNC instances are immediately accessible without proxy restart.
 
-See [docs/architecture.md](docs/architecture.md) for routing flows, container lifecycle, network topology, and DB schema.
+See [docs/user-guide/architecture.md](docs/user-guide/architecture.md) for routing flows, container lifecycle, network topology, and DB schema.
 
 ---
 
@@ -122,7 +122,7 @@ OpenWorkspace-Engine/
 │   ├── openworkspace/          # Production stack (Traefik + PostgreSQL + web + api)
 │   └── openworkspace_dev/      # Dev infrastructure (Traefik + PostgreSQL)
 ├── scripts/                    # Kill-dev, network creation, cleanup
-└── docs/                       # Documentation
+└── docs/                       # user-guide + developer-guide
 ```
 
 ---
@@ -176,7 +176,7 @@ This runs `kill-dev.sh` → creates the `ow-network` Docker network → starts T
 
    Set secrets via environment variables or a `.env` file next to the compose file: `JWT_SECRET` (change from default), `ADMIN_PASSWORD`, `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`.
 
-> **Note on tc/HTB bandwidth shaping:** applying per-instance bandwidth caps requires `nsenter`/`tc` capabilities on the host. Run `pnpm run network:allow` once to grant them, or disable bandwidth limits on templates to skip `tc` entirely. See [docs/development.md](docs/development.md).
+> **Note on tc/HTB bandwidth shaping:** applying per-instance bandwidth caps requires `nsenter`/`tc` capabilities on the host. Run `pnpm run network:allow` once to grant them, or disable bandwidth limits on templates to skip `tc` entirely. See [docs/developer-guide/development.md](docs/developer-guide/development.md).
 
 ### HTTPS in Production
 
@@ -185,9 +185,9 @@ This stack serves everything (frontend, `/api`, VNC WebSocket) from one Traefik 
 - **Cloudflare** — enable **Proxied** on your DNS record; TLS is terminated at Cloudflare's edge and forwarded to `:80`. No cert management on your side.
 - **Let's Encrypt** — run a front reverse proxy (Traefik ACME, Caddy, or nginx) that obtains certs automatically and proxies to `:80`.
 
-Self-signed/local CA certs are not suitable: Chromium never bypasses certificate errors for `fetch()` subresource calls, so `/api` requests will fail with `ERR_CERT_AUTHORITY_INVALID`. See [docs/development.md](docs/development.md) for details.
+Self-signed/local CA certs are not suitable: Chromium never bypasses certificate errors for `fetch()` subresource calls, so `/api` requests will fail with `ERR_CERT_AUTHORITY_INVALID`. See [docs/developer-guide/development.md](docs/developer-guide/development.md) for details.
 
-See [docs/development.md](docs/development.md) for environment variables, debugging, and production build.
+See [docs/developer-guide/development.md](docs/developer-guide/development.md) for environment variables, debugging, and production build.
 
 ---
 
@@ -201,7 +201,7 @@ See [docs/development.md](docs/development.md) for environment variables, debugg
 ### Security & Isolation
 - **Cross-tenant isolation** — Every instance protected by a per-instance access token (62<sup>127</sup> combinations, 127 chars from `a-z A-Z 0-9`). Prevents tenants from directly accessing another tenant's instance via the container network — every request must go through the proxy with a valid token
 - **gVisor sandboxing** — Template-level `Container Runtime` option to select `runsc(gVisor)`, intercepting high-risk syscalls for host protection
-- **GPU passthrough (NVProxy)** — gVisor's `--nvproxy` proxies NVIDIA ioctls from the sandbox to the host driver. Officially supported GPUs are on **Turing / Ampere / Ada Lovelace / Hopper** (T4, A100/A10G, L4, H100); same-microarchitecture consumer cards (e.g. RTX 3090, RTX 4090) likely work — verified on Turing (GTX 1650) and Ampere (RTX 3060), Maxwell (GTX 970) fails. See [docs/gvison.md](docs/gvison.md)
+- **GPU passthrough (NVProxy)** — gVisor's `--nvproxy` proxies NVIDIA ioctls from the sandbox to the host driver. Officially supported GPUs are on **Turing / Ampere / Ada Lovelace / Hopper** (T4, A100/A10G, L4, H100); same-microarchitecture consumer cards (e.g. RTX 3090, RTX 4090) likely work — verified on Turing (GTX 1650) and Ampere (RTX 3060), Maxwell (GTX 970) fails. See [docs/developer-guide/gvison.md](docs/developer-guide/gvison.md)
 - **JWT Cookie Auth** — `ow_token` cookie + Traefik ForwardAuth for WebSocket upgrade validation
 - **Headless Instance Auth** — Proxy injects credentials server-side for KasmVNC, Jupyter Lab, and ttyd; browser never sees secrets, users never manually auth to instances
 - **Per-Instance RBAC** — Admin / Manager / User tiers with ownership verification on mutation endpoints
@@ -223,11 +223,11 @@ See [docs/development.md](docs/development.md) for environment variables, debugg
 - **Delete keeps data** — Removing an instance only removes its container, route, and DB record; the data stays on disk so a later `use_persistent` launch picks up exactly where you left off. Only an explicit reset wipes it.
 - **Restart resilience** — Restarting re-declares a lost volume declaration and backfills the resolved path for legacy instances, never overwriting user data.
 
-See [docs/persistent-storage.md](docs/persistent-storage.md) for the full design and lifecycle.
+See [docs/user-guide/persistent-storage.md](docs/user-guide/persistent-storage.md) for the full design and lifecycle.
 
 ### Instance & Account Management
 - **Lifecycle control** — Admins start, pause, and remove instances from the dashboard
-- **Account administration** — Admins create accounts and manage group memberships / per-user instance ceilings; group-based permissions (see [docs/rbac.md](docs/rbac.md))
+- **Account administration** — Admins create accounts and manage group memberships / per-user instance ceilings; group-based permissions (see [docs/user-guide/rbac.md](docs/user-guide/rbac.md))
 
 ### UI/UX
 - **Single-page Dashboard** — All management in one view; no page-switching latency
@@ -238,21 +238,24 @@ See [docs/persistent-storage.md](docs/persistent-storage.md) for the full design
 - **DashMap Cache** — O(1) VNC token lookup skips DB round-trip on every WebSocket handshake
 - **cgroups Resource Limits** — CPU cores + memory hard limits injected at container creation
 - **tc/HTB Bandwidth Shaping** — upload shaped on the container's egress `eth0`, download on the host-side veth; re-applied on every container start (Docker recreates the veth pair). Fail-open: shaping errors log and never kill a session
-- **flock Port/Subnet Registry** — host ports and instance `/30` subnets are allocated under non-blocking `flock` lockfiles in a shared per-UID directory, so concurrent launches across any number of API processes on one host never claim the same resource; stale-snapshot races are absorbed by a bounded retry from a per-instance spread. See [docs/lock-registry.md](docs/lock-registry.md)
+- **flock Port/Subnet Registry** — host ports and instance `/30` subnets are allocated under non-blocking `flock` lockfiles in a shared per-UID directory, so concurrent launches across any number of API processes on one host never claim the same resource; stale-snapshot races are absorbed by a bounded retry from a per-instance spread. See [docs/developer-guide/lock-registry.md](docs/developer-guide/lock-registry.md)
 - **Background Lifecycle Worker** — 3-second scan enforcing auto-sleep deadlines and keep-time idle reclamation; heartbeat endpoint resets the idle clock while a tab is focused
 
 | Documentation | Contents |
 |---|---|
-| [docs/architecture.md](docs/architecture.md) | System architecture, routing, lifecycle, DB schema |
-| [docs/persistent-storage.md](docs/persistent-storage.md) | Persistent user data: paths, volume lifecycle, launch modes |
-| [docs/gvison.md](docs/gvison.md) | gVisor/runsc sandboxing, NVProxy GPU passthrough, driver setup |
-| [docs/frontend.md](docs/frontend.md) | SvelteKit structure, components, CSS strategy |
-| [docs/rbac.md](docs/rbac.md) | Role permissions matrix, implementation |
-| [docs/vnc-auth.md](docs/vnc-auth.md) | VNC password flow, Traefik header injection, security model |
-| [docs/caching-strategy.md](docs/caching-strategy.md) | DashMap vs Redis/Valkey decision guide |
-| [docs/lock-registry.md](docs/lock-registry.md) | Cross-process flock arbitration for host ports and instance subnets |
-| [docs/api-reference.md](docs/api-reference.md) | Complete REST API reference |
-| [docs/development.md](docs/development.md) | Setup, commands, debugging, production |
+| **User guide** (`docs/user-guide/`) — for the most basic user |
+| [architecture.md](docs/user-guide/architecture.md) | What the platform is, how sessions are created and connected, isolation and scaling |
+| [persistent-storage.md](docs/user-guide/persistent-storage.md) | Persistent user data: what is kept across stop/start/delete |
+| [frontend.md](docs/user-guide/frontend.md) | The browser UI: pages, tabs, session viewers |
+| [rbac.md](docs/user-guide/rbac.md) | The group-based permission model (flags, template whitelist, instance ceiling, tier) |
+| [remote-auth.md](docs/user-guide/remote-auth.md) | How sessions are secured (per-instance credentials, server-side injection) |
+| **Developer guide** (`docs/developer-guide/`) — for developers, AI coding agents, operators |
+| [development.md](docs/developer-guide/development.md) | Setup, commands, debugging, production |
+| [tech-stack.md](docs/developer-guide/tech-stack.md) | Technology decisions (ADR-style rationale), quality gates, deploy flow, env vars |
+| [gvison.md](docs/developer-guide/gvison.md) | gVisor/runsc sandboxing, NVProxy GPU passthrough, driver setup |
+| [caching-strategy.md](docs/developer-guide/caching-strategy.md) | When the in-process cache is enough, and when a shared cache is needed |
+| [lock-registry.md](docs/developer-guide/lock-registry.md) | Cross-process flock arbitration for host ports and instance subnets |
+| [apps/api/security/openapi.json](apps/api/security/openapi.json) | Generated OpenAPI spec (per-endpoint payloads and auth) |
 
 ---
 

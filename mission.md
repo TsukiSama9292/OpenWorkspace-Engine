@@ -141,7 +141,7 @@ OpenWorkspace Engine 是輕量級的容器調度平台：按需布建隔離的 L
 
 | 文件 | 內容 |
 |---|---|
-| [tech-stack.md](tech-stack.md) | 技術決策、部署與更新流程（憲法第二條） |
+| [tech-stack.md](docs/developer-guide/tech-stack.md) | 技術決策、部署與更新流程（憲法第二條） |
 | [roadmap.md](roadmap.md) | 階段與時程規劃（憲法第三條） |
-| [docs/architecture.md](docs/architecture.md) | 系統架構、路由、生命週期、DB schema |
-| [docs/rbac.md](docs/rbac.md) | 權限模型（群組制） |
+| [docs/user-guide/architecture.md](docs/user-guide/architecture.md) | 系統架構、路由、生命週期、DB schema |
+| [docs/user-guide/rbac.md](docs/user-guide/rbac.md) | 權限模型（群組制） |

@@ -70,7 +70,7 @@
 
 ### ✅ 工程品質門檻（Quality Gates）
 
-非產品階段，屬開發者體驗／工程紀律里程碑（`.scratch/quality-gates/`）。
+非產品階段，屬開發者體驗／工程紀律里程碑（`.scratch/archive/quality-gates/`）。
 
 | 交付 | 內容 |
 |---|---|
@@ -84,7 +84,7 @@
 
 ### ✅ Security Fuzzing（API 安全模糊測試）
 
-非產品階段，屬安全工程里程碑（`.scratch/security-fuzzing/`）。
+非產品階段，屬安全工程里程碑（`.scratch/archive/security-fuzzing/`）。
 
 | 交付 | 內容 |
 |---|---|
@@ -96,7 +96,7 @@
 
 ### ✅ Admin Protection（admin 帳號不可刪除／不可降級）
 
-非產品階段，屬 RBAC 安全強化里程碑（`.scratch/admin-protection/`）——把 fuzzer 抓到的「admin 可被刪除」產品漏洞關起來，並讓 harness 無法再被靜默破壞。
+非產品階段，屬 RBAC 安全強化里程碑（`.scratch/archive/admin-protection/`）——把 fuzzer 抓到的「admin 可被刪除」產品漏洞關起來，並讓 harness 無法再被靜默破壞。
 
 | 交付 | 內容 |
 |---|---|
@@ -215,5 +215,5 @@
 ## 相關文件
 
 - [mission.md](mission.md) — 使命與核心功能（憲法第一條）
-- [tech-stack.md](tech-stack.md) — 技術決策、部署與更新（憲法第二條）
-- [docs/architecture.md](docs/architecture.md) — 系統架構與 DB schema
+- [tech-stack.md](docs/developer-guide/tech-stack.md) — 技術決策、部署與更新（憲法第二條）
+- [docs/user-guide/architecture.md](docs/user-guide/architecture.md) — 系統架構與 DB schema

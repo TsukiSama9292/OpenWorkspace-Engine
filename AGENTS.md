@@ -9,27 +9,54 @@ Experimental. A Docker Compose stack that runs KasmVNC/Jupyter/ttyd containers b
 Read these before working on the project. They are the constitution + living docs:
 
 - **[mission.md](mission.md)** — why the project exists, core features, design philosophy (Security · Stability · Performance), anti-goals.
-- **[tech-stack.md](tech-stack.md)** — technology decisions (ADR-style rationale), quality gates, dev + prod deploy flow, update flow, env vars.
 - **[roadmap.md](roadmap.md)** — completed phases (with commit references) and planned phases, plus the Definition of Done for each stage.
 - **[CHANGELOG.md](CHANGELOG.md)** — chronological change log (append to it when a user-visible change lands).
-- **[docs/](docs/)** — the deep dives:
-  - `architecture.md` — system architecture, routing, instance lifecycle, DB schema
+- **[docs/user-guide/](docs/user-guide/)** — user-facing guides (for the most basic user — see [Docs conventions](#docs-conventions)):
+  - `architecture.md` — what the platform is, how sessions are created and connected, isolation and scaling
   - `rbac.md` — the group-based permission model (flags, template whitelist, instance ceiling, tier)
-  - `api-reference.md` — complete REST API reference
-  - `frontend.md` — SvelteKit structure, components, tab gating
-  - `persistent-storage.md` — persistent user data design
-  - `vnc-auth.md` — VNC password flow, Traefik header injection, security model
-  - `caching-strategy.md` — DashMap vs Redis/Valkey decision
-  - `lock-registry.md` — flock arbitration for host ports and instance subnets
-  - `gvison.md` — gVisor/runsc sandboxing, NVProxy GPU passthrough
+  - `frontend.md` — the browser UI: pages, tabs, session viewers
+  - `persistent-storage.md` — persistent user data: what is kept across stop/start/delete
+  - `remote-auth.md` — how sessions are secured (per-instance credentials, server-side injection)
+- **[docs/developer-guide/](docs/developer-guide/)** — engineering docs for developers, AI coding agents, and operators (see [Docs conventions](#docs-conventions)):
+  - `tech-stack.md` — technology decisions (ADR-style rationale), quality gates, dev + prod deploy flow, update flow, env vars
   - `development.md` — setup, commands, debugging, production
-- **[.scratch/*/spec.md](.scratch/)** — spec/issue files for features, in-progress or past (triage labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`).
+  - `gvison.md` — gVisor/runsc sandboxing, NVProxy GPU passthrough, driver setup
+  - `caching-strategy.md` — when the in-process cache is enough, and when a shared cache is needed
+  - `lock-registry.md` — how host ports and instance subnets are reserved without conflicts
+  - `apps/api/security/openapi.json` — generated REST API spec (per-endpoint payloads and auth)
+- **[docs/agents/](docs/agents/)** — the agent issue tracker, triage labels, and domain layout
+- **[.scratch/*/spec.md](.scratch/)** — spec/issue files for **planned/in-progress** features (triage labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). **Completed** features are archived under `.scratch/archive/` (Status: `completed`).
+
+## Docs conventions
+
+Docs live in two guides, with different audiences and rules:
+
+- **`docs/user-guide/`** — written for the most basic user: someone who will use
+  or operate the product, not read its source. When writing or updating these:
+  - Explain **usage**, **feature modules**, and **abstracted logic**. Mention
+    underlying mechanisms only briefly — never descend into code-level
+    implementation (no structs, functions, source file paths, or container
+    internals).
+  - **Never write an API URL, an API name, or an API schema**: no `/api/...`
+    paths, no `GET`/`POST ...` endpoint references, no payload / response JSON,
+    no endpoint tables. The single source of endpoint truth is the generated
+    OpenAPI spec at `apps/api/security/openapi.json` — point readers there once
+    instead of enumerating endpoints.
+- **`docs/developer-guide/`** — engineering docs for developers, AI coding
+  agents, and operators: setup, commands, debugging, deploy flows, ADRs,
+  operational mechanisms, and the agent tooling under `docs/agents/`. No
+  API-ban — a developer guide may reference the OpenAPI spec and source paths
+  freely, but must stay accurate and keep the hard quality gates in view.
+
+Both guides share one rule: the technical history — the problems we hit and how
+we solved them — lives in `.scratch/archive/` (closed specs and issues), not in
+the guides. Link there when a reader would benefit.
 
 ## Monorepo layout
 
 Two active apps: `apps/web/` (SvelteKit frontend) and `apps/api/` (Rust API). pnpm workspaces + Turborepo. `apps/vnc-ui/` was **removed** — do not reference it.
 
-- `apps/api/` — Axum REST API. `src/routes/` (auth, users, groups, templates, instances, registry, proxy, admin_settings), `src/services/docker_service.rs` (container/network/traefik ops), `src/host_port.rs` + `src/instance_net.rs` (flock allocators), `src/route_writer.rs` (Traefik YAML), `src/network_qos.rs` (tc/HTB), `src/health_worker.rs` (3s lifecycle worker), `migration/` (sqlx migrations `000001`–`000021`).
+- `apps/api/` — Axum REST API. `src/routes/` (auth, users, groups, templates, instances, registry, proxy, admin_settings), `src/docker.rs` (DockerService mockable seam + DockerClient container/network/volume/bandwidth ops), `src/host_port.rs` + `src/instance_net.rs` (flock allocators), `src/route_writer.rs` (Traefik YAML), `src/network_qos.rs` (tc/HTB), `src/health_worker.rs` (3s lifecycle worker), `migration/` (sqlx migrations `000001`–`000021`).
 - `apps/web/` — SvelteKit static SPA (`adapter-static`, `ssr=false`). `src/lib/api/` (client + action helpers), `src/lib/stores/auth.ts` (EffectiveContext store), `src/lib/permissions.ts` (mayControlInstance / mayLaunchTemplate), `src/lib/preflight.ts`, `src/lib/vnc/` (noVNC core), `src/lib/components/` (panels: templates, instances, groups, users, volumes, admin).
 
 ## Key commands
@@ -46,7 +73,7 @@ pnpm run test:e2e:full# Playwright full: launch real instance → KasmVNC viewer
 
 # web only
 cd apps/web
-pnpm test             # vitest run — 23 files, 287 tests
+pnpm test             # vitest run — 23 files, 290 tests
 pnpm check            # svelte-kit sync + svelte-check (typecheck) + eslint . (hard lint gate)
 pnpm lint             # eslint . — flat config (eslint-plugin-svelte + typescript-eslint recommended)
 pnpm run analysis:web # soft report: eslint complexity / max-lines-per-function warnings — exit 0
@@ -64,7 +91,7 @@ pnpm run analysis:unsafe       # soft report: cargo geiger (third-party unsafe s
 pnpm run analysis:bloat        # soft report: cargo llvm-lines (monomorphization hotspots) — exit 0
 ```
 
-Rust quality-gate model (see `.scratch/quality-gates/spec.md`):
+Rust quality-gate model (see `.scratch/archive/quality-gates/spec.md`):
 - **Hard gates**: Clippy base lints via `-D warnings` inside `check.sh` + the api `check` script (they agree); `#![forbid(unsafe_code)]` in `lib.rs`/`main.rs` — our own code cannot contain `unsafe` (compiler-enforced). Thresholds live in `apps/api/clippy.toml` (`too-many-arguments-threshold = 25`, plus the two soft-report thresholds).
 - **Soft reports** (non-blocking, exit 0, run via root `pnpm analysis:*`): clippy complexity rules (`too_many_lines`/`cognitive_complexity` are CLI-only — never in crate attributes, so `-D warnings` can't promote them), `cargo geiger`, `cargo llvm-lines`.
 - Dev tooling: `cargo-geiger` and `cargo-llvm-lines` are installed via `cargo install`.
@@ -90,7 +117,7 @@ Rust quality-gate model (see `.scratch/quality-gates/spec.md`):
 - **Template authorization is group-only** — admins do NOT bypass the whitelist. Template `visibility`: `public` / `private` / `hidden`.
 - Instance ceiling = `groups.max_instances` (union, highest) with optional `users.direct_max_instances` (can only raise); host-wide `host_instance_limit` in `admin_settings`. Enforcement is precise (`FOR UPDATE` counting) for per-user, best-effort for host.
 - Instance control (`mayControlInstance`): owner, admin, or a group-instance holder whose target owner shares a group and is of a strictly lower tier.
-- See [docs/rbac.md](docs/rbac.md) — keep it in sync when permissions change.
+- See [docs/user-guide/rbac.md](docs/user-guide/rbac.md) — keep it in sync when permissions change.
 
 ## Network bandwidth limiting (tc/HTB)
 
@@ -118,7 +145,7 @@ Rust quality-gate model (see `.scratch/quality-gates/spec.md`):
   subnets (`instance_net.rs`) — are allocated under non-blocking `flock`
   lockfiles in a shared per-UID directory, so concurrent launches across any
   number of API processes on one host never claim the same resource. This
-  replaced the old in-process `network_lock` mutex. See `docs/lock-registry.md`.
+  replaced the old in-process `network_lock` mutex. See `docs/developer-guide/lock-registry.md`.
 - Lockfile key = resource identity: `{port}.lock` and `{network_addr}.lock`
   (e.g. `10.200.0.0.lock`). Files are created if absent and **never unlinked**
   (unlinking would let two processes lock different inodes at one path).
@@ -152,7 +179,7 @@ Rust quality-gate model (see `.scratch/quality-gates/spec.md`):
 - `adapter-static` — fully static SSG, no server
 - `ssr = false` + `trailingSlash = 'always'` in `+layout.js`
 - `base: ''` in svelte.config.js — app detects instance from `window.location.pathname`
-- Catch-all route `[...path]/+page.svelte` handles `/kasmvnc/<token>/`, `/open/<token>/`
+- Param routes `kasmvnc/[token]/+page.svelte` and `open/[token]/+page.svelte` handle session URLs
 - noVNC core files live in `apps/web/src/lib/vnc/` with shim files in `apps/web/src/lib/vnc/shims/`
 - `pako@1` pinned — v3 broke internal import paths used by noVNC
 
@@ -172,7 +199,7 @@ Rust quality-gate model (see `.scratch/quality-gates/spec.md`):
 
 ### Web (`apps/web`)
 
-- `pnpm test` — vitest with `happy-dom` + `@testing-library/svelte`. **23 files / 287 tests** in `src/tests/` (auth-store, permissions, rbac-actions, preflight, rejection-notice, group-panel, user-panel, admin-settings, api-client, template-actions, dashboard-view, template-form, quick-launch, keepalive, keep-time-line, orphaned-volumes-*, countdown, format, …).
+- `pnpm test` — vitest with `happy-dom` + `@testing-library/svelte`. **23 files / 290 tests** in `src/tests/` (auth-store, permissions, rbac-actions, preflight, rejection-notice, group-panel, user-panel, admin-settings, api-client, template-actions, dashboard-view, template-form, quick-launch, keepalive, keep-time-line, orphaned-volumes-*, countdown, format, …).
 - `tests/mocks/` provides `app-navigation` (`goto`) and `app-stores` (`page`) stubs.
 - Playwright E2E configured but not actively run (requires live VNC containers). No CI currently.
 
@@ -215,7 +242,7 @@ Never suppress a warning. Always fix the root cause.
 
 `references_repo/KasmVNC/kasmweb/` is the upstream KasmVNC source. `core/` contains noVNC protocol files (the basis for `apps/web/src/lib/vnc/`). `app/` contains the original UI logic (reference only).
 
-`references_repo/gvisor/` is a shallow (depth-1) clone of upstream gVisor (`runsc`), sparse-checked-out to only the `g3doc/` docs directory. runsc is registered as a Docker runtime by `scripts/docker-runtime-gvisor.sh` (`pnpm run init`) and selectable per template (`container_runtime` field). See `docs/gvison.md`.
+`references_repo/gvisor/` is a shallow (depth-1) clone of upstream gVisor (`runsc`), sparse-checked-out to only the `g3doc/` docs directory. runsc is registered as a Docker runtime by `scripts/docker-runtime-gvisor.sh` (`pnpm run init`) and selectable per template (`container_runtime` field). See `docs/developer-guide/gvison.md`.
 
 `references_repo/docker-docs/` is a shallow (depth-1) clone of upstream Docker docs, sparse-checked-out to only the `content/` docs directory (reference for Docker compose/networking/custom-runtime docs).
 
@@ -246,10 +273,11 @@ Prerequisite: the pipeline assumes the repo is already configured with an issue 
 
 5. **code-review** — Review the completed work against the tickets along two axes: Standards (repo conventions + smell baseline) and Spec (does it fulfill `.scratch/<feature-slug>/issues/<NN>-<slug>.md`). Fix findings, then run the analysis gates before closing out: re-run the suite (`bash scripts/check.sh` + web `pnpm check` — these already enforce clippy `-D warnings` and eslint); run the static-analysis soft reports where the change touches the relevant layer (`pnpm run analysis:rust` / `analysis:unsafe` / `analysis:bloat` for Rust, `pnpm run analysis:web` for web); and run the security fuzzer `pnpm run security:api` against a running dev stack when the change touches the API surface (RBAC/instance/registry/routes) — hard-gate failures are findings to fix, soft-report regressions are review findings too. Then close out with **automated doc sync**:
    - Update `.scratch/<feature-slug>/spec.md` and `.scratch/<feature-slug>/issues/*.md` to reflect what was actually built (close completed tickets, adjust the spec's Implementation/Testing Decisions if reality diverged).
-   - Update `docs/*.md` deep-dives where the change touches them (rbac, api-reference, architecture, frontend, persistent-storage, vnc-auth, …) — keep the domain docs in sync with what was built. Preferred scope: these docs describe **logic and configuration** (e.g. `.yaml`, `.json`, `.cfg`, `.ini`, env vars, compose files), not code-level implementation details — avoid mirroring function names, line-by-line source structure, or other content that drifts the moment code changes.
+   - Update `docs/user-guide/` and `docs/developer-guide/` where the change touches them (rbac, architecture, frontend, persistent-storage, remote-auth in user-guide; development, tech-stack, caching-strategy, gvison in developer-guide, …) — keep them in sync with what was built, following the [Docs conventions](#docs-conventions).
    - Update `roadmap.md` — move the delivered phase/feature from planned to completed (with a commit reference) or record the deviation.
    - Generate or update `CHANGELOG.md` with a concise summary of the user-visible changes (chronological; append, don't rewrite history).
    Only then commit to the current branch.
+6. **archive** — Once a feature is fully delivered and committed, flip its `Status:` line (and any ticket `**Status:**` lines) from `ready-for-agent` to `completed` in the spec, then `git mv .scratch/<feature-slug>/ .scratch/archive/<feature-slug>/`. The archive is the closed-ticket record (history is also in git); only *planned* features stay live at `.scratch/<feature-slug>/`.
 
 The pipeline is a loop, not a one-way gate: findings from stage 5 can bounce back to a new round of grilling/spec/tickets for follow-up work.
 
