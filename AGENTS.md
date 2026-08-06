@@ -2,39 +2,77 @@
 
 ## Project nature
 
-Experimental. A Docker Compose stack that runs KasmVNC containers behind a Traefik reverse proxy, with a custom SvelteKit browser UI. Goal: share one Linux box's resources among multiple devs via browser-based virtual desktops.
+Experimental. A Docker Compose stack that runs KasmVNC/Jupyter/ttyd containers behind a Traefik reverse proxy, with a custom SvelteKit browser UI. Goal: share one Linux box's resources among multiple devs via browser-based virtual desktops — with group-based RBAC, per-instance `/30` network isolation, resource governance (auto-sleep, keep-time, bandwidth caps, instance ceilings), and persistent user data.
+
+## Reading material — start here
+
+Read these before working on the project. They are the constitution + living docs:
+
+- **[mission.md](mission.md)** — why the project exists, core features, design philosophy (Security · Stability · Performance), anti-goals.
+- **[tech-stack.md](tech-stack.md)** — technology decisions (ADR-style rationale), quality gates, dev + prod deploy flow, update flow, env vars.
+- **[roadmap.md](roadmap.md)** — completed phases (with commit references) and planned phases, plus the Definition of Done for each stage.
+- **[CHANGELOG.md](CHANGELOG.md)** — chronological change log (append to it when a user-visible change lands).
+- **[docs/](docs/)** — the deep dives:
+  - `architecture.md` — system architecture, routing, instance lifecycle, DB schema
+  - `rbac.md` — the group-based permission model (flags, template whitelist, instance ceiling, tier)
+  - `api-reference.md` — complete REST API reference
+  - `frontend.md` — SvelteKit structure, components, tab gating
+  - `persistent-storage.md` — persistent user data design
+  - `vnc-auth.md` — VNC password flow, Traefik header injection, security model
+  - `caching-strategy.md` — DashMap vs Redis/Valkey decision
+  - `lock-registry.md` — flock arbitration for host ports and instance subnets
+  - `gvison.md` — gVisor/runsc sandboxing, NVProxy GPU passthrough
+  - `development.md` — setup, commands, debugging, production
+- **[.scratch/*/spec.md](.scratch/)** — spec/issue files for features, in-progress or past (triage labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`).
 
 ## Monorepo layout
 
-Two active apps: `apps/web/` (SvelteKit frontend) and `apps/api/` (Rust API). pnpm workspaces + Turborepo.
+Two active apps: `apps/web/` (SvelteKit frontend) and `apps/api/` (Rust API). pnpm workspaces + Turborepo. `apps/vnc-ui/` was **removed** — do not reference it.
+
+- `apps/api/` — Axum REST API. `src/routes/` (auth, users, groups, templates, instances, registry, proxy, admin_settings), `src/services/docker_service.rs` (container/network/traefik ops), `src/host_port.rs` + `src/instance_net.rs` (flock allocators), `src/route_writer.rs` (Traefik YAML), `src/network_qos.rs` (tc/HTB), `src/health_worker.rs` (3s lifecycle worker), `migration/` (sqlx migrations `000001`–`000021`).
+- `apps/web/` — SvelteKit static SPA (`adapter-static`, `ssr=false`). `src/lib/api/` (client + action helpers), `src/lib/stores/auth.ts` (EffectiveContext store), `src/lib/permissions.ts` (mayControlInstance / mayLaunchTemplate), `src/lib/preflight.ts`, `src/lib/vnc/` (noVNC core), `src/lib/components/` (panels: templates, instances, groups, users, volumes, admin).
 
 ## Key commands
 
 ```bash
 # Root (turbo)
-turbo build          # build all packages
-turbo dev            # dev servers (no cache)
+pnpm run dev          # full dev stack: kill-dev → init → compose dev up → network:allow → api+web concurrently
+pnpm run build        # turbo build all packages
+pnpm test             # turbo run test
+pnpm check            # turbo run check
 
-# vnc-ui only
-cd apps/vnc-ui
-pnpm test            # vitest run (21 tests)
-pnpm build           # vite build → apps/vnc-ui/build/
-pnpm check           # svelte-check (typecheck)
+# web only
+cd apps/web
+pnpm test             # vitest run — 23 files, 287 tests
+pnpm check            # svelte-check (typecheck)
 
 # api only
-cd apps/api && apps/api/scripts/run_tests.sh   # Rust tests via cargo nextest
+cd apps/api
+bash scripts/check.sh          # zero-warning gate (both feature sets) — must produce NO output
+bash scripts/run_tests.sh      # cargo nextest run --features docker (158 unit + 324 integration tests)
 ```
 
-No lint script exists in vnc-ui. Root `turbo lint` runs if configured per-package.
+No lint script exists. Root `turbo lint` runs only if configured per-package (`web` only).
 
 ## Build/deploy flow (production: `docker/openworkspace/`)
 
 1. `apps/web/Dockerfile` builds the SvelteKit static site (pnpm workspace, repo-root build context) and serves it from nginx.
-2. `apps/api/Dockerfile` builds the Rust API (runs as root; needs `pid: host`, `cap_add: [SYS_ADMIN, NET_ADMIN]`, `apparmor=unconfined`, rw Docker socket — see compose).
+2. `apps/api/Dockerfile` builds the Rust API (runs as root; needs `pid: host`, `cap_add: [SYS_ADMIN, NET_ADMIN, SYS_PTRACE]`, `apparmor=unconfined`, rw Docker socket — see compose).
 3. Traefik is the single reverse proxy (file-provider only, no Docker socket): `/` → web, `/api` → api, and `/kasmvnc/<token>/websockify` + `/ttyd/<token>/` + `/jupyter/<token>/` → per-instance containers.
 4. The API writes per-instance route files into `./traefik/dynamic` (its `TRAEFIK_DYNAMIC_DIR`, mounted rw into the api container, ro into traefik at `/etc/traefik/dynamic`; traefik watches it). Instance route files (`*-ws.yml`) are gitignored there.
 5. Deploy: `docker compose -f docker/openworkspace/docker-compose.yml up -d --build`. Postgres data lives in the `server-pgdata` volume; `ow-network` is created by `scripts/docker-network.sh` (`pnpm run init`).
-6. Dev flow differs: `docker/openworkspace_dev/` traefik proxies to host-run dev servers (`host.docker.internal:5173` / `:3000`); the API writes routes to `docker/openworkspace_dev/traefik/dynamic` (compile-time default when `TRAEFIK_DYNAMIC_DIR` is unset).
+6. DB migrations run automatically on API startup (sqlx) — no manual step. Traefik hot-reloads route files, so updates are zero-downtime.
+7. Dev flow differs: `docker/openworkspace_dev/` traefik proxies to host-run dev servers (`host.docker.internal:5173` / `:3000`); the API writes routes to `docker/openworkspace_dev/traefik/dynamic` (compile-time default when `TRAEFIK_DYNAMIC_DIR` is unset).
+
+## RBAC model (flat groups — no roles)
+
+- No `users.role` / `is_system_admin` columns (dropped by migrations `000018`–`000020`). Permissions live on **groups**: five flags (`can_create_template`, `can_manage_users`, `can_manage_group_instances`, `can_manage_docker`, `can_manage_registry`), a template whitelist (`group_templates`), and `max_instances`.
+- Three fixed **system groups** seeded at startup: Admin, Manager, User (`groups.kind`). Admin-group membership *is* admin; tiers are derived (Admin=2, Manager=1, else 0). System groups cannot be renamed/deleted; Admin flags are pinned all-on, User flags all-off.
+- Every request resolves the user's **effective context** from the DB (JWT is identity-only: `sub` + `exp`). Permissions change takes effect on the next request. JWT never carries roles.
+- **Template authorization is group-only** — admins do NOT bypass the whitelist. Template `visibility`: `public` / `private` / `hidden`.
+- Instance ceiling = `groups.max_instances` (union, highest) with optional `users.direct_max_instances` (can only raise); host-wide `host_instance_limit` in `admin_settings`. Enforcement is precise (`FOR UPDATE` counting) for per-user, best-effort for host.
+- Instance control (`mayControlInstance`): owner, admin, or a group-instance holder whose target owner shares a group and is of a strictly lower tier.
+- See [docs/rbac.md](docs/rbac.md) — keep it in sync when permissions change.
 
 ## Network bandwidth limiting (tc/HTB)
 
@@ -96,22 +134,29 @@ No lint script exists in vnc-ui. Root `turbo lint` runs if configured per-packag
 - `adapter-static` — fully static SSG, no server
 - `ssr = false` + `trailingSlash = 'always'` in `+layout.js`
 - `base: ''` in svelte.config.js — app detects instance from `window.location.pathname`
-- Catch-all route `[...path]/+page.svelte` handles `/kasm1/`, `/kasm2/`
-- noVNC core files live in `src/lib/vnc/` with shim files in `src/lib/vnc/shims/`
+- Catch-all route `[...path]/+page.svelte` handles `/kasmvnc/<token>/`, `/open/<token>/`
+- noVNC core files live in `apps/web/src/lib/vnc/` with shim files in `apps/web/src/lib/vnc/shims/`
 - `pako@1` pinned — v3 broke internal import paths used by noVNC
 
 ## KasmVNC gotchas
 
-- KasmVNC startup hardcodes `-sslOnly` — nginx must use `proxy_pass https://` with `proxy_ssl_verify off`
+- KasmVNC startup hardcodes `-sslOnly` — Traefik must use `https://host.docker.internal:<host_port>` with a `serversTransport` that has `insecureSkipVerify: true` (`kasm-insecure`)
 - `VNCOPTIONS=-disableBasicAuth` env var required to disable HTTP Basic Auth on websockify endpoint
 - `RFB` constructor: `touchInput` param must be a real hidden `<input>` DOM element, not `false`/`null`
-- `mouseButtonMapper` is initialized to `null` in rfb.js — must be manually instantiated with `MouseButtonMapper` class after RFB creation (default button mapping in `src/lib/components/VncViewer.svelte`)
+- `mouseButtonMapper` is initialized to `null` in rfb.js — must be manually instantiated with `MouseButtonMapper` class after RFB creation (default button mapping in `apps/web/src/lib/components/vnc/VncViewer.svelte`)
 
 ## Testing
 
-- vitest with `jsdom` environment, `@testing-library/svelte`, `happy-dom` setup
-- 21 unit tests in `src/tests/` — run with `pnpm test` from `apps/vnc-ui/`
-- Playwright E2E configured but not actively run (requires live VNC containers)
+### Rust API (`apps/api`)
+
+- 158 unit tests in `src/` + 324 integration tests in `tests/` (auth, db, docker lifecycle, instances, registry, templates, users, groups, vnc-verify, health). Integration tests require Docker (real containers/networks), run in parallel via `cargo nextest`.
+- Gate: `bash scripts/check.sh` must be **silent** (zero warnings, both feature sets) before `bash scripts/run_tests.sh`.
+
+### Web (`apps/web`)
+
+- `pnpm test` — vitest with `happy-dom` + `@testing-library/svelte`. **23 files / 287 tests** in `src/tests/` (auth-store, permissions, rbac-actions, preflight, rejection-notice, group-panel, user-panel, admin-settings, api-client, template-actions, dashboard-view, template-form, quick-launch, keepalive, keep-time-line, orphaned-volumes-*, countdown, format, …).
+- `tests/mocks/` provides `app-navigation` (`goto`) and `app-stores` (`page`) stubs.
+- Playwright E2E configured but not actively run (requires live VNC containers). No CI currently.
 
 ## Rust API — zero-warning policy
 
@@ -146,13 +191,13 @@ Never suppress a warning. Always fix the root cause.
 
 ## .gitignore
 
-`build/`, `.svelte-kit/`, `node_modules/` are gitignored. Do not commit compiled output.
+`build/`, `.svelte-kit/`, `node_modules/`, `.turbo/`, `.codegraph/`, `.env*` are gitignored. Do not commit compiled output. Per-instance route files (`traefik/dynamic/*-ws.yml`) are gitignored.
 
 ## Reference code
 
-`references_repo/KasmVNC/kasmweb/` is the upstream KasmVNC source. `core/` contains noVNC protocol files (the basis for `src/lib/vnc/`). `app/` contains the original UI logic (reference only).
+`references_repo/KasmVNC/kasmweb/` is the upstream KasmVNC source. `core/` contains noVNC protocol files (the basis for `apps/web/src/lib/vnc/`). `app/` contains the original UI logic (reference only).
 
-`references_repo/gvisor/` is a shallow (depth-1) clone of upstream gVisor (`runsc`), sparse-checked-out to only the `g3doc/` docs directory. Planned default container Runtime for instances — wire it up as the default runtime in compose/instance creation.
+`references_repo/gvisor/` is a shallow (depth-1) clone of upstream gVisor (`runsc`), sparse-checked-out to only the `g3doc/` docs directory. runsc is registered as a Docker runtime by `scripts/docker-runtime-gvisor.sh` (`pnpm run init`) and selectable per template (`container_runtime` field). See `docs/gvison.md`.
 
 `references_repo/docker-docs/` is a shallow (depth-1) clone of upstream Docker docs, sparse-checked-out to only the `content/` docs directory (reference for Docker compose/networking/custom-runtime docs).
 
@@ -181,7 +226,11 @@ Prerequisite: the pipeline assumes the repo is already configured with an issue 
 
 4. **implement & tdd** — Implement the tickets directly, in order, one continuous pass each: finish all of the backend ticket, then all of the frontend ticket, then the E2E ticket. No subagents. Test-first at the pre-agreed seams (red → green, one slice at a time), typecheck and run the relevant test files while working, and use the `codebase-design` vocabulary when designing module interfaces. Run the full suite once at the end.
 
-5. **code-review** — Review the completed work against the tickets along two axes: Standards (repo conventions + smell baseline) and Spec (does it fulfill `.scratch/<feature-slug>/issues/<NN>-<slug>.md`). Fix findings, re-run the suite, then commit to the current branch.
+5. **code-review** — Review the completed work against the tickets along two axes: Standards (repo conventions + smell baseline) and Spec (does it fulfill `.scratch/<feature-slug>/issues/<NN>-<slug>.md`). Fix findings, re-run the suite, then close out with **automated doc sync**:
+   - Update `.scratch/<feature-slug>/spec.md` and `.scratch/<feature-slug>/issues/*.md` to reflect what was actually built (close completed tickets, adjust the spec's Implementation/Testing Decisions if reality diverged).
+   - Update `roadmap.md` — move the delivered phase/feature from planned to completed (with a commit reference) or record the deviation.
+   - Generate or update `CHANGELOG.md` with a concise summary of the user-visible changes (chronological; append, don't rewrite history).
+   Only then commit to the current branch.
 
 The pipeline is a loop, not a one-way gate: findings from stage 5 can bounce back to a new round of grilling/spec/tickets for follow-up work.
 
