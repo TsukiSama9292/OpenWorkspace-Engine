@@ -31,6 +31,8 @@ To reduce the attack surface at the network layer *before* it becomes a problem:
 
 This is network-level isolation taken to its extreme: each container lives in its own bubble, and the only entrance to it is the single Traefik-controlled published port.
 
+Because ports and `/30`s are finite pools shared by all instances on a host, they are handed out under non-blocking `flock` lockfiles (see [docs/lock-registry.md](docs/lock-registry.md)) — no two API processes can ever allocate the same port or subnet, even under concurrent launches.
+
 ---
 
 ## Product Vision
@@ -236,6 +238,7 @@ See [docs/persistent-storage.md](docs/persistent-storage.md) for the full design
 - **DashMap Cache** — O(1) VNC token lookup skips DB round-trip on every WebSocket handshake
 - **cgroups Resource Limits** — CPU cores + memory hard limits injected at container creation
 - **tc/HTB Bandwidth Shaping** — upload shaped on the container's egress `eth0`, download on the host-side veth; re-applied on every container start (Docker recreates the veth pair). Fail-open: shaping errors log and never kill a session
+- **flock Port/Subnet Registry** — host ports and instance `/30` subnets are allocated under non-blocking `flock` lockfiles in a shared per-UID directory, so concurrent launches across any number of API processes on one host never claim the same resource; stale-snapshot races are absorbed by a bounded retry from a per-instance spread. See [docs/lock-registry.md](docs/lock-registry.md)
 - **Background Lifecycle Worker** — 3-second scan enforcing auto-sleep deadlines and keep-time idle reclamation; heartbeat endpoint resets the idle clock while a tab is focused
 
 | Documentation | Contents |
@@ -247,6 +250,7 @@ See [docs/persistent-storage.md](docs/persistent-storage.md) for the full design
 | [docs/rbac.md](docs/rbac.md) | Role permissions matrix, implementation |
 | [docs/vnc-auth.md](docs/vnc-auth.md) | VNC password flow, Traefik header injection, security model |
 | [docs/caching-strategy.md](docs/caching-strategy.md) | DashMap vs Redis/Valkey decision guide |
+| [docs/lock-registry.md](docs/lock-registry.md) | Cross-process flock arbitration for host ports and instance subnets |
 | [docs/api-reference.md](docs/api-reference.md) | Complete REST API reference |
 | [docs/development.md](docs/development.md) | Setup, commands, debugging, production |
 

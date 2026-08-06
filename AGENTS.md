@@ -56,6 +56,41 @@ No lint script exists in vnc-ui. Root `turbo lint` runs if configured per-packag
 - Verify a live host actually shapes: `sudo apps/api/scripts/apply_bw_smoke.sh` (needs
   host `iproute2`, `iperf3` not required — uses python3; busybox:1 image).
 
+## Host port & subnet lock registry (flock)
+
+- Both finite per-host pools — host ports (`host_port.rs`) and instance `/30`
+  subnets (`instance_net.rs`) — are allocated under non-blocking `flock`
+  lockfiles in a shared per-UID directory, so concurrent launches across any
+  number of API processes on one host never claim the same resource. This
+  replaced the old in-process `network_lock` mutex. See `docs/lock-registry.md`.
+- Lockfile key = resource identity: `{port}.lock` and `{network_addr}.lock`
+  (e.g. `10.200.0.0.lock`). Files are created if absent and **never unlinked**
+  (unlinking would let two processes lock different inodes at one path).
+  Reservations (`ReservedPort`, `ReservedSubnet`) are RAII over the `OwnedFd`;
+  dropping the handle — or the process dying — releases the lock via the kernel.
+  There is intentionally no force-unlink/force-release.
+- Lock dir resolution order: `PORT_LOCK_DIR` env → `/run/user/<uid>/ow_ports` →
+  `$XDG_RUNTIME_DIR/ow_ports` → `/tmp/ow-ports-<uid>`; dir made/verified `0700`,
+  owned by the current UID. `resolve_lock_dir` → `None` makes allocation **fail
+  closed**. Per-candidate `flock` failure just skips that candidate.
+- Port allocator adds a TCP probe (`port_in_use`) on lock winners to catch
+  binders that don't participate (other tools, Docker itself). Subnet allocator
+  probes nothing — the `docker list_networks` used-set is the source of truth.
+- Stale-snapshot races are absorbed by bounded retries keyed on Docker's own
+  errors: `is_port_conflict` (`port is already allocated`, in
+  `create_container_with_port_retry`) and `is_network_pool_overlap` (`Pool
+  overlaps`, in `ensure_instance_network`, up to 4 attempts). Retries re-scan
+  from a per-instance token-derived spread (`spread_offset` /
+  `spread_block_offset`) so concurrent retries don't stampede.
+- Subnet reservation is held only through `create_network`; port reservation
+  through container create/start. On delete, `docker rm -f` (force) frees the
+  port binding, and `kill_residual_runtime_procs` kills stuck runsc processes
+  so veths don't pin the network (network removal fails while veths live).
+- Test seams: unit tests in `host_port.rs`/`instance_net.rs` use isolated temp
+  lock dirs; `instances_mock_test.rs` exercises real allocators through the HTTP
+  stack; `two_process_flock_e2e_test.rs` runs two API processes against one DB
+  and asserts distinct ports and aligned `/30`s.
+
 ## SvelteKit specifics
 
 - `adapter-static` — fully static SSG, no server
@@ -94,7 +129,7 @@ The actual test runner is `apps/api/scripts/run_tests.sh`, which starts a Postgr
 
 ```bash
 cd apps/api && bash scripts/check.sh
-cd apps/api && bash scripts/run_tests.sh 2>&1 | grep -iE "(fail|error|warn|summary)"
+cd apps/api && bash scripts/run_tests.sh 2>&1 | grep -E "(FAIL|Summary)"
 ```
 
 ### How to fix warnings
