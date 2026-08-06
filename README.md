@@ -6,7 +6,7 @@
 
 ## Product Vision
 
-> A joke that isn't really a joke: 64 GB of DDR5 now costs around **$950** — more than an AR-15 rifle ($600) *and* a box of ammo. (Yes, that's a joke. Prices keep moving.)
+> A joke that isn't really a joke: 64 GB of DDR5 now costs around **$950** — more than an AR-15 rifle ($600).
 
 ### Core Pain Points
 
