@@ -61,6 +61,16 @@ Because ports and `/30`s are finite pools shared by all instances on a host, the
 
 ---
 
+## Measured resource footprint
+
+We benchmarked the full production stack on a real host (i5-12400F, 32 GB DDR4-2666) — see the [analysis & methodology](docs/analysis/production-benchmark/README.md) and the [raw run report](docs/analysis/production-benchmark/2026-08-06-235532/report.md). With six idle instances running alongside, at rest:
+
+- **The platform itself is nearly free.** Traefik + PostgreSQL + web + API idle at a **combined peak of ~68 MB RAM** (a full static SPA served by nginx, a Rust API at ~3 MB) and under ~4% peak CPU. Control-plane overhead is a rounding error next to even one instance.
+- **Pick the runtime by trust, not by habit.** For a deployment serving **trusted internal staff**, keep the **Docker default runtime (runC)**. gVisor's sandbox costs a KasmVNC desktop **≈ 8.6× CPU and ≈ 2.8× memory** at idle (904 MB vs 320 MB). Reserve `runsc` (gVisor) for untrusted / multi-tenant workloads where containment is worth the overhead. Runtime is a per-template option, so you can mix both on one host — runC for your internal dev teams, runsc for guests.
+- **No desktop, no problem.** Users who only need a shell or Python shouldn't pay for a GUI: **ttyd terminals (~45 MB, ~0.2% CPU under runC)** and **Jupyter Lab (~172 MB, ~0.1% CPU)** run at near-zero overhead and skip the 320–904 MB desktop entirely.
+
+---
+
 ## Terminology
 
 | Concept | Description |
