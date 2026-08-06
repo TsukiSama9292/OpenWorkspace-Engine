@@ -337,6 +337,73 @@ runr_rows() {
     done
 }
 
+# Report the test host's hardware for provenance. Best-effort: CPU via
+# lscpu (forced C locale so field names are stable), falling back to
+# /proc/cpuinfo; RAM total always from /proc/meminfo, module type/speed via
+# dmidecode when present (root) — omitted silently if unavailable.
+hardware_info() {
+    local cpu_model="" threads="" max_mhz=""
+    if command -v lscpu >/dev/null 2>&1; then
+        cpu_model=$(LC_ALL=C lscpu | awk -F: '/^Model name:/{sub(/^ +/,"",$2); print $2; exit}')
+        threads=$(LC_ALL=C lscpu | awk -F: '/^CPU\(s\):/{gsub(/[^0-9]/,"",$2); print $2; exit}')
+        max_mhz=$(LC_ALL=C lscpu | awk -F: '/^CPU max MHz:/{gsub(/ /,"",$2); printf "%.0f", $2; exit}')
+    fi
+    if [[ -z "$cpu_model" ]]; then
+        cpu_model=$(awk -F: '/^model name/{sub(/^ +/,"",$2); print $2; exit}' /proc/cpuinfo)
+        threads=$(nproc)
+        max_mhz=$(awk -F: '/^cpu MHz/{printf "%.0f", $2; exit}' /proc/cpuinfo)
+    fi
+    local cpu_line="- CPU: $cpu_model"
+    [[ -n "$threads" ]] && cpu_line+=" ($threads thread(s))"
+    [[ -n "$max_mhz" ]] && cpu_line+=" @ up to $max_mhz MHz"
+    echo "$cpu_line"
+
+    local total_gb="" dmi="" dmi_bin=""
+    dmi_bin=$(command -v dmidecode 2>/dev/null || true)
+    [[ -z "$dmi_bin" && -x /usr/sbin/dmidecode ]] && dmi_bin=/usr/sbin/dmidecode
+    [[ -z "$dmi_bin" && -x /sbin/dmidecode ]] && dmi_bin=/sbin/dmidecode
+    if [[ -n "$dmi_bin" ]]; then
+        # Reading SMBIOS needs root; direct first, then passwordless sudo
+        # (works with a NOPASSWD entry scoped to dmidecode only; no `sudo -n
+        # true` probe — that fails against a scoped entry). Every assignment
+        # below is `|| true`-guarded: under `set -euo pipefail` a failing
+        # command substitution would abort the whole benchmark, not just skip
+        # the RAM detail.
+        if "$dmi_bin" -t memory >/dev/null 2>&1; then
+            dmi=$("$dmi_bin" -t memory 2>/dev/null) || dmi=""
+        elif command -v sudo >/dev/null 2>&1; then
+            dmi=$(sudo -n "$dmi_bin" -t memory 2>/dev/null) || dmi=""
+        fi
+    fi
+    if [[ -n "$dmi" ]]; then
+        # Sum installed module sizes (e.g. 2 x 16 GB -> 32 GB), not the
+        # smaller /proc usable figure, which excludes reserved ranges.
+        total_gb=$(awk '
+            /^[[:space:]]*Size: [0-9]+ (GB|MB)$/ {
+                if ($3 == "GB") s += $2; else if ($3 == "MB") s += $2 / 1024
+            }
+            END { printf "%.0f", s }
+        ' <<<"$dmi")
+    fi
+    if [[ -z "$total_gb" || "$total_gb" = "0" ]]; then
+        total_gb=$(awk '/^MemTotal:/{printf "%.0f", $2/1048576; exit}' /proc/meminfo)
+    fi
+    local ram_line="- RAM: ${total_gb} GB"
+    if [[ -n "$dmi" ]]; then
+        local mem_type speed modules
+        mem_type=$(awk -F: '/^[[:space:]]*Type:/{t=$2; gsub(/^[[:space:]]+|[[:space:]]+$/,"",t); if (t != "Unknown" && t != "") {print t; exit}}' <<<"$dmi")
+        speed=$(awk -F: '/Configured Memory Speed:|^[[:space:]]*Speed:/{v=$2; gsub(/^[[:space:]]+|[[:space:]]+$/,"",v); gsub(/ .*/,"",v); if (v != "Unknown" && v ~ /^[0-9]+$/){print v; exit}}' <<<"$dmi")
+        modules=$(grep -c '^[[:space:]]*Size: [0-9]' <<<"$dmi")
+        local detail=""
+        [[ -n "$mem_type" && -n "$speed" ]] && detail="$mem_type-$speed"
+        [[ -n "$detail" && -n "$modules" ]] && detail+=", ${modules} module(s)"
+        if [[ -n "$detail" ]]; then
+            ram_line+=" ($detail)"
+        fi
+    fi
+    echo "$ram_line"
+}
+
 write_report() {
     local host_before="$1" host_after="$2" platform_csv="$3" instances_csv="$4"
     local report="$OUT_DIR/report.md"
@@ -362,6 +429,7 @@ write_report() {
         echo "- Windows: $SECONDS_PER_WINDOW s each (1 sample/s)"
         echo "- Docker default runtime: $default_runtime"
         echo "- Compose file: docker/openworkspace/docker-compose.yml @ $compose_rev"
+        hardware_info
         echo "- Platform: $PLATFORM_CONTAINERS"
         echo "- Instances: 3 remote types x runc/runsc, dini, no_persistent"
         echo "- Template images:"
