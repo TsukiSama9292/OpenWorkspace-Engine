@@ -26,16 +26,16 @@ noVNC Core Library (apps/web/src/lib/vnc/)
   Source: https://github.com/kasmtech/noVNC
   Commit: e9c0f7088e08ad7030b91c8602ab056dcc8da107
 
--------------------------------------------------------------------------------
+------------------------------------------------------------------------------
 
 Pako (npm: pako@1)
 
   Copyright (C) 2014-2017 by Vitaly Puzrin and Andrei Tuputcyn
 
-  Licensed under the MIT License.
+  Licensed under the MIT License and the Zlib License.
   Used within apps/web/src/lib/vnc/inflator.js and deflator.js.
 
--------------------------------------------------------------------------------
+------------------------------------------------------------------------------
 
 Codec Test Frames (apps/web/src/lib/vnc/assets/)
 
@@ -47,4 +47,158 @@ Codec Test Frames (apps/web/src/lib/vnc/assets/)
   used to detect WebCodecs API codec support in the browser. They
   are not codec implementations. Sourced from the KasmVNC project.
 
--------------------------------------------------------------------------------
+------------------------------------------------------------------------------
+
+Runtime packages served to browsers (apps/web static bundle)
+
+  The following third-party npm packages are compiled into the static
+  site served by the web app. Exact versions are pinned in
+  apps/web/package.json and pnpm-lock.yaml.
+
+Skeleton (npm: @skeletonlabs/skeleton, @skeletonlabs/skeleton-svelte)
+
+  Copyright (c) Skeleton Labs
+
+  Licensed under the MIT License.
+  https://github.com/skeletonlabs/skeleton
+
+------------------------------------------------------------------------------
+
+Runtime crates linked into the served API binary (apps/api)
+
+  The following third-party crates are statically linked into the API
+  binary (see apps/api/Cargo.toml [dependencies]). Exact versions are
+  pinned in apps/api/Cargo.lock. Test-only packages (dev-dependencies,
+  and the test mocking crate mockall) are intentionally excluded.
+
+Axum (axum)
+
+  Copyright (c) Tokio Contributors
+  Licensed under the MIT License.
+  https://github.com/tokio-rs/axum
+
+Tokio (tokio)
+
+  Copyright (c) Tokio Contributors
+  Licensed under the MIT License.
+  https://github.com/tokio-rs/tokio
+
+Serde and serde_json
+
+  Copyright (c) Erick Tryzelaar and David Tolnay
+  Licensed under the MIT License or the Apache License, Version 2.0
+  (at your option).
+  https://github.com/serde-rs/serde
+
+jsonwebtoken
+
+  Copyright (c) Vincent Prouillet
+  Licensed under the MIT License.
+  https://github.com/Keats/jsonwebtoken
+
+bcrypt
+
+  Copyright (c) Vincent Prouillet
+  Licensed under the MIT License.
+  https://github.com/Keats/rust-bcrypt
+
+Bollard (bollard)
+
+  Copyright (c) Bollard contributors
+  Licensed under the Apache License, Version 2.0.
+  https://github.com/fussybeaver/bollard
+
+futures-util (futures-rs)
+
+  Copyright (c) the futures-rs contributors
+  Licensed under the MIT License or the Apache License, Version 2.0
+  (at your option).
+  https://github.com/rust-lang/futures-rs
+
+tower-http
+
+  Copyright (c) Tower Maintainers
+  Licensed under the MIT License.
+  https://github.com/tower-rs/tower-http
+
+uuid
+
+  Copyright (c) Ashley Mannix, Dylan DPC, and Hunar Roop Kahlon
+  Licensed under the Apache License, Version 2.0 or the MIT License
+  (at your option).
+  https://github.com/uuid-rs/uuid
+
+Chrono (chrono)
+
+  Copyright (c) the chrono project contributors
+  Licensed under the MIT License or the Apache License, Version 2.0
+  (at your option).
+  https://github.com/chronotope/chrono
+
+Tracing (tracing, tracing-subscriber)
+
+  Copyright (c) Eliza Weisman, David Barsky, and Tokio Contributors
+  Licensed under the MIT License.
+  https://github.com/tokio-rs/tracing
+
+dotenvy
+
+  Copyright (c) the dotenvy authors
+  Licensed under the MIT License.
+  https://github.com/allan2/dotenvy
+
+tar
+
+  Copyright (c) Alex Crichton
+  Licensed under the MIT License or the Apache License, Version 2.0
+  (at your option).
+  https://github.com/composefs/tar-rs
+
+DashMap (dashmap)
+
+  Copyright (c) Acrimon (Joel Wejdenstål)
+  Licensed under the MIT License.
+  https://github.com/xacrimon/dashmap
+
+reqwest
+
+  Copyright (c) Sean McArthur
+  Licensed under the MIT License or the Apache License, Version 2.0
+  (at your option).
+  https://github.com/seanmonstar/reqwest
+
+SeaORM (sea-orm)
+
+  Copyright (c) Chris Tsang
+  Licensed under the MIT License or the Apache License, Version 2.0
+  (at your option).
+  https://github.com/SeaQL/sea-orm
+
+async-trait
+
+  Copyright (c) David Tolnay
+  Licensed under the MIT License or the Apache License, Version 2.0
+  (at your option).
+  https://github.com/dtolnay/async-trait
+
+base64
+
+  Copyright (c) Marshall Pierce
+  Licensed under the MIT License or the Apache License, Version 2.0
+  (at your option).
+  https://github.com/marshallpierce/rust-base64
+
+Rand (rand)
+
+  Copyright (c) The Rand Project Developers and The Rust Project
+  Developers
+  Licensed under the MIT License or the Apache License, Version 2.0
+  (at your option).
+  https://github.com/rust-random/rand
+
+rustix
+
+  Copyright (c) Dan Gohman and Jakub Konka
+  Licensed under the Apache License, Version 2.0 WITH LLVM-exception,
+  the Apache License, Version 2.0, or the MIT License (at your option).
+  https://github.com/bytecodealliance/rustix
