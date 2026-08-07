@@ -49,19 +49,19 @@ Each launch mode in the videos below:
 
 ### Use persistent storage
 
-<video controls src="../assets/videos/persistent-storage/persistent-storage.mp4" width="100%">
+<video controls src="https://github.com/TsukiSama9292/OpenWorkspace-Engine/raw/main/docs/assets/videos/persistent-storage/persistent-storage.mp4" width="100%">
   Your browser does not support the video tag.
 </video>
 
 ### No persistent storage
 
-<video controls src="../assets/videos/persistent-storage/persistent-storage-unuse.mp4" width="100%">
+<video controls src="https://github.com/TsukiSama9292/OpenWorkspace-Engine/raw/main/docs/assets/videos/persistent-storage/persistent-storage-unuse.mp4" width="100%">
   Your browser does not support the video tag.
 </video>
 
 ### Reset persistent storage
 
-<video controls src="../assets/videos/persistent-storage/persistent-storage-reset.mp4" width="100%">
+<video controls src="https://github.com/TsukiSama9292/OpenWorkspace-Engine/raw/main/docs/assets/videos/persistent-storage/persistent-storage-reset.mp4" width="100%">
   Your browser does not support the video tag.
 </video>
 
