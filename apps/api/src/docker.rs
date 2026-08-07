@@ -337,11 +337,11 @@ pub trait DockerService: Send + Sync {
         volume_name: &str,
     ) -> Result<(), String>;
 
-    /// Tear down an Instance's persistent data: empty the host data directory
-    /// (via an `alpine` helper container) and remove the Volume declaration, so
-    /// no orphaned data or stale volume blocks a later re-populate. Used by
-    /// `reset_persistent` (and wiping a broken `error` record); `delete` keeps
-    /// the data for reuse.
+    /// Tear down an Instance's persistent data: delete the host data directory
+    /// itself (via an `alpine` helper container) and remove the Volume
+    /// declaration, so no orphaned data or stale volume blocks a later
+    /// re-populate. Used by `reset_persistent` (and wiping a broken `error`
+    /// record); `delete` keeps the data for reuse.
     async fn remove_persistent_volume(
         &self,
         host_path: &str,
@@ -396,6 +396,28 @@ pub fn is_volume_not_found(err: &bollard::errors::Error) -> bool {
             ..
         }
     )
+}
+
+/// Docker-legal container name derived from a user-facing instance name.
+///
+/// Instance names are `"{template}-{instance_number}"` and may contain spaces,
+/// punctuation, or other characters Docker forbids in container names (only
+/// `[a-zA-Z0-9]` plus `_ . -` in later positions, first char `[a-zA-Z0-9]`,
+/// ≤ 255 chars). The DB/UI keeps the pretty name; this derives a stable slug
+/// for the container resource itself. A fully-sanitized name (all characters
+/// stripped) falls back to `ow-instance`.
+pub fn docker_container_name(instance_name: &str) -> String {
+    let mut out = String::with_capacity(instance_name.len());
+    for c in instance_name.to_lowercase().chars() {
+        if c.is_ascii_alphanumeric() || c == '_' || c == '.' {
+            out.push(c);
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let slug = out.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+    let slug = if slug.is_empty() { "ow-instance" } else { slug };
+    slug.chars().take(200).collect()
 }
 
 pub async fn stop_and_remove_container(
@@ -494,6 +516,7 @@ impl DockerService for DockerClient {
         password: &str,
         access_token: &str,
     ) -> Result<String, String> {
+        let container_name = docker_container_name(container_name);
         let image = &config.image;
 
         if self.docker.inspect_image(image).await.is_err() {
@@ -1096,19 +1119,37 @@ impl DockerService for DockerClient {
         self.create_local_bind_volume(host_path, volume_name).await
     }
 
-    /// Empty the host data directory via an alpine helper container, then
-    /// remove the Volume declaration (tolerating an already-removed volume).
+    /// Delete the host data directory itself via an alpine helper container,
+    /// then remove the Volume declaration (tolerating an already-removed
+    /// volume). The helper binds the *parent* of the data dir so the data dir —
+    /// a plain directory inside the mount, not the bind-mount point — can be
+    /// removed from the host. Binding the leaf itself and removing it would
+    /// fail, because `/storage` is a mount point and cannot be unlinked from
+    /// inside the container. `host_path` was validated by
+    /// `resolve_persistent_host_path`, so its leaf is a single safe component.
     async fn remove_persistent_volume(
         &self,
         host_path: &str,
         volume_name: &str,
     ) -> Result<(), String> {
-        self.run_helper_container(
-            "remove",
-            host_path,
-            vec!["sh", "-c", "find /storage -mindepth 1 -delete"],
-        )
-        .await?;
+        let path = std::path::Path::new(host_path);
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .ok_or_else(|| {
+                format!("Invalid persistent host path '{}': cannot derive parent", host_path)
+            })?;
+        let leaf = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                format!("Invalid persistent host path '{}': cannot derive directory name", host_path)
+            })?;
+
+        let parent_str = parent.to_string_lossy();
+        let target = format!("/storage/{}", leaf);
+        self.run_helper_container("remove", &parent_str, vec!["rm", "-rf", &target])
+            .await?;
 
         match self
             .docker
@@ -1736,5 +1777,48 @@ mod tests {
         let mut cmdline = format!("/runsc-sandbox\0--root=/run/runsc\0{}", other).into_bytes();
         cmdline.push(0);
         assert!(!is_runsc_proc_for(&cmdline, cid));
+    }
+
+    #[test]
+    fn test_docker_container_name_slugifies_spaces() {
+        assert_eq!(
+            docker_container_name("Ubuntu Jammy - Desktop-1"),
+            "ubuntu-jammy-desktop-1"
+        );
+        assert_eq!(
+            docker_container_name("Ubuntu Jammy - Jupyter Lab-3"),
+            "ubuntu-jammy-jupyter-lab-3"
+        );
+    }
+
+    #[test]
+    fn test_docker_container_name_keeps_legal_chars() {
+        assert_eq!(docker_container_name("test-1"), "test-1");
+        assert_eq!(docker_container_name("My_App.v2"), "my_app.v2");
+        assert_eq!(docker_container_name("already-legal-0"), "already-legal-0");
+    }
+
+    #[test]
+    fn test_docker_container_name_never_illegal() {
+        for name in ["", "   ", "!!!", "😀", ".", "..", "-foo", "_foo", "foo bar  baz"] {
+            let slug = docker_container_name(name);
+            assert!(!slug.is_empty(), "name {:?} produced empty slug", name);
+            assert!(
+                slug.chars().next().unwrap().is_ascii_alphanumeric(),
+                "name {:?} produced slug {:?} not starting with alnum",
+                name,
+                slug
+            );
+            assert!(
+                slug.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-')),
+                "name {:?} produced slug {:?} with illegal chars",
+                name,
+                slug
+            );
+        }
+        assert_eq!(docker_container_name(""), "ow-instance");
+        assert_eq!(docker_container_name("!!!"), "ow-instance");
+        assert_eq!(docker_container_name("-foo"), "foo");
     }
 }

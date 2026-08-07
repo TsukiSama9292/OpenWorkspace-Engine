@@ -55,12 +55,13 @@
       <span class={spanClass}>Network Mode</span>
       <input type="text" bind:value={networkMode} placeholder="bridge" class={inputClass} />
     </label>
-    <label class={labelClass}>
+    <label class="col-span-2 flex flex-col gap-1">
       <span class={spanClass}>Runtime</span>
       <select data-testid="runtime-select" bind:value={containerRuntime} class={inputClass}>
-        <option value="">Default</option>
+        <option value="docker">runC (Docker)</option>
         <option value="runsc">runsc (gVisor)</option>
       </select>
+      <span class="text-xs text-surface-400">runC (Docker): fast, GPU-compatible (default). runsc (gVisor): sandboxed, slower.</span>
     </label>
   </div>
 

@@ -1,230 +1,262 @@
-# OpenWorkspace Engine — 路線圖（Roadmap）
+# OpenWorkspace Engine — Roadmap
 
-> 本文件是專案的「憲法」第三條：**依實作順序分解各階段與預計開發的功能**。
-> 原則：先完成、再完美；每一階段結束時都有可運作的成果，且**單主機永遠是可運作的最低門檻**。
-
----
-
-## 規劃原則
-
-1. **垂直切片優先** — 每一階段交付「可從瀏覽器使用」的完整功能，不做半成品。
-2. **單主機優先** — 多主機/叢集是加分項，但任何時候單台主機都能完整運作。
-3. **安全不落後** — 每個階段都要維持 Zero-Trust 隔離（獨立網段、獨立憑證、群組 RBAC）。
-4. **狀態標記**：✅ 已完成（含 commit 對照）／🔵 進行中／📋 規劃中／💡 構想（未排程）。
+> This document is the project's "constitution", article three: it breaks down
+> the stages and planned features **in implementation order**.
+> Principle: finish first, polish later; every stage ends with a working
+> result, and **a single host is always the viable minimum bar**.
 
 ---
 
-## 已完成階段（回顧）
+## Planning principles
 
-### ✅ 階段 1：核心基礎設施
-
-單主機最基本的「可以跑起來」：一個瀏覽器管理介面 + 一個可啟動的容器 + 一個路由。
-
-| 交付 | 內容 |
-|---|---|
-| 控制平面 API | Rust + Axum，bollard 控制 Docker，sqlx + PostgreSQL |
-| 動態路由 | API 寫入 Traefik 路由 YAML，inotify 熱載入，新實例秒級可用 |
-| JWT 驗證 | `ow_token` cookie、登入/登出、`/auth/me` |
-| 容器生命週期 | 建立/啟動/停止/暫停/刪除 + 健康檢查 + 狀態機 |
-| SvelteKit 靜態 SPA | adapter-static、單頁儀表板、VNC 檢視器（noVNC 整合） |
-| gVisor 準備 | runsc runtime 註冊腳本 + 逐範本 runtime 選擇 |
-
-### ✅ 階段 2：多介面與資源治理
-
-從「一個桌面」擴展為「三種介面」，並開始把資源當作需要治理的對象。
-
-| 交付 | 內容 |
-|---|---|
-| Jupyter Lab 與 ttyd 終端 | 三種 remote_type、各自的路由/認證模式（Basic 注入 vs URL token） |
-| Auto-Sleep（執行時限） | `max_run_seconds` + `timeout_action`，前端倒數警示與重導向 |
-| Keep Time（閒置回收） | 聚焦心跳 + `keep_time_seconds`，超過即回收 |
-| 網路頻寬控管 | `tc`/HTB 上/下行 Mbps 上限，veth 配對定位 + fail-open |
-| 持久化使用者資料 | 整個 home 目錄持久化、三種啟動模式、重啟回填 |
-| 單頁式儀表板 | 所有管理集中一頁，無頁面切換延遲 |
-| Docker-in-instance（`_dini`） | 實例內可再操作 Docker（`--privileged` + tmpfs 設定檔） |
-
-### ✅ 階段 3：網路隔離與並發安全
-
-把「多租戶」真正變安全：實例彼此、實例與控制平面徹底隔離；並發啟動不會互相踩踏。
-
-| 交付 | 內容 |
-|---|---|
-| 每實例 `/30` 網段 | 東西向攻擊結構性不可能；控制平面與實例網路分離 |
-| 主機埠池 | `OW_HOST_PORT_START–END` 分配，衝突重試 |
-| flock 跨程序仲裁 | 埠與 `/30` 以 lockfile 分配，任意多個 API 程序並發啟動不衝突（`host_port.rs` / `instance_net.rs`） |
-| runsc DNS 修正 | 使用者定義 bridge 在 runsc 下無法用 Docker embedded resolver → `OW_DNS` 注入 + entrypoint 改寫 |
-
-### ✅ 階段 4：群組制 RBAC 與管理面
-
-將權限從「角色」升級為「群組」，並補齊管理介面。
-
-| 交付 | 內容 |
-|---|---|
-| 平坦化群組 RBAC | 五旗標（`can_create_template` / `can_manage_users` / `can_manage_group_instances` / `can_manage_docker` / `can_manage_registry`）+ 範本白名單 + 實例額度；每次請求自 DB 重算 effective context |
-| 系統群組 | Admin / Manager / User 三種系統群組（kind 固定、旗標釘住） |
-| 範本可見性 | `public` / `private` / `hidden` + 群組白名單（admin 無白名單豁免） |
-| 實例額度 | 群組 `max_instances` + 個人 `direct_max_instances` → effective ceiling，精確 `FOR UPDATE` 計數 |
-| 主機實例上限 | `admin_settings` 全域上限（`host_instance_limit`，admin 也算入） |
-| 管理介面 | Groups / Users / Volumes / Settings tab、密碼變更、登出 |
-| 範本白名單 UI | 群組 ↔ 範本關聯編輯 |
-
-### ✅ 工程品質門檻（Quality Gates）
-
-非產品階段，屬開發者體驗／工程紀律里程碑（`.scratch/archive/quality-gates/`）。
-
-| 交付 | 內容 |
-|---|---|
-| Rust Clippy 硬閘 | `check.sh` 與 `apps/api` `check` 皆跑 `cargo clippy --all-targets --all-features -- -D warnings`；既有警告全數修掉（無 `#[allow]`） |
-| 禁止 unsafe | `#![forbid(unsafe_code)]` 於 crate root；`set_var` 測試改為注入式來源 |
-| 軟性分析報表 | `analysis:rust`（too_many_lines 100 / cognitive_complexity 25）、`analysis:unsafe`（cargo geiger）、`analysis:bloat`（cargo llvm-lines）——exit 0 |
-| Web lint | `apps/web` ESLint flat config；`lint` / `check` / `analysis:web` |
-| 獨立 E2E | `e2e/` Playwright 套件（smoke + full）、root `test:e2e` / `test:e2e:full` |
-| Turbo 修復 | `turbo.json` 宣告 `test` task，`pnpm test` 恢復可用 |
-| 無 sudo dev | `pnpm run dev:nosudo`（跳過 gVisor 註冊 + `network:allow`） |
-
-### ✅ Security Fuzzing（API 安全模糊測試）
-
-非產品階段，屬安全工程里程碑（`.scratch/archive/security-fuzzing/`）。
-
-| 交付 | 內容 |
-|---|---|
-| Code-first OpenAPI | 17 個安全端點 `#[utoipa::path]` 註解 + build-time export 至已提交的 `security/openapi.json`（runtime 不外露）+ drift-check 單元測試 |
-| 雙 Pass Schemathesis | `pnpm run security:api`：admin session（schema 合規、永不 5xx）＋ fuzz-user session（`admin-gated` 永不 2xx，RBAC/BOLA/IDOR 邊界）；固定 seed（20260101）可重現 |
-| 自訂 RBAC check | `admin_gated_boundary` hook（`OW_ENFORCE_RBAC` gating）；mutation test 證明非 no-op |
-| 自建 fuzz 映像 | `ow-schemathesis`（官方 `:stable` 的 tracecov 壞掉）；無 host Python / pipx |
-| 被 fuzzer 抓到並修掉的 | login 補 400 宣告（JSON 語法錯誤）；停用 unexpected-method 探測（曾以 `DELETE /api/users/{id}` 刪掉 admin） |
-
-### ✅ Admin Protection（admin 帳號不可刪除／不可降級）
-
-非產品階段，屬 RBAC 安全強化里程碑（`.scratch/archive/admin-protection/`）——把 fuzzer 抓到的「admin 可被刪除」產品漏洞關起來，並讓 harness 無法再被靜默破壞。
-
-| 交付 | 內容 |
-|---|---|
-| `delete_user` 守衛 | 目標為 Admin 系統群組成員（`kind='admin'`，非硬編碼 username）→ 403；涵蓋自刪、admin 刪 admin、非 admin 刪 admin |
-| `update_user` 守衛 | 目標目前為 Admin 成員且 payload 帶 `group_ids` → 403（任何 Admin 成員的名單重寫皆被拒：含 Admin group id 由既有 `validate_assignable_groups` 擋、移除由新守衛擋）；與既有 tier 升級守衛共用一次 `load_user_tier`，無 fail-open |
-| UI 鏡像 | `is_admin` 列隱藏 Delete、保留 Edit；admin 列的 policy 對話框改為「membership protected」提示並省略 `group_ids`（ceiling 仍可編輯） |
-| Pre-flight config guard | harness 檢查 `schemathesis.toml` 的 `[phases.coverage]` 內仍有生效的 `unexpected-methods = []`（section-scoped，擋 relocation bypass），否則拒絕執行 |
-| Post-run integrity check | 快照 admin 存在 + `is_admin` + templates/instances 行數，跑完比對；pass 失敗也照跑、計數不可讀視為失敗；mismatch 即 `die` 指名受損資源 |
-| Mutation 驗證 | 移除/搬移 config 行 → pre-flight `die`；直接刪 dev DB 的 admin row → post-run `die` 指名 admin；復原後全綠 |
-
-### ✅ Production Benchmark（生產堆疊 CPU/RAM 基準測試）
-
-非產品階段，屬營運可觀測性里程碑（`.scratch/archive/production-benchmark/`）——第一個「平台本身與每實例到底吃掉多少資源」的可重現答案。
-
-| 交付 | 內容 |
-|---|---|
-| 純 bash 基準腳本 | `scripts/benchmark/benchmark-prod.sh`：preflight → host-before → compose up → 平台視窗 → 6 實例並發視窗 → teardown；`--phase` / `--smoke` / `--seconds` / `--out` |
-| 純函式函式庫 | `scripts/benchmark/benchlib.sh`：`/proc` 取樣、`docker stats` JSON 解析、CSV、峰值/平均聚合、Markdown 表格——fixture 單元測試（免 Docker） |
-| 四表報告 | 平台容器峰值、每實例峰值（remote type × runtime）、runC vs runsc 聚合、host before→after delta + provenance（timestamp / default runtime / compose commit / image digests） |
-| 即時 E2E smoke | `scripts/benchmark/smoke_test.sh`：短視窗跑完整管線，驗證平台健康、6 實例 running、報告產出、teardown 後主機乾淨（含 DB 行復查） |
+1. **Vertical slices first** — every stage delivers a complete "usable from the
+   browser" feature, never half-built pieces.
+2. **Single-host first** — multi-host/clusters are a plus, but a single host
+   must always run the full platform.
+3. **Security never lags** — every stage keeps zero-trust isolation (isolated
+   subnets, per-instance credentials, group RBAC).
+4. **Status markers**: ✅ Done (with commit references) / 🔵 In progress / 📋
+   Planned / 💡 Idea (unscheduled).
 
 ---
 
-## 進行中／規劃中階段
+## Completed Stages (retrospective)
 
-### 🔵 階段 5：可觀測性與營運（Next）
+### ✅ Stage 1: Core Infrastructure
 
-> 現況：已有 Session 桌面的基本狀態，但「營運者看不到發生什麼事」。
+The bare minimum for a single host to "just run": one browser admin UI + one
+launchable container + one route.
 
-| 項目 | 說明 | 優先級 |
-|---|---|---|
-| 審計日誌（Audit Logging） | 記錄登入、啟動/停止/刪除實例、權限變更、範本修改等管理事件；寫入 DB 並可在 UI 查詢 | 高 |
-| 資源監控面板 | 主機 CPU/RAM/磁碟、每實例資源使用、實例歷史（透過 cgroups / `/proc` / Docker stats） | 高 |
-| 營運 Logs 頁面 | 補齊現有的 Logs 佔位 tab（目前無內容） | 中 |
-| 每群組/使用者資源配額 | 除實例數量外，加上 CPU / 記憶體 / GPU 的群組級配額 | 中 |
+| Deliverable | Content |
+|---|---|
+| Control-plane API | Rust + Axum, bollard controlling Docker, sqlx + PostgreSQL |
+| Dynamic routing | API writes Traefik route YAML; inotify hot reload; new instances reachable in seconds |
+| JWT auth | `ow_token` cookie, login/logout, `/auth/me` |
+| Container lifecycle | create/start/stop/pause/delete + health checks + state machine |
+| SvelteKit static SPA | adapter-static, single-page dashboard, VNC viewer (noVNC integration) |
+| gVisor readiness | runsc runtime registration script + per-template runtime selection |
 
-### 📋 階段 6：可靠性與備份
+### ✅ Stage 2: Multiple Interfaces & Resource Governance
 
-| 項目 | 說明 | 優先級 |
-|---|---|---|
-| 持久化資料備份/快照 | 定期備份 `server-pgdata` 與使用者 home 目錄；簡單還原流程 | 高 |
-| 空閒資料夾清理 | 移除已不存在於 DB 的 orphaned 持久化資料夾（現有 UI 的「Thorough Cleanup」） | 中 |
-| 優雅關機/開機 | 重開機後實例狀態恢復、路由重建、volume 重新宣告 | 中 |
-| 健康自我檢查 | API/Traefik/DB 的健康端點聚合，供外部監控（uptime 檢查） | 低 |
+Expand from "one desktop" to "three interfaces", and start treating resources
+as something to govern.
 
-### 📋 階段 7：身份與安全強化
+| Deliverable | Content |
+|---|---|
+| Jupyter Lab and ttyd terminal | Three `remote_type`s, each with its own route/auth pattern (Basic injection vs URL token) |
+| Auto-sleep (run-time limit) | `max_run_seconds` + `timeout_action`, frontend countdown warning and redirect |
+| Keep time (idle reclamation) | focus heartbeat + `keep_time_seconds`; reclaim when exceeded |
+| Network bandwidth shaping | `tc`/HTB up/down Mbps caps, veth-pair discovery, fail-open |
+| Persistent user data | whole-home persistence, three launch modes, re-populate on restart |
+| Single-page dashboard | all admin on one page, no page-switch latency |
+| Docker-in-instance (`_dini`) | operate Docker from inside an instance (`--privileged` + tmpfs config) |
 
-| 項目 | 說明 | 優先級 |
-|---|---|---|
-| 登入失敗鎖定 | 連續失敗後暫時鎖定帳號（防暴力破解） | 高 |
-| 2FA（TOTP） | 使用者啟用一次性密碼 | 中 |
-| SSO（OIDC / LDAP） | 對接既有企業身份提供者（非基本承諾，路線圖可選） | 低 |
-| 密碼原則 | 強度要求、定期輪換提醒 | 低 |
+### ✅ Stage 3: Network Isolation & Concurrency Safety
 
-### 📋 階段 8：多主機與叢集
+Make "multi-tenant" actually safe: instances are fully isolated from each other
+and from the control plane; concurrent launches never collide.
 
-> 與使命一致：這是「未來可選」，不是承諾。多主機不應破壞單主機體驗。
+| Deliverable | Content |
+|---|---|
+| Per-instance `/30` subnet | east-west attacks structurally impossible; control plane and instance networks separated |
+| Host-port pool | `OW_HOST_PORT_START–END` allocation with conflict retry |
+| flock cross-process arbitration | ports and `/30` subnets allocated via lockfiles, so any number of API processes can launch concurrently without conflict (`host_port.rs` / `instance_net.rs`) |
+| runsc DNS fix | user-defined bridges break Docker's embedded resolver under runsc → `OW_DNS` injection + entrypoint rewrite |
 
-| 項目 | 說明 | 優先級 |
-|---|---|---|
-| 多主機排程 | 多台主機由單一控制平面管理，實例可指定/遷移主機 | 高（在叢集內） |
-| Tailscale mesh | 主機間以 Tailscale 建立安全覆蓋網路，統一路由 | 中 |
-| 分散式狀態 | 每實例路由/資源分配進入獨立 Table（解決單程序快取與記憶體狀態的上限） | 中 |
-| 主機故障轉移 | 主機失效時的實例恢復策略 | 低 |
+### ✅ Stage 4: Group-based RBAC & Admin Surfaces
 
-### 💡 構想（未排程，僅紀錄）
+Upgrade permissions from "roles" to "groups" and round out the admin UI.
 
-- **GPU 配額** — 按群組分配 GPU 數量與型別。
-- **範本市集/分享** — 匯出/匯入範本設定，跨主機分享。
-- **實例快照/回復** — 持久化資料的多時間點快照。
-- **WebRTC 低延遲** — 取代/補強目前 WebSocket 傳輸的編碼方案。
-- **行動端適配** — 儀表板與檢視器的行動瀏覽器最佳化。
-- **自動化 E2E（Playwright + 活容器）** — 讓現有 E2E 設定進入 CI 而非手動執行。
+| Deliverable | Content |
+|---|---|
+| Flat group RBAC | five flags (`can_create_template` / `can_manage_users` / `can_manage_group_instances` / `can_manage_docker` / `can_manage_registry`) + template whitelist + instance ceiling; effective context recomputed per request from the DB |
+| System groups | Admin / Manager / User system groups (fixed kind, pinned flags) |
+| Template visibility | `public` / `private` / `hidden` + group whitelist (no admin whitelist bypass) |
+| Instance ceiling | group `max_instances` + personal `direct_max_instances` → effective ceiling, precise `FOR UPDATE` counting |
+| Host instance limit | global cap in `admin_settings` (`host_instance_limit`, admins count too) |
+| Admin UI | Groups / Users / Volumes / Settings tabs, password change, logout |
+| Template whitelist UI | group ↔ template association editing |
+
+### ✅ Engineering Quality Gates
+
+Not a product stage — a developer-experience / engineering-discipline milestone
+(`.scratch/archive/quality-gates/`).
+
+| Deliverable | Content |
+|---|---|
+| Rust Clippy hard gate | `check.sh` and the `apps/api` `check` both run `cargo clippy --all-targets --all-features -- -D warnings`; all existing warnings fixed (no `#[allow]`) |
+| Forbid unsafe | `#![forbid(unsafe_code)]` at crate roots; `set_var` tests converted to injected sources |
+| Soft analysis reports | `analysis:rust` (too_many_lines 100 / cognitive_complexity 25), `analysis:unsafe` (cargo geiger), `analysis:bloat` (cargo llvm-lines) — exit 0 |
+| Web lint | `apps/web` ESLint flat config; `lint` / `check` / `analysis:web` |
+| Standalone E2E | `e2e/` Playwright suite (smoke + full), root `test:e2e` / `test:e2e:full` |
+| Turbo fix | `turbo.json` declares the `test` task; `pnpm test` restored |
+| No-sudo dev | `pnpm run dev:nosudo` (skips gVisor registration + `network:allow`) |
+
+### ✅ Security Fuzzing (API fuzzing)
+
+Not a product stage — a security-engineering milestone
+(`.scratch/archive/security-fuzzing/`).
+
+| Deliverable | Content |
+|---|---|
+| Code-first OpenAPI | 17 safe endpoints annotated with `#[utoipa::path]` + build-time export to the committed `security/openapi.json` (not exposed at runtime) + drift-check unit test |
+| Two-pass Schemathesis | `pnpm run security:api`: admin session (schema-conformant, never 5xx) + fuzz-user session (`admin-gated` never 2xx; RBAC/BOLA/IDOR boundary); fixed seed (20260101) for reproducibility |
+| Custom RBAC check | `admin_gated_boundary` hook (`OW_ENFORCE_RBAC` gating); mutation test proves it is not a no-op |
+| Self-built fuzz image | `ow-schemathesis` (official `:stable` has a broken tracecov); no host Python / pipx |
+| Caught-and-fixed by the fuzzer | login missing 400 declaration (JSON syntax error); disabled unexpected-method probing (it once deleted the admin via `DELETE /api/users/{id}`) |
+
+### ✅ Admin Protection (admin cannot be deleted / demoted)
+
+Not a product stage — an RBAC security-hardening milestone
+(`.scratch/archive/admin-protection/`) — closes the "admin can be deleted"
+product hole the fuzzer found, and makes the harness impossible to silently
+break.
+
+| Deliverable | Content |
+|---|---|
+| `delete_user` guard | target is an Admin system-group member (`kind='admin'`, not a hardcoded username) → 403; covers self-delete, admin-deletes-admin, non-admin-deletes-admin |
+| `update_user` guard | target currently in Admin and payload carries `group_ids` → 403 (any Admin membership rewrite is rejected: adding the Admin group id is blocked by existing `validate_assignable_groups`, removal by the new guard); shares one `load_user_tier` with the existing tier-upgrade guard, no fail-open |
+| UI mirror | `is_admin` rows hide Delete, keep Edit; the policy dialog for admin rows shows a "membership protected" notice and omits `group_ids` (ceiling still editable) |
+| Pre-flight config guard | harness verifies `schemathesis.toml`'s `[phases.coverage]` still has an active `unexpected-methods = []` (section-scoped, blocks relocation bypass), otherwise refuses to run |
+| Post-run integrity check | snapshots admin existence + `is_admin` + templates/instances row counts, compares after the run; pass-failures still run, unreadable counts count as failure; a mismatch `die`s naming the damaged resource |
+| Mutation verification | removing/moving a config line → pre-flight `die`; directly deleting the dev DB's admin row → post-run `die` naming the admin; all green after restore |
+
+### ✅ Production Benchmark (CPU/RAM benchmark of the production stack)
+
+Not a product stage — an operational-observability milestone
+(`.scratch/archive/production-benchmark/`) — the first reproducible answer to
+"how much does the platform itself and each instance actually consume".
+
+| Deliverable | Content |
+|---|---|
+| Pure-bash benchmark script | `scripts/benchmark/benchmark-prod.sh`: preflight → host-before → compose up → platform window → 6-instance concurrent window → teardown; `--phase` / `--smoke` / `--seconds` / `--out` |
+| Pure-function library | `scripts/benchmark/benchlib.sh`: `/proc` sampling, `docker stats` JSON parsing, CSV, peak/average aggregation, Markdown tables — fixture unit-tested (no Docker) |
+| Four-table report | platform-container peaks, per-instance peaks (remote type × runtime), runC vs runsc aggregation, host before→after delta + provenance (timestamp / default runtime / compose commit / image digests) |
+| Live E2E smoke | `scripts/benchmark/smoke_test.sh`: short-window full pipeline, verifying platform health, 6 instances running, report produced, host clean after teardown (incl. DB row re-check) |
 
 ---
 
-## 已完成功能總覽（Checklist）
+## In-progress / Planned Stages
 
-> 對照 [mission.md](mission.md) 的核心功能，逐項確認狀態。
+### 🔵 Stage 5: Observability & Operations (Next)
 
-### 介面
-- ✅ KasmVNC 桌面（HTML5 Canvas + WebSocket）
+> Current state: the Session desktop has basic status, but "operators cannot see
+> what is happening".
+
+| Item | Description | Priority |
+|---|---|---|
+| Audit logging | record login, instance start/stop/delete, permission changes, template edits, and other admin events; persisted to the DB and queryable in the UI | High |
+| Resource monitoring dashboard | host CPU/RAM/disk, per-instance resource usage, instance history (via cgroups / `/proc` / Docker stats) | High |
+| Operations Logs page | fill in the existing Logs placeholder tab (currently empty) | Medium |
+| Per-group/user resource quotas | beyond instance count, add group-level CPU / memory / GPU quotas | Medium |
+
+### 📋 Stage 6: Reliability & Backup
+
+| Item | Description | Priority |
+|---|---|---|
+| Persistent-data backup/snapshot | periodic backup of `server-pgdata` and user home dirs; simple restore flow | High |
+| Orphaned-folder cleanup | remove persistent folders that no longer exist in the DB (the existing "Thorough Cleanup" in the UI) | Medium |
+| Graceful shutdown/startup | restore instance state, rebuild routes, re-declare volumes after reboot | Medium |
+| Health self-checks | aggregate health endpoints for API/Traefik/DB for external monitoring (uptime checks) | Low |
+
+### 📋 Stage 7: Identity & Security Hardening
+
+| Item | Description | Priority |
+|---|---|---|
+| Login failure lockout | temporarily lock an account after consecutive failures (brute-force protection) | High |
+| 2FA (TOTP) | users enable one-time passwords | Medium |
+| SSO (OIDC / LDAP) | integrate with existing enterprise identity providers (not a baseline commitment; optional roadmap item) | Low |
+| Password policy | strength requirements, periodic rotation reminders | Low |
+
+### 📋 Stage 8: Multi-host & Clustering
+
+> Consistent with the mission: this is "optional in the future", not a promise.
+> Multi-host must not break the single-host experience.
+
+| Item | Description | Priority |
+|---|---|---|
+| Multi-host scheduling | one control plane manages multiple hosts; instances can be assigned to / migrated between hosts | High (within the cluster) |
+| Tailscale mesh | a secure overlay network between hosts with unified routing | Medium |
+| Distributed state | per-instance route/resource allocation moves into dedicated tables (lifting the single-process cache and in-memory-state ceiling) | Medium |
+| Host failover | instance recovery strategy when a host fails | Low |
+
+### 💡 Ideas (unscheduled, just recorded)
+
+- **GPU quotas** — allocate GPU count and types per group.
+- **Template marketplace/sharing** — export/import template configs, share
+  across hosts.
+- **Instance snapshots/rollback** — point-in-time snapshots of persistent data.
+- **WebRTC low-latency** — replace/strengthen the current WebSocket transport
+  encoding.
+- **Mobile adaptation** — mobile-browser optimization of the dashboard and
+  viewers.
+- **Automated E2E (Playwright + live containers)** — move the existing E2E
+  setup into CI instead of manual runs.
+
+---
+
+## Completed Features Checklist
+
+> Cross-references the core features in [mission.md](mission.md), confirming
+> status item by item.
+
+### Interfaces
+- ✅ KasmVNC desktop (HTML5 Canvas + WebSocket)
 - ✅ Jupyter Lab
-- ✅ ttyd 終端
+- ✅ ttyd terminal
 
-### 安全與隔離
-- ✅ 每實例獨立存取權杖（127 字元）
-- ✅ 每實例 `/30` 網段（東西向隔離）
-- ✅ gVisor（runsc）逐範本沙箱 + NVProxy GPU 透傳
+### Security & isolation
+- ✅ per-instance access token (127 chars)
+- ✅ per-instance `/30` subnet (east-west isolation)
+- ✅ gVisor (runsc) per-template sandbox + NVProxy GPU passthrough
 - ✅ JWT cookie + ForwardAuth
-- ✅ 伺服器端 Basic 注入（瀏覽器不見密鑰）
-- ✅ 群組制 RBAC（旗標 + 白名單 + ceiling，逐請求重算）
-- ✅ API 安全模糊測試（Schemathesis 雙 Pass，`admin-gated` RBAC 邊界，mutation-verified）
-- ✅ Admin 帳號不可刪除／不可降級（API 守衛 + UI 鏡像 + fuzz harness integrity 快照）
+- ✅ server-side Basic injection (browser never sees secrets)
+- ✅ group-based RBAC (flags + whitelist + ceiling, recomputed per request)
+- ✅ API security fuzzing (Schemathesis two-pass, `admin-gated` RBAC boundary,
+  mutation-verified)
+- ✅ admin cannot be deleted / demoted (API guards + UI mirror + fuzz-harness
+  integrity snapshots)
 
-### 資源治理
-- ✅ Auto-Sleep（執行時限 + timeout_action）
-- ✅ Keep Time（閒置回收 + 聚焦心跳）
-- ✅ 頻寬控管（tc/HTB）
-- ✅ 實例額度（群組 + 個人 + 主機全域）
+### Resource governance
+- ✅ Auto-sleep (run-time limit + timeout_action)
+- ✅ Keep time (idle reclamation + focus heartbeat)
+- ✅ Bandwidth shaping (tc/HTB)
+- ✅ Instance ceiling (group + personal + host-global)
 
-### 持久化
-- ✅ 整個 home 目錄持久化
-- ✅ 三種啟動模式（use / no / reset）
-- ✅ 刪除保留資料、重啟回填
+### Persistence
+- ✅ whole-home persistence
+- ✅ three launch modes (use / no / reset)
+- ✅ delete keeps data, restart re-populates
 
-### 管理
-- ✅ 單頁儀表板
-- ✅ 群組/使用者/額度管理
-- ✅ 範本可見性 + 白名單
-- ✅ 密碼變更與登出
-
----
-
-## 每一階段的「定義完成」（Definition of Done）
-
-任何階段宣告完成前，必須全部滿足：
-
-1. **功能**：階段內所有交付項可從瀏覽器實際操作，非僅 API 存在。
-2. **測試**：`cd apps/api && bash scripts/check.sh`（零警告）+ `bash scripts/run_tests.sh`（nextest，Docker）；`cd apps/web && pnpm check && pnpm test`（290 測試）全綠。
-3. **文件**：對應的 docs（architecture / api-reference / rbac / frontend / mission / tech-stack）同步更新，無過時敘述。
-4. **部署**：`pnpm run docker:up` 在乾淨主機上可成功部屬並建立第一個實例。
-5. **安全**：新功能未破壞 Zero-Trust 隔離（網段、憑證、RBAC 三層仍生效）。
+### Admin
+- ✅ single-page dashboard
+- ✅ group/user/ceiling management
+- ✅ template visibility + whitelist
+- ✅ password change and logout
 
 ---
 
-## 相關文件
+## Definition of Done (per stage)
 
-- [mission.md](mission.md) — 使命與核心功能（憲法第一條）
-- [tech-stack.md](docs/developer-guide/tech-stack.md) — 技術決策、部署與更新（憲法第二條）
-- [docs/user-guide/architecture.md](docs/user-guide/architecture.md) — 系統架構與 DB schema
+Before any stage can be declared complete, all of the following must hold:
+
+1. **Features**: every deliverable in the stage is actually operable from the
+   browser, not merely present in the API.
+2. **Tests**: `cd apps/api && bash scripts/check.sh` (zero warnings) + `bash
+   scripts/run_tests.sh` (nextest, Docker); `cd apps/web && pnpm check && pnpm
+   test` (290 tests) all green.
+3. **Docs**: the corresponding docs (architecture / api-reference / rbac /
+   frontend / mission / tech-stack) are updated in sync, with no stale
+   statements.
+4. **Deployment**: `pnpm run docker:up` successfully deploys on a clean host and
+   creates the first instance.
+5. **Security**: new features do not break zero-trust isolation (subnet,
+   credentials, and RBAC layers still hold).
+
+---
+
+## Related docs
+
+- [mission.md](mission.md) — mission and core features (constitution, article one)
+- [tech-stack.md](docs/developer-guide/tech-stack.md) — technology decisions, deployment & updates (constitution, article two)
+- [docs/user-guide/architecture.md](docs/user-guide/architecture.md) — system architecture and DB schema

@@ -424,7 +424,11 @@ async fn test_flat_rbac_end_to_end() {
     );
     assert!(
         !data_file.exists(),
-        "cleanup must empty host data"
+        "cleanup must delete the host data"
+    );
+    assert!(
+        !Path::new(&host_path).exists(),
+        "cleanup must remove the host data dir itself"
     );
     remove_host_dirs(&host_path);
 }

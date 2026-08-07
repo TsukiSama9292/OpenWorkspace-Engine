@@ -1,243 +1,330 @@
-# OpenWorkspace Engine — 技術棧與部署（Tech Stack）
+# OpenWorkspace Engine — Tech Stack & Deployment
 
-> 本文件是專案的「憲法」第二條：**明確定義採用的技術決策**，以及**部署與更新流程**。
-> 任何技術選型的變更都應先在此記錄理由，再動工。
+> This document is the project's "constitution", article two: it **defines the
+> technology decisions** and the **deployment/update flows**. Any technology
+> change should record its rationale here before work begins.
 
 ---
 
-## 技術決策總覽
+## Technology Decision Overview
 
-| 層 | 技術 | 版本 | 決策理由 |
+| Layer | Technology | Version | Rationale |
 |---|---|---|---|
-| **控制平面 API** | Rust + Axum | stable / axum 0.8 | 記憶體安全、零成本抽象、<35MB RAM、高併發非阻塞 I/O |
-| **前端** | SvelteKit 2 + Svelte 5（靜態 SPA） | 2.x / 5.x | Runes 響應式、adapter-static 全靜態、主機零 SSR CPU 成本 |
-| **CSS / UI** | Tailwind CSS v4 + Skeleton | v4 | 工具類快速開發、既有元件庫 |
-| **反向代理** | Traefik | v3.7.4 | File Provider + inotify 熱載入路由；**不掛 Docker socket** |
-| **靜態資產** | Nginx | latest | HTTP 快取、SPA 靜態托管 |
-| **容器調度** | bollard（Rust Docker API） | 0.18 | 非同步容器/網路生命週期控制 |
-| **容器 Runtime** | Docker OCI（runc） | ≥ 24 | 標準、快速建立實例 |
-| **容器 Runtime（強化）** | gVisor（runsc） | latest | 使用者空間核心攔截 syscall；逐範本可選 |
-| **資料庫** | PostgreSQL | 18-alpine | 持久化唯一狀態源；sqlx 編譯期檢查 + 自動 migration |
-| **記憶體快取** | DashMap | — | O(1) VNC 權杖查詢，省去每次 WebSocket handshake 的 DB 往返 |
-| **網路 QoS** | Linux `tc`/HTB + `nsenter` | — | 核心層每實例上/下行頻寬上限 |
-| **套件管理** | pnpm + Turborepo | pnpm 9 / turbo 2 | monorepo workspace 依賴 + 任務調度與快取 |
-| **實例影像** | KasmVNC / Jupyter Lab / ttyd（自建 + `_dini` 變體） | — | Docker Hub 亦可拉取預建影像 |
+| **Control-plane API** | Rust + Axum | stable / axum 0.8 | Memory safety, zero-cost abstractions, <35MB RAM, high-concurrency non-blocking I/O |
+| **Frontend** | SvelteKit 2 + Svelte 5 (static SPA) | 2.x / 5.x | Runes reactivity, adapter-static fully static, zero SSR CPU cost on the host |
+| **CSS / UI** | Tailwind CSS v4 + Skeleton | v4 | Utility-class speed, existing component library |
+| **Reverse proxy** | Traefik | v3.7.4 | File Provider + inotify hot-reloaded routes; **no Docker socket** |
+| **Static assets** | Nginx | latest | HTTP caching, static SPA hosting |
+| **Container orchestration** | bollard (Rust Docker API) | 0.18 | Async container/network lifecycle control |
+| **Container runtime** | Docker OCI (runc) | ≥ 24 | Standard, fast instance creation |
+| **Container runtime (hardened)** | gVisor (runsc) | latest | User-space kernel intercepts syscalls; optional per template |
+| **Database** | PostgreSQL | 18-alpine | Single source of truth; sqlx compile-time checks + automatic migrations |
+| **In-memory cache** | DashMap | — | O(1) VNC token lookup; avoids a DB round-trip per WebSocket handshake |
+| **Network QoS** | Linux `tc`/HTB + `nsenter` | — | Kernel-level per-instance up/down bandwidth caps |
+| **Package management** | pnpm + Turborepo | pnpm 9 / turbo 2 | Monorepo workspace dependencies + task orchestration and caching |
+| **Instance images** | KasmVNC / Jupyter Lab / ttyd (self-built + `_dini` variants) | — | Prebuilt images can also be pulled from Docker Hub |
 
 ---
 
-## 逐層決策與理由（ADR 式紀錄）
+## Layer-by-layer Decisions and Rationale (ADR-style)
 
-### 1. 控制平面用 Rust（不是 Go / Node / Python）
+### 1. Control plane in Rust (not Go / Node / Python)
 
-- **安全**：所有權模型在編譯期消除記憶體漏洞（use-after-free、資料競爭）——這是控制整個主機 Docker socket 與網路的程序，不能靠 GC 或型別妥協。
-- **效能**：零成本抽象、非阻塞 I/O（tokio）；極低的 RAM 與 CPU 佔用，與「復活老硬體」的使命一致。
-- **Axum 0.8**：型別安全路由、萃取器、與 tokio 生態整合良好。
-- **bollard**：Rust 生態最成熟的 Docker API 客戶端，非同步控制容器/網路。
+- **Safety**: the ownership model eliminates memory bugs (use-after-free, data
+  races) at compile time — this is the process that drives the host's Docker
+  socket and network; it cannot rely on a GC or type compromises.
+- **Performance**: zero-cost abstractions, non-blocking I/O (tokio); very low
+  RAM and CPU footprint, consistent with the "revive old hardware" mission.
+- **Axum 0.8**: type-safe routes, extractors, and good tokio ecosystem
+  integration.
+- **bollard**: the most mature Rust Docker API client, async container/network
+  control.
 
-### 2. 前端用 SvelteKit 靜態站（不是 SSR / 不是 React）
+### 2. Frontend as a SvelteKit static site (not SSR, not React)
 
-- **adapter-static + `ssr = false`**：建置產物是純靜態檔案，由 Nginx 直接提供——**主機零 SSR CPU 成本**，這對共享主機至關重要。
-- **Svelte 5 runes**：細粒度響應式，bundle 小、載入快。
-- **SPA 多實例共存**：catch-all route（`[...path]`）依 `window.location.pathname` 偵測 `/kasmvnc/{token}/` 等路徑，單一 build 服務整個平台。
-- **Tailwind v4 + Skeleton**：統一設計語言，快速迭代管理介面。
+- **adapter-static + `ssr = false`**: the build output is pure static files
+  served by Nginx — **zero SSR CPU cost on the host**, critical for a shared
+  host.
+- **Svelte 5 runes**: fine-grained reactivity, small bundle, fast load.
+- **Multi-instance SPA**: the catch-all route (`[...path]`) detects
+  `/kasmvnc/{token}/` and similar paths from `window.location.pathname`; one
+  build serves the whole platform.
+- **Tailwind v4 + Skeleton**: unified design language, fast admin-UI iteration.
 
-### 3. 反向代理用 Traefik File Provider（不用 Docker Provider / 不用 nginx 動態）
+### 3. Reverse proxy via Traefik File Provider (not Docker Provider, not dynamic nginx)
 
-- **熱載入路由**：API 將每實例的路由 YAML 寫入被監看的目錄，Traefik 透過 inotify 偵測後**立即生效，零重啟、零停機**——新增實例秒級可用。
-- **不掛 Docker socket**：Traefik 容器不掛載 `/var/run/docker.sock`，縮小攻擊面；路由完全由 API（唯一有權限控制容器的角色）決定。
-- **每權杖 Basic 注入**：JS `WebSocket` 無法自訂 header，因此由 Traefik 中間件在伺服器端注入 `Authorization: Basic`——瀏覽器永遠看不到實例密鑰。
-- **規模特性**：每個實例 = 1 個 ~250 bytes 的 YAML；路由匹配成本與實例總數無關，Traefik 無狀態，狀態全在 PostgreSQL。
+- **Hot-reloaded routes**: the API writes per-instance route YAML into a watched
+  directory; Traefik picks it up via inotify and applies it **immediately —
+  zero restart, zero downtime** — a new instance is reachable within seconds.
+- **No Docker socket**: Traefik never mounts `/var/run/docker.sock`, shrinking
+  the attack surface; routing is decided solely by the API (the only actor
+  allowed to control containers).
+- **Server-side Basic injection per token**: JS `WebSocket` cannot set custom
+  headers, so a Traefik middleware injects `Authorization: Basic` server-side —
+  the browser never sees the instance credentials.
+- **Scaling characteristics**: one instance = one ~250-byte YAML; route
+  matching cost is independent of instance count. Traefik is stateless; all
+  state lives in PostgreSQL.
 
-### 4. 容器 Runtime 雙軌：runC + gVisor（強化）
+### 4. Dual container runtime: runC + gVisor (hardening)
 
-- **runC**：標準 OCI runtime，效能最佳。
-- **runsc（gVisor）**：使用者空間核心攔截 syscall，大幅降低容器逃逸風險；為實際預設 runtime — API 層 `container_runtime` 預設 `runsc`，伺服器級 `OW_CONTAINER_RUNTIME` 預設 `runsc`，範本未指定時退回伺服器值。
-- **NVProxy GPU 透傳**：gVisor `--nvproxy` 代理 NVIDIA ioctl，支援 Turing/Ampere/Ada/Hopper（T4、A100/A10G、L4、H100）。
-- **已驗證**：Turing（GTX 1650）與 Ampere（RTX 3060）可用；Maxwell（GTX 970）失敗。
+- **runC (Docker)**: the standard OCI runtime, best performance, GPU-compatible;
+  the actual default — the API-level `container_runtime` defaults to `docker`
+  and the server-level `OW_CONTAINER_RUNTIME` defaults to `docker`; templates
+  with no runtime fall back to the server value.
+- **runsc (gVisor)**: a user-space kernel intercepts syscalls, sharply reducing
+  the container-escape risk; an optional hardening choice (slower), selected
+  explicitly per template or via `OW_CONTAINER_RUNTIME`.
+- **Resource reporting difference**: runsc virtualizes `/proc` (`free`/`htop`
+  inside the container show its own CPU/RAM limits); runC shows the host's
+  totals (limits are still enforced via cgroups). See
+  [container-runtime.md](container-runtime.md).
+- **NVProxy GPU passthrough**: gVisor `--nvproxy` proxies NVIDIA ioctls,
+  supporting Turing/Ampere/Ada/Hopper (T4, A100/A10G, L4, H100).
+- **Verified on our hardware**: Turing (GTX 1650) and Ampere (RTX 3060) work;
+  Maxwell (GTX 970) fails.
 
-### 5. 資料庫用 PostgreSQL + 記憶體快取分層
+### 5. PostgreSQL + tiered in-memory caching
 
-- **PostgreSQL 是唯一狀態源**：使用者、群組、範本、實例、持久化路徑全部在此；sqlx 編譯期檢查 SQL 正確性，migration 在 API 啟動時自動執行。
-- **DashMap 快取**：`access_token → {status}` 的無鎖並發 HashMap，讓每次 WebSocket handshake 的權杖驗證是 O(1) 記憶體查詢（miss 才回 DB）。
-- **為什麼不用 Redis/Valkey**：單一 API 程序即可提供完整快取一致性（快取與狀態在同程序），省下一個有狀態服務。若未來多程序/多主機，再評估分散式快取（見 [caching-strategy.md](caching-strategy.md)）。
+- **PostgreSQL is the single source of truth**: users, groups, templates,
+  instances, and persistent paths all live here; sqlx checks SQL at compile
+  time and migrations run automatically on API startup.
+- **DashMap cache**: a lock-free concurrent HashMap for `access_token → {status}`,
+  making each WebSocket handshake token check an O(1) in-memory lookup (only a
+  miss hits the DB).
+- **Why not Redis/Valkey**: a single API process provides full cache
+  consistency (cache and state in the same process), saving one stateful
+  service. If the platform grows to multiple processes/hosts, a distributed
+  cache can be revisited (see [caching-strategy.md](caching-strategy.md)).
 
-### 6. 權杖驗證用 JWT（身份-only）+ 每次請求重算權限
+### 6. JWT (identity-only) + permissions recomputed per request
 
-- **JWT 只帶身份**（`sub`、`exp`），**不帶任何權限資訊**。
-- 每次請求自 DB 重新解析使用者的 effective context（群組旗標、範本白名單、實例額度）——權限變更**下一個請求即生效**，過期的權杖不可能殘留權限。
-- 權杖以 **HttpOnly cookie** 存放（`ow_token`），避免 XSS 讀取；`SameSite=Lax`、`Secure`（HTTPS 環境）。
+- **JWT carries identity only** (`sub`, `exp`) — **no permission data**.
+- Every request re-resolves the user's effective context from the DB (group
+  flags, template whitelist, instance ceiling) — a permission change takes
+  effect **on the next request**; a stale token can never carry stale rights.
+- The token lives in an **HttpOnly cookie** (`ow_token`), keeping XSS from
+  reading it; `SameSite=Lax`, `Secure` (in HTTPS environments).
 
-### 7. 實例網路採「每實例 `/30` + 主機埠發布」
+### 7. Instance networking: per-instance `/30` + host-port publishing
 
-- 每個實例獨占一個 `/30` 網段（2 個可用 IP），自成 L2 網段——**東西向攻擊結構性不可能**。
-- 服務埠發布到主機 bridge gateway（`<host_gateway_ip>:<host_port>`），Traefik 經 `host.docker.internal` 到達，永不使用容器 IP。
-- 主機埠與 `/30` 都是有限池，以 **flock lockfile**（`host_port.rs` / `instance_net.rs`）在跨程序間仲裁，並以 TCP probe + 有限重試吸收並發快照競態。見 [lock-registry.md](lock-registry.md)。
+- Each instance owns a `/30` subnet (2 usable IPs) as its own L2 segment —
+  **east-west attacks are structurally impossible**.
+- The service port is published to the host bridge gateway
+  (`<host_gateway_ip>:<host_port>`); Traefik reaches it via
+  `host.docker.internal` and never uses container IPs.
+- Host ports and `/30` subnets are finite pools arbitrated across processes via
+  **flock lockfiles** (`host_port.rs` / `instance_net.rs`), with TCP probes and
+  bounded retries absorbing concurrent-snapshot races. See
+  [lock-registry.md](lock-registry.md).
 
-### 8. 持久化用「Local Bind-mounted Named Volume」
+### 8. Persistence via "Local Bind-mounted Named Volume"
 
-- 使用者整個 home 目錄對應到主機固定路徑 `{root}/{template_name}/{user_id}`（API 解析、絕對路徑、防 `..` 注入）。
-- 首次（空）掛載自動填入影像內建 home 設定，環境開箱即用。
-- 刪除實例**保留資料**，只有「重設」會清除；重啟會重新宣告遺失的 volume。
+- The user's whole home directory maps to a fixed host path
+  `{root}/{template_name}/{user_id}` (resolved by the API, absolute, `..`
+  traversal-proof).
+- A first (empty) mount auto-populates the image's built-in home settings, so
+  the environment works out of the box.
+- Deleting an instance **keeps the data**; only "reset" wipes it; restart
+  re-declares any lost volume.
 
-### 9. 套件管理：pnpm + Turborepo monorepo
+### 9. Package management: pnpm + Turborepo monorepo
 
-- 兩個活躍 app：`apps/web`（SvelteKit 前端）、`apps/api`（Rust API）。
-- pnpm workspace + Turborepo 任務調度與快取，統一入口 `pnpm run dev` / `pnpm run build` / `pnpm test`。
+- Two active apps: `apps/web` (SvelteKit frontend) and `apps/api` (Rust API).
+- pnpm workspace + Turborepo task orchestration and caching; unified entry
+  points `pnpm run dev` / `pnpm run build` / `pnpm test`.
 
-### 10. 依賴版本固定策略
+### 10. Dependency version pinning
 
-- **pako@1 固定** — v3 破壞了 noVNC 內部使用的 import 路徑。
-- **pnpm-lock.yaml** 提交入 repo，確保可重現安裝。
-- 升級任何依賴須通過完整測試套件（見下）並在此文件註記理由。
+- **pako@1 pinned** — v3 broke import paths used internally by noVNC.
+- **pnpm-lock.yaml is committed**, guaranteeing reproducible installs.
+- Upgrading any dependency requires passing the full test suite (below) and a
+  note of rationale in this document.
 
 ---
 
-## 品質門檻（Quality Gates）
+## Quality Gates
 
-開發流程的硬性規定（不可繞過）：
+Hard rules of the development flow (cannot be bypassed):
 
-1. **Rust 零警告政策** — `cd apps/api && bash scripts/check.sh` 兩次檢查（default + `docker` feature）**必須完全無輸出**；禁止任何 `#[allow(…)]` 抑制屬性。
-2. **測試套件** — `apps/api/scripts/run_tests.sh`（cargo nextest，需 Docker）：158 個單元測試 + 324 個整合測試；`cd apps/web && pnpm test`：23 個檔案 / 290 個測試。
-3. **型別檢查 + lint** — `cd apps/web && pnpm check`（svelte-kit sync + svelte-check + eslint，硬性閘門）。
-4. 根目錄 `pnpm lint` 只作用於 web（eslint）。
+1. **Rust zero-warning policy** — `cd apps/api && bash scripts/check.sh` twice
+   (default + `docker` feature) **must produce no output**; no `#[allow(…)]`
+   suppression attributes.
+2. **Test suites** — `apps/api/scripts/run_tests.sh` (cargo nextest, needs
+   Docker): 158 unit tests + 324 integration tests; `cd apps/web && pnpm test`:
+   23 files / 290 tests.
+3. **Typecheck + lint** — `cd apps/web && pnpm check`
+   (svelte-kit sync + svelte-check + eslint, a hard gate).
+4. Root `pnpm lint` acts on web only (eslint).
 
 ---
 
-## 開發環境流程（Dev）
+## Development Environment Flow (Dev)
 
-### 一次啟動
+### One-shot startup
 
 ```bash
-pnpm install          # 安裝 workspace 依賴
-pnpm run dev          # 完整開發棧
+pnpm install          # install workspace dependencies
+pnpm run dev          # full dev stack
 ```
 
-`pnpm run dev` 依序執行：
-1. `kill-dev.sh` — 釋放 3000/5173 埠的殘留 dev server。
-2. `pnpm run init` — 建立 `ow-network`（自動選空閒 `172.16-31.0.0/16` 網段）+ 註冊 gVisor `runsc` runtime 到 `/etc/docker/daemon.json`。
-3. `pnpm run docker:dev:up` — 啟動 dev Traefik + Postgres（`docker/openworkspace_dev/`）。
-4. `pnpm run network:allow` — 授權 `nsenter`/`tc` 的 capabilities，讓主機上執行的 API 能做頻寬控管。
-5. 以 `concurrently` 執行 Rust API（`:3000`）與 Vite dev server（`:5173`）。
+`pnpm run dev` runs, in order:
+1. `kill-dev.sh` — frees ports 3000/5173 from leftover dev servers.
+2. `pnpm run init` — creates `ow-network` (auto-picks a free `172.16-31.0.0/16`
+   block) + registers the gVisor `runsc` runtime in `/etc/docker/daemon.json`.
+3. `pnpm run docker:dev:up` — starts the dev Traefik + Postgres
+   (`docker/openworkspace_dev/`).
+4. `pnpm run network:allow` — grants `nsenter`/`tc` capabilities so the
+   host-run API can shape bandwidth.
+5. Runs the Rust API (`:3000`) and the Vite dev server (`:5173`) via
+   `concurrently`.
 
-停止：`pnpm run dev:stop`；完整清除（含 volumes）：`pnpm run dev:remove`。
+Stop: `pnpm run dev:stop`; full teardown (including volumes):
+`pnpm run dev:remove`.
 
-### 開發環境特性
-- **純 HTTP**（`http://localhost`）——瀏覽器視 localhost 為 secure context，不需憑證。
-- dev Traefik 代理到**主機上執行**的 dev server（`host.docker.internal:5173` / `:3000`）。
-- 主機執行的 API 將路由 YAML 寫入 `docker/openworkspace_dev/traefik/dynamic`（`TRAEFIK_DYNAMIC_DIR` 未設定時的編譯期預設）。
-- 實例仍由主機執行的 API 透過 Docker socket 建立；dev Postgres 埠 `55432:5432`。
+### Dev-environment characteristics
+- **Plain HTTP** (`http://localhost`) — browsers treat localhost as a secure
+  context, so no certificates are needed.
+- The dev Traefik proxies to dev servers **running on the host**
+  (`host.docker.internal:5173` / `:3000`).
+- The host-run API writes route YAML to
+  `docker/openworkspace_dev/traefik/dynamic` (compile-time default when
+  `TRAEFIK_DYNAMIC_DIR` is unset).
+- Instances are still created by the host-run API via the Docker socket; the
+  dev Postgres port is `55432:5432`.
 
 ---
 
-## 生產部署流程（Prod）
+## Production Deployment Flow (Prod)
 
-### 初始部署（首次）
+### Initial deployment (first time)
 
 ```bash
 pnpm run init                                   # ow-network + runsc runtime
-pnpm run build:template-images                  # 建置三種實例影像（含 _dini 變體）
+pnpm run build:template-images                  # build the three instance images (incl. _dini variants)
 docker compose -f docker/openworkspace/docker-compose.yml up -d --build
 ```
 
-> 平台本身（`ow-web:latest` / `ow-api:latest`）由 compose 直接從原始碼建置，不需另外 push。
-> 實例影像可選擇從 Docker Hub 拉取（`tsukisama9292/ow-*-ubuntu*`）。
+> The platform itself (`ow-web:latest` / `ow-api:latest`) is built by compose
+> straight from source; no separate push needed.
+> Instance images may alternatively be pulled from Docker Hub
+> (`tsukisama9292/ow-*-ubuntu*`).
 
-### 生產架構
+### Production architecture
 
-| Service | Image | 埠 | 說明 |
+| Service | Image | Port | Notes |
 |---|---|---|---|
-| `traefik` | traefik:v3.7.4 | `80`、`127.0.0.1:8080` | **僅 file provider**（無 Docker socket）；dynamic 目錄唯讀掛載 |
-| `api` | ow-api（自建） | — | **root 執行**、`pid: host`、`cap_add: [SYS_ADMIN, NET_ADMIN, SYS_PTRACE]`、`apparmor=unconfined`、rw Docker socket |
-| `web` | ow-web（自建） | — | SvelteKit 靜態 build 由 nginx 提供 |
+| `traefik` | traefik:v3.7.4 | `80`, `127.0.0.1:8080` | **file provider only** (no Docker socket); dynamic dir mounted read-only |
+| `api` | ow-api (self-built) | — | **runs as root**, `pid: host`, `cap_add: [SYS_ADMIN, NET_ADMIN, SYS_PTRACE]`, `apparmor=unconfined`, rw Docker socket |
+| `web` | ow-web (self-built) | — | SvelteKit static build served by nginx |
 | `postgresql` | postgres:18-alpine | — | Volume `server-pgdata` |
 
-- 生產 Traefik 以 compose 服務名路由（`ow-api:3000`、`ow-web:80`），而非 `host.docker.internal`。
-- API 容器將路由寫入 `./traefik/dynamic`（其 `TRAEFIK_DYNAMIC_DIR`，rw 掛入 API、ro 掛入 traefik 的 `/etc/traefik/dynamic`）。
-- 每實例路由檔（`*-ws.yml`）已 gitignore。
+- Prod Traefik routes by compose service name (`ow-api:3000`, `ow-web:80`),
+  not `host.docker.internal`.
+- The API container writes routes into `./traefik/dynamic` (its
+  `TRAEFIK_DYNAMIC_DIR`, mounted rw into the API, ro into traefik at
+  `/etc/traefik/dynamic`).
+- Per-instance route files (`*-ws.yml`) are gitignored.
 
-### HTTPS（TLS 終止在 Traefik 之前）
+### HTTPS (TLS termination before Traefik)
 
-本棧以純 HTTP 提供一切（前端、`/api`、VNC WebSocket）。**不要在 Traefik 內啟用 TLS**——把 TLS 終止代理放在前面：
+This stack serves everything over plain HTTP (frontend, `/api`, VNC WebSocket).
+**Do not enable TLS inside Traefik** — put a TLS-terminating proxy in front:
 
-- **Cloudflare** — DNS 記錄開啟 **Proxied**；TLS 在 Cloudflare 邊緣終止並轉發到 `:80`，無需管理憑證。
-- **Let's Encrypt** — 前方放一個會自動申請憑證的反向代理（Traefik ACME / Caddy / nginx）轉發到 `:80`。
+- **Cloudflare** — set the DNS record to **Proxied**; TLS terminates at the
+  Cloudflare edge and forwards to `:80`; no certificate management needed.
+- **Let's Encrypt** — front with a reverse proxy that auto-issues certs
+  (Traefik ACME / Caddy / nginx) forwarding to `:80`.
 
-> 自簽/自建 CA 憑證不適用：Chromium 永不忽略 `fetch()` 子資源的憑證錯誤，`/api` 請求會以 `ERR_CERT_AUTHORITY_INVALID` 失敗。
+> Self-signed/self-hosted CA certificates do not work: Chromium never ignores
+> certificate errors on `fetch()` subresources, so `/api` requests fail with
+> `ERR_CERT_AUTHORITY_INVALID`.
 
 ---
 
-## 更新流程（Update Flow）
+## Update Flow
 
-### 程式碼更新
+### Code updates
 
 ```bash
-git pull                                    # 取得最新程式碼
+git pull                                    # fetch latest code
 docker compose -f docker/openworkspace/docker-compose.yml up -d --build
 ```
 
-- `--build` 重建 `ow-web` / `ow-api` 影像。
-- **DB migration 自動執行**：API 啟動時 sqlx 自動套用未執行的 migration（當前到 `000021`）——不需手動跑 migration。
-- **路由零停機**：Traefik 熱載入動態目錄，新路由秒級生效；更新過程中不需重啟 traefik。
+- `--build` rebuilds the `ow-web` / `ow-api` images.
+- **DB migrations run automatically**: sqlx applies any pending migration on API
+  startup (currently through `000021`) — no manual step.
+- **Zero-downtime routes**: Traefik hot-reloads the dynamic directory; new
+  routes are live within seconds; no traefik restart during updates.
 
-### 實例影像更新
+### Instance image updates
 
 ```bash
-pnpm run build:template-images              # 重建本機影像，或
-docker pull tsukisama9292/ow-*-ubuntu*       # 拉取 Hub 上的最新影像
+pnpm run build:template-images              # rebuild local images, or
+docker pull tsukisama9292/ow-*-ubuntu*       # pull the latest from the Hub
 ```
 
-### 環境變數變更
+### Environment variable changes
 
-改 `.env`（compose 檔旁）後 `docker compose up -d`。注意：改動 `JWT_SECRET` 會使所有已登入使用者需要重新登入；改動 `POSTGRES_*` 需對應既有 `server-pgdata` volume 的既有認證。
+Edit `.env` (next to the compose file) and run `docker compose up -d`. Note:
+changing `JWT_SECRET` forces every logged-in user to re-login; changing
+`POSTGRES_*` must match the credentials already in the `server-pgdata` volume.
 
-### 版本控制慣例
+### Version-control conventions
 
-- 所有設定、compose、docs 皆入 repo；`*-ws.yml`（動態路由）與 build 產物不入 repo。
-- 升級任何依賴（尤其 pako、Traefik、Postgres 主版本）必須跑完整測試套件後再部屬。
+- All config, compose, and docs live in the repo; `*-ws.yml` (dynamic routes)
+  and build artifacts do not.
+- Upgrading any dependency (especially pako, Traefik, and Postgres major
+  versions) must pass the full test suite before deploying.
 
 ---
 
-## API 環境變數總表
+## API Environment Variables
 
-| 變數 | 預設 | 說明 |
+| Variable | Default | Description |
 |---|---|---|
-| `DATABASE_URL` | *(必要)* | Postgres 連線字串 |
-| `JWT_SECRET` | *(必要，生產必須更改)* | `ow_token` JWT 簽章密鑰 |
-| `ADMIN_PASSWORD` | `admin` | 種子 admin 的啟動密碼 |
-| `SERVER_HOST` / `SERVER_PORT` | `0.0.0.0` / `3000` | API 綁定位址 |
-| `DB_MAX_CONNECTIONS` | `5` | sqlx 連線池大小 |
-| `OW_CONTAINER_RUNTIME` | `runsc` | 伺服器級預設容器 runtime（`runsc`、`runc`…）；模板未指定時生效 |
-| `OW_HOST_GATEWAY_IP` | `172.17.0.1` | 實例發布埠綁定的主機 IP |
-| `OW_HOST_PORT_START` / `OW_HOST_PORT_END` | `10000` / `20000` | 主機埠池 |
-| `OW_INSTANCE_NET_BASE` | `10.200.0.0/16` | 每實例 `/30` 網段的 CIDR 基底（需網段對齊） |
-| `OW_INSTANCE_DNS` | `8.8.8.8,1.1.1.1` | 注入 `OW_DNS` 的 DNS 解析器（image entrypoint 改寫 `/etc/resolv.conf`） |
-| `TRAEFIK_DYNAMIC_DIR` | dev 預設 | 每實例路由 YAML 寫入目錄 |
+| `DATABASE_URL` | *(required)* | Postgres connection string |
+| `JWT_SECRET` | *(required; must change in prod)* | Signing key for the `ow_token` JWT |
+| `ADMIN_PASSWORD` | `admin` | Startup password for the seeded admin |
+| `SERVER_HOST` / `SERVER_PORT` | `0.0.0.0` / `3000` | API bind address |
+| `DB_MAX_CONNECTIONS` | `5` | sqlx connection-pool size |
+| `OW_CONTAINER_RUNTIME` | `docker` | Server-level default container runtime (`runsc`, `runc`, …); applies when a template has none |
+| `OW_HOST_GATEWAY_IP` | `172.17.0.1` | Host IP instance published ports bind to |
+| `OW_HOST_PORT_START` / `OW_HOST_PORT_END` | `10000` / `20000` | Host-port pool |
+| `OW_INSTANCE_NET_BASE` | `10.200.0.0/16` | CIDR base for per-instance `/30` subnets (must stay subnet-aligned) |
+| `OW_INSTANCE_DNS` | `8.8.8.8,1.1.1.1` | DNS resolvers injected as `OW_DNS` (image entrypoint rewrites `/etc/resolv.conf`) |
+| `TRAEFIK_DYNAMIC_DIR` | dev default | Directory where per-instance route YAML is written |
 
 ---
 
-## 已棄用／參考項目
+## Deprecated / Reference Items
 
-| 項目 | 狀態 | 說明 |
+| Item | Status | Notes |
 |---|---|---|
-| `references_repo/KasmVNC` | 參考 | 上游 KasmVNC 原始碼（`kasmweb/`） |
-| `references_repo/gvisor` | 參考 | 上游 gVisor（shallow clone，僅 `g3doc/`） |
-| `references_repo/docker-docs` | 參考 | 上游 Docker 文件（僅 `content/`） |
-| `users.role` / `is_system_admin` / `user_templates` | 已移除 | migration `000018`–`000020` 移除，改為群組制 RBAC |
+| `references_repo/KasmVNC` | reference | Upstream KasmVNC source (`kasmweb/`) |
+| `references_repo/gvisor` | reference | Upstream gVisor (shallow clone, `g3doc/` only) |
+| `references_repo/docker-docs` | reference | Upstream Docker docs (`content/` only) |
+| `users.role` / `is_system_admin` / `user_templates` | removed | Migrations `000018`–`000020` removed them; group-based RBAC instead |
 
 ---
 
-## 已知限制（Known Limitations）
+## Known Limitations
 
-- **單一 API 程序** — DashMap 快取與資源分配為程序內一致性；多程序由 flock 解決埠/網段競爭，但快取仍是 per-process。
-- **無 CI** — 目前無 `.github` CI；品質門檻靠本機腳本（check.sh / run_tests.sh）維持。
-- **GPU 僅 NVIDIA + 特定架構** — NVProxy 支援 Turing/Ampere/Ada/Hopper。
-- **tc/HTB 需要 root capabilities** — 需 `network:allow` 授權 `nsenter`/`tc`；失敗為 fail-open（log 但不殺 session）。
+- **Single API process** — DashMap cache and resource allocation are
+  per-process consistent; multi-process contention for ports/subnets is handled
+  by flock, but the cache remains per-process.
+- **No CI** — no `.github` CI yet; quality gates rely on local scripts
+  (`check.sh` / `run_tests.sh`).
+- **GPU is NVIDIA-only + specific architectures** — NVProxy supports
+  Turing/Ampere/Ada/Hopper.
+- **tc/HTB needs root capabilities** — requires `network:allow` for
+  `nsenter`/`tc`; failures are fail-open (logged, session not killed).
 
 ---
 
-## 相關文件
+## Related docs
 
-- [mission.md](../../mission.md) — 使命與核心功能（憲法第一條）
-- [roadmap.md](../../roadmap.md) — 階段規劃（憲法第三條）
-- [development.md](development.md) — 完整開發指南、除錯、環境變數
-- [architecture.md](../user-guide/architecture.md) — 系統架構與 DB schema
+- [mission.md](../../mission.md) — mission and core features (constitution, article one)
+- [roadmap.md](../../roadmap.md) — phase planning (constitution, article three)
+- [development.md](development.md) — full development guide, debugging, env vars
+- [architecture.md](../user-guide/architecture.md) — system architecture and DB schema

@@ -93,7 +93,7 @@ All variables are read via `core/settings.rs` (`Settings::from_env`). Only `DATA
 | `ADMIN_PASSWORD` | `admin` | Bootstrap password for the seeded admin user |
 | `SERVER_HOST` / `SERVER_PORT` | `0.0.0.0` / `3000` | API bind address |
 | `DB_MAX_CONNECTIONS` | `5` | sqlx connection pool size |
-| `OW_CONTAINER_RUNTIME` | `runsc` | Server-level default container runtime (`runsc`, `runc`, …); used when a template doesn't pin its own |
+| `OW_CONTAINER_RUNTIME` | `docker` | Server-level default container runtime (`runsc`, `runc`, …); used when a template doesn't pin its own |
 | `OW_HOST_GATEWAY_IP` | `172.17.0.1` | Host IP instances publish their ports on |
 | `OW_HOST_PORT_START` / `OW_HOST_PORT_END` | `10000` / `20000` | Host-port pool for instance services |
 | `OW_INSTANCE_NET_BASE` | `10.200.0.0/16` | CIDR base for per-instance `/30` nets (must be net-aligned; `NetBase::parse` validates) |

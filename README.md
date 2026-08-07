@@ -92,6 +92,10 @@ Everything happens in a single-page web app — no install, no VPN. Open the pla
 4. **Work in the browser.** Desktops (KasmVNC) open as a full screen with clipboard support; terminals (ttyd) and notebooks (Jupyter) open in a tabbed page.
 5. **Manage your sessions.** Each card shows status, a persistence badge, a live countdown of any time budget, and what you can do in that state — **Start / Stop** (stop keeps your data), **Pause / Resume** (pause uses almost no CPU), **Open**, **Delete** (data is kept; only a reset erases it).
 
+<video controls src="docs/assets/videos/short/quick_tour.mp4" width="100%">
+  Your browser does not support the video tag.
+</video>
+
 Your session's address is unique and stable across stops and restarts — you can bookmark it. Full walkthrough: [docs/user-guide/frontend.md](docs/user-guide/frontend.md).
 
 ## Permissions & your data

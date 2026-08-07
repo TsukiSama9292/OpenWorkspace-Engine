@@ -6,6 +6,8 @@ import {
   loadTemplate,
   submitTemplate,
   updateTemplate,
+  defaultImageFor,
+  reconcileDefaultImage,
   type TemplateFormState,
 } from "$lib/templates/template-form";
 
@@ -90,7 +92,7 @@ describe("template-form", () => {
     it("returns the default empty form state", () => {
       const state = createInitialFormState();
       expect(state.name).toBe("");
-      expect(state.image).toBe("tsukisama9292/ow-kasmvnc-ubuntu-dini:jammy");
+      expect(state.image).toBe("tsukisama9292/ow-kasmvnc-ubuntu:jammy");
       expect(state.cores).toBe(2);
       expect(state.ramGb).toBe(4);
       expect(state.gpuCount).toBe(0);
@@ -103,6 +105,41 @@ describe("template-form", () => {
       expect(state.visibility).toBe("private");
       expect(state.envVars).toEqual([{ key: "", value: "" }]);
       expect(state.volumeMappings).toEqual([{ host: "", container: "" }]);
+    });
+  });
+
+  describe("defaultImageFor", () => {
+    it("returns the plain image when DinI is off and the dini image when on", () => {
+      expect(defaultImageFor("kasmvnc", false)).toBe("tsukisama9292/ow-kasmvnc-ubuntu:jammy");
+      expect(defaultImageFor("kasmvnc", true)).toBe("tsukisama9292/ow-kasmvnc-ubuntu-dini:jammy");
+      expect(defaultImageFor("ttyd", false)).toBe("tsukisama9292/ow-ttyd-ubuntu:jammy");
+      expect(defaultImageFor("ttyd", true)).toBe("tsukisama9292/ow-ttyd-ubuntu-dini:jammy");
+      expect(defaultImageFor("jupyter", false)).toBe("tsukisama9292/ow-jupyter-ubuntu:jammy");
+      expect(defaultImageFor("jupyter", true)).toBe("tsukisama9292/ow-jupyter-ubuntu-dini:jammy");
+    });
+  });
+
+  describe("reconcileDefaultImage", () => {
+    it("swaps between the plain and dini variants when the image is a known default", () => {
+      expect(reconcileDefaultImage("tsukisama9292/ow-kasmvnc-ubuntu:jammy", "kasmvnc", true)).toBe(
+        "tsukisama9292/ow-kasmvnc-ubuntu-dini:jammy",
+      );
+      expect(reconcileDefaultImage("tsukisama9292/ow-kasmvnc-ubuntu-dini:jammy", "kasmvnc", false)).toBe(
+        "tsukisama9292/ow-kasmvnc-ubuntu:jammy",
+      );
+    });
+
+    it("follows the remote type when the image is a known default", () => {
+      expect(reconcileDefaultImage("tsukisama9292/ow-kasmvnc-ubuntu:jammy", "ttyd", false)).toBe(
+        "tsukisama9292/ow-ttyd-ubuntu:jammy",
+      );
+    });
+
+    it("leaves a custom image untouched", () => {
+      expect(reconcileDefaultImage("registry.example.com/team/custom:latest", "kasmvnc", true)).toBe(
+        "registry.example.com/team/custom:latest",
+      );
+      expect(reconcileDefaultImage("img:1", "kasmvnc", false)).toBe("img:1");
     });
   });
 
@@ -167,11 +204,11 @@ describe("template-form", () => {
           body: JSON.stringify({
             name: "X",
             description: null,
-            image: "tsukisama9292/ow-kasmvnc-ubuntu-dini:jammy",
+            image: "tsukisama9292/ow-kasmvnc-ubuntu:jammy",
             cores: 2,
             memory: 4294967296,
             gpu_count: 0,
-            container_runtime: "",
+            container_runtime: "docker",
             docker_registry: null,
             remote_type: "kasmvnc",
             run_config: {},

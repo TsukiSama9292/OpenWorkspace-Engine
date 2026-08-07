@@ -4,6 +4,32 @@ Chronological, user-visible changes. Append, don't rewrite history.
 
 ## [Unreleased]
 
+### Default container runtime is now runC (Docker); gVisor is optional
+
+Templates previously launched under `runsc` (gVisor) by default. The default
+is now **runC (Docker)** — the fastest runtime with full GPU compatibility —
+end to end:
+
+- The API defaults `OW_CONTAINER_RUNTIME` to `docker` (previously `runsc`), and
+  template create/update requests without a runtime now default to `docker`.
+  Existing templates with an empty runtime field resolve to Docker (runC) on
+  their next launch.
+- The template form's Runtime dropdown now offers two explicit choices —
+  `runC (Docker)` (default; fast, GPU-compatible) and `runsc (gVisor)`
+  (optional; sandboxed, slower) — instead of a bare "Default" option that
+  resolved to gVisor.
+
+### Persistent storage cleanup now removes the host data folder itself
+
+Resetting persistent storage and the admin "Thorough Cleanup" previously only
+emptied the instance's host data directory — the folder (`{root}/{template}/{user}`)
+was left behind, contradicting the UI's "permanently deletes the volume directory"
+wording. Both paths now delete the directory itself from the host (the helper
+container mounts the parent and `rm -rf`s the leaf, since the bind-mount point
+cannot be unlinked from inside a container), matching the design in
+`.scratch/archive/persistent_storage/spec.md` §5. Delete/stop still preserve the
+data for reuse.
+
 ### Production benchmark: measure the compose stack's CPU/RAM (`.scratch/production-benchmark/`)
 
 A pure-bash benchmark (`scripts/benchmark/benchmark-prod.sh`) that brings up the production compose stack and reports what it and six concurrent instances consume — the first reproducible resource-cost numbers for the platform (no product code changed).

@@ -3,7 +3,7 @@
   import { auth } from '$lib/stores/auth';
   import { formatMemory } from '$lib/utils/format';
   import { getTemplateIcon } from '$lib/utils/template-icons';
-  import { loadTemplate, submitTemplate, updateTemplate, createInitialFormState, DEFAULT_IMAGES, type TemplateFormState } from '$lib/templates/template-form';
+  import { loadTemplate, submitTemplate, updateTemplate, createInitialFormState, reconcileDefaultImage, type TemplateFormState } from '$lib/templates/template-form';
   import { isTemplatesEditor, serializeDashboardHash, createDirtySnapshot, isFormDirty, confirmDiscardChanges, type DashboardView } from '$lib/templates/dashboard-view';
   import { mayCreateTemplate, mayEditTemplate, mayLaunchTemplate } from '$lib/permissions';
   import type { Template, EffectiveContext } from '$lib/types';
@@ -85,10 +85,8 @@
   $effect(() => {
     if (!form) return;
     if (!isTemplatesEditor(view)) return;
-    if (view.editor === 'new') {
-      const image = DEFAULT_IMAGES[form.remoteType];
-      if (form.image !== image) form.image = image;
-    }
+    const next = reconcileDefaultImage(form.image, form.remoteType, form.dockerInInstance);
+    if (form.image !== next) form.image = next;
   });
 
   async function refresh() {

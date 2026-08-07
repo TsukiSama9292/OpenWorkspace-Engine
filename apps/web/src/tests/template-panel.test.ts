@@ -232,6 +232,41 @@ describe('TemplatePanel', () => {
     expect(screen.queryByText('Sandboxed via gVisor')).toBeNull();
   });
 
+  it('defaults the image to the plain variant and swaps it when DinI toggles', async () => {
+    const { container } = render(TemplatePanel, { props: panelProps() });
+    const imageInput = () => container.querySelector<HTMLInputElement>('input[placeholder="tsukisama9292/ow-kasmvnc-ubuntu:jammy"]')!;
+
+    expect(imageInput().value).toBe('tsukisama9292/ow-kasmvnc-ubuntu:jammy');
+
+    await fireEvent.click(showAdvanced(container)!);
+    await tick();
+
+    await fireEvent.click(diniToggle(container)[0]);
+    await tick();
+    expect(imageInput().value).toBe('tsukisama9292/ow-kasmvnc-ubuntu-dini:jammy');
+
+    await fireEvent.click(diniToggle(container)[0]);
+    await tick();
+    expect(imageInput().value).toBe('tsukisama9292/ow-kasmvnc-ubuntu:jammy');
+  });
+
+  it('keeps a custom image when DinI toggles', async () => {
+    const { container } = render(TemplatePanel, { props: panelProps() });
+    const imageInput = () => container.querySelector<HTMLInputElement>('input[placeholder="tsukisama9292/ow-kasmvnc-ubuntu:jammy"]')!;
+
+    await fireEvent.input(imageInput(), { target: { value: 'registry.example.com/team/custom:latest' } });
+    await tick();
+
+    await fireEvent.click(showAdvanced(container)!);
+    await tick();
+    await fireEvent.click(diniToggle(container)[0]);
+    await tick();
+    await fireEvent.click(diniToggle(container)[0]);
+    await tick();
+
+    expect(imageInput().value).toBe('registry.example.com/team/custom:latest');
+  });
+
   it('marks templates the user may launch and gates edit/delete on ownership', () => {
     const ctx = context({ user_id: 'me', can_create_template: true, allowed_template_ids: ['t-own'] });
     const configs = [

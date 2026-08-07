@@ -1135,12 +1135,10 @@ async fn test_persistent_volume_lifecycle_via_client() {
     let _ = client.remove_container_by_id(&id2).await;
 
     client.remove_persistent_volume(&host_path, &volume_name).await.unwrap();
-    assert_eq!(
-        fs::read_dir(&host_dir).unwrap().count(),
-        0,
-        "host data dir should be emptied on remove"
+    assert!(
+        !host_dir.exists(),
+        "host data dir itself should be removed on remove"
     );
-    fs::remove_dir_all(&host_dir).ok();
 }
 
 #[tokio::test]
@@ -1216,7 +1214,6 @@ async fn test_ensure_persistent_volume_redeclares_lost_volume() {
 #[tokio::test]
 async fn test_local_bind_named_volume_copy_up_populates_image_files() {
     use bollard::container::{Config, CreateContainerOptions, RemoveContainerOptions, StartContainerOptions};
-    use std::fs;
 
     let docker = bollard::Docker::connect_with_local_defaults().unwrap();
     let host_dir = std::env::temp_dir().join(format!("ow_test_pv_cu_{}", std::process::id()));
@@ -1343,11 +1340,9 @@ async fn test_local_bind_named_volume_copy_up_populates_image_files() {
         .unwrap();
 
     client.remove_persistent_volume(&host_path, &volume_name).await.unwrap();
-    assert_eq!(fs::read_dir(&host_dir).unwrap().count(), 0);
+    assert!(!host_dir.exists(), "host data dir should be removed");
     let gone = docker.inspect_volume(&volume_name).await;
     assert!(gone.is_err(), "volume declaration should be removed");
-
-    fs::remove_dir_all(&host_dir).ok();
 }
 
 #[tokio::test]
@@ -1439,12 +1434,11 @@ async fn test_reset_repopulates_image_files_on_next_mount() {
         .await
         .unwrap();
 
-    // Reset: empty the host dir and remove the volume declaration.
+    // Reset: remove the host data dir itself and the volume declaration.
     client.remove_persistent_volume(&host_path, &volume_name).await.unwrap();
-    assert_eq!(
-        fs::read_dir(&host_dir).unwrap().count(),
-        0,
-        "reset must wipe the built-in files and the user data"
+    assert!(
+        !host_dir.exists(),
+        "reset must remove the host data dir (built-in files and user data)"
     );
 
     // Re-prepare, then mount again: the fresh empty volume must re-populate

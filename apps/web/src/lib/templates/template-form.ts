@@ -6,10 +6,33 @@ import type { Template, RemoteType, TimeoutAction, TemplateVisibility } from '$l
 export type { TimeoutAction } from '$lib/types';
 
 export const DEFAULT_IMAGES: Record<RemoteType, string> = {
+  kasmvnc: 'tsukisama9292/ow-kasmvnc-ubuntu:jammy',
+  ttyd: 'tsukisama9292/ow-ttyd-ubuntu:jammy',
+  jupyter: 'tsukisama9292/ow-jupyter-ubuntu:jammy',
+};
+
+export const DINI_IMAGES: Record<RemoteType, string> = {
   kasmvnc: 'tsukisama9292/ow-kasmvnc-ubuntu-dini:jammy',
   ttyd: 'tsukisama9292/ow-ttyd-ubuntu-dini:jammy',
   jupyter: 'tsukisama9292/ow-jupyter-ubuntu-dini:jammy',
 };
+
+export function defaultImageFor(remoteType: RemoteType, dockerInInstance: boolean): string {
+  return (dockerInInstance ? DINI_IMAGES : DEFAULT_IMAGES)[remoteType];
+}
+
+const KNOWN_DEFAULT_IMAGES: ReadonlySet<string> = new Set([
+  ...Object.values(DEFAULT_IMAGES),
+  ...Object.values(DINI_IMAGES),
+]);
+
+export function reconcileDefaultImage(
+  image: string,
+  remoteType: RemoteType,
+  dockerInInstance: boolean,
+): string {
+  return KNOWN_DEFAULT_IMAGES.has(image) ? defaultImageFor(remoteType, dockerInInstance) : image;
+}
 
 export interface TemplateFormState {
   name: string;
@@ -57,7 +80,7 @@ export function createInitialFormState(): TemplateFormState {
     dns: '',
     shmSize: '',
     networkMode: '',
-    containerRuntime: '',
+    containerRuntime: 'docker',
     maxRunSeconds: null,
     timeoutAction: 'remove',
     keepTimeSeconds: null,

@@ -43,6 +43,28 @@ Two rules keep this predictable:
 - **Reset is the only destructive action.** Nothing on the server ever
   auto-deletes your data.
 
+## Watch it
+
+Each launch mode in the videos below:
+
+### Use persistent storage
+
+<video controls src="../assets/videos/persistent-storage/persistent-storage.mp4" width="100%">
+  Your browser does not support the video tag.
+</video>
+
+### No persistent storage
+
+<video controls src="../assets/videos/persistent-storage/persistent-storage-unuse.mp4" width="100%">
+  Your browser does not support the video tag.
+</video>
+
+### Reset persistent storage
+
+<video controls src="../assets/videos/persistent-storage/persistent-storage-reset.mp4" width="100%">
+  Your browser does not support the video tag.
+</video>
+
 ## Stop, start, delete
 
 | Action | Your data |

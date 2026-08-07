@@ -239,15 +239,25 @@ likely not supported by this driver/CUDA stack (see the compatibility table).
 ## 4. Using it in OpenWorkspace
 
 Once the runtime works with `docker run --runtime runsc`, set the Template's
-**Container Runtime** to `runsc` in the dashboard — which is already the
-default. A template with an empty runtime falls back to the server-wide
-`OW_CONTAINER_RUNTIME` setting — also defaulting to `runsc`; the API launches
-that template's instances with the `--runtime runsc` flag. CPU-only
-templates work the same way; GPU templates additionally need a CUDA-compatible
-image (e.g. a `cuda` base image) and a supported host driver.
+**Container Runtime** to `runsc` in the dashboard. The server-wide default is
+**runC (Docker)** — `OW_CONTAINER_RUNTIME` defaults to `docker`, so a template
+with an empty runtime field launches with Docker's default (runc), the fastest
+option with full GPU compatibility. Choose `runsc` explicitly per template (or
+set `OW_CONTAINER_RUNTIME=runsc` server-wide) when you want the gVisor
+sandbox; the API then launches that template's instances with the
+`--runtime runsc` flag. CPU-only templates work the same way; GPU templates
+additionally need a CUDA-compatible image (e.g. a `cuda` base image) and a
+supported host driver.
 
-> The default container runtime is effectively gVisor end-to-end: the API
-> defaults `container_runtime` to `runsc` and `OW_CONTAINER_RUNTIME` to
-> `runsc`, so a template with an empty runtime field launches sandboxed under
-> runsc. Upstream runsc sources are in the reference clone at
-> `references_repo/gvisor/` (sparse-checked-out docs).
+> The default container runtime is runC (Docker) end-to-end: the API
+> defaults `container_runtime` to `docker` and `OW_CONTAINER_RUNTIME` to
+> `docker`, so a template with an empty runtime field launches unsandboxed
+> under runC. runsc (gVisor) is an optional per-template hardening choice
+> (slower, but sandboxed). Upstream runsc sources are in the reference clone
+> at `references_repo/gvisor/` (sparse-checked-out docs).
+>
+> One architectural difference matters for operations: runsc virtualizes
+> `/proc` (via the Sentry kernel), so `free` / `htop` inside a runsc
+> container show the container's own CPU/RAM limits — while runC containers
+> show the host's totals (limits are still enforced via cgroups). See
+> [container-runtime.md](container-runtime.md).

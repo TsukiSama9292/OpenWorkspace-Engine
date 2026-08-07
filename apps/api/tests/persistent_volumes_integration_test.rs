@@ -608,7 +608,11 @@ async fn test_cleanup_removes_data_and_rejects_active() {
     );
     assert!(
         !Path::new(&host_path).join("doomed.txt").exists(),
-        "cleanup must empty host data"
+        "cleanup must delete the host data"
+    );
+    assert!(
+        !Path::new(&host_path).exists(),
+        "cleanup must remove the host data dir itself"
     );
     assert!(
         find_volume(&ctx, &host_path).await.is_none(),

@@ -1,147 +1,206 @@
-# OpenWorkspace Engine — 使命文件（Mission）
+# OpenWorkspace Engine — Mission
 
-> 本文件是專案的「憲法」第一條：闡明我們**為何**存在、要**做什麼**、以及**不做什麼**。
-> 任何功能開發、架構決策與取捨，都應能追溯回本文件的某一個價值支柱。
-
----
-
-## 一句話定位
-
-> **把任何一台閒置的 Linux 伺服器，變成一個多人共享、瀏覽器直連、零基礎安裝的雲端開發環境。**
-
-OpenWorkspace Engine 是輕量級的容器調度平台：按需布建隔離的 Linux 工作環境（KasmVNC 桌面、Jupyter Lab、ttyd 終端），透過 Traefik 反向代理以瀏覽器存取，具備 JWT 驗證、自動休眠、閒置回收、頻寬控管與持久化使用者資料。
+> This document is the project's "constitution", article one: it states **why**
+> we exist, **what** we build, and **what** we deliberately do not build. Every
+> feature, architecture decision, and trade-off should trace back to one of the
+> value pillars in this document.
 
 ---
 
-## 為什麼要建立此專案（The Why）
+## One-line positioning
 
-### 現實痛點
+> **Turn any idle Linux server into a multi-user, browser-accessible, zero-setup
+> cloud development environment.**
 
-| 痛點 | 影響 |
+OpenWorkspace Engine is a lightweight container orchestration platform: it
+provisions isolated Linux workspaces on demand (KasmVNC desktops, Jupyter Lab,
+ttyd terminals) accessed through a Traefik reverse proxy in the browser, with
+JWT authentication, auto-sleep, idle reclamation, bandwidth shaping, and
+persistent user data.
+
+---
+
+## Why this project exists (The Why)
+
+### The pain
+
+| Pain point | Impact |
 |---|---|
-| **硬體通膨** | DRAM/GPU 價格漲幅遠超預算，實驗室與中小企業無法汰換硬體 |
-| **資源浪費** | 2–5 年的舊伺服器（多核 CPU + GB 級記憶體）閒置率超過 90% |
-| **環境混亂** | 在主機直接安裝 CUDA/Python 造成驅動衝突、系統崩潰 |
-| **資源獨佔** | 一人獨佔整台機器，離峰時間 90%+ 的 CPU/RAM 空轉 |
+| **Hardware inflation** | DRAM/GPU prices outpace budgets; labs and small companies cannot refresh hardware |
+| **Resource waste** | 2–5-year-old servers (many cores + GB-scale RAM) sit idle more than 90% of the time |
+| **Environment chaos** | Installing CUDA/Python directly on the host causes driver conflicts and system breakage |
+| **Resource hoarding** | One person owns the whole machine; off-peak, 90%+ of CPU/RAM spins unused |
 
-### 我們的信念
+### What we believe
 
-1. **務實的現實主義** — 讓老硬體重獲新生，解決學術與小型團隊的硬體焦慮。
-2. **務實的永續性** — 以軟體優化換取最高利用率，而不是無限堆疊硬體。
-3. **不妥協的開發體驗** — 硬體也許老舊，但開發體驗必須現代、流暢、開箱即用。
+1. **Pragmatic realism** — give old hardware a second life and relieve the
+   hardware anxiety of academic and small teams.
+2. **Pragmatic sustainability** — maximize utilization through software
+   optimization, not by stacking hardware indefinitely.
+3. **Uncompromising developer experience** — the hardware may be old, but the
+   experience must be modern, smooth, and work out of the box.
 
-### 為什麼用「瀏覽器」當入口
+### Why the browser as the entry point
 
-零客戶端安裝、免 VPN、免 SSH 設定——只要瀏覽器開著就能進入完整 GUI 桌面。
-這大幅降低了「把舊機器重新投入使用」的心理與技術門檻。
+Zero client installs, no VPN, no SSH setup — keep the browser open and enter a
+full GUI desktop. This dramatically lowers both the psychological and technical
+barriers to putting an old machine back to work.
 
 ---
 
-## 目標（The What）
+## Goals (The What)
 
-我們要打造的是一個**多租戶、單主機優先、零信任隔離**的容器工作區平台：
+We are building a **multi-tenant, single-host-first, zero-trust-isolated**
+container workspace platform:
 
-1. **hyper-efficiency（高效率）** — Docker 容器取代 15–20% 的 VM 開銷；8GB RAM 的主機可以同時跑多個隔離環境。
-2. **動態分配（Dynamic Allocation）** — 需要時建立、閒置時自動停止；硬體永遠不會被空占。
-3. **瀏覽器即入口（Browser-as-Entry）** — 零客戶端、免 VPN，完整 GUI 桌面就在瀏覽器裡。
-4. **零信任隔離（Zero-Trust Isolation）** — 容器隔離 + JWT 驗證 + 每實例獨立存取憑證 + 每實例獨立 `/30` 網段 + cgroups 資源限制。
+1. **Hyper-efficiency** — Docker containers replace the 15–20% overhead of VMs;
+   an 8GB-RAM host can run several isolated environments at once.
+2. **Dynamic allocation** — create when needed, auto-stop when idle; hardware is
+   never held empty.
+3. **Browser-as-entry** — zero client, no VPN; the full GUI desktop lives in the
+   browser.
+4. **Zero-trust isolation** — container isolation + JWT auth + per-instance
+   access credentials + per-instance `/30` subnet + cgroup resource limits.
 
-### 名詞定義
+### Glossary
 
-| 概念 | 定義 |
+| Concept | Definition |
 |---|---|
-| **Template（範本）** | 預設設定套件（image、資源、環境變數），使用者由此啟動實例 |
-| **Instance（實例）** | 由範本啟動的執行中容器（KasmVNC / ttyd / Jupyter） |
-| **User（使用者）** | 擁有帳號的人；授權採**群組制**——權限（旗標、範本白名單、實例額度）落在群組上，每次請求重新解析為 effective context |
+| **Template** | A preset configuration bundle (image, resources, environment variables) users launch instances from |
+| **Instance** | A running container launched from a template (KasmVNC / ttyd / Jupyter) |
+| **User** | A person with an account; authorization is **group-based** — permissions (flags, template whitelist, instance ceiling) live on groups and are re-resolved into an effective context per request |
 
 ---
 
-## 核心功能
+## Core Features
 
-### 支援的介面
-- **Desktop（KasmVNC）** — 瀏覽器中的完整 Linux GUI 桌面（HTML5 Canvas + WebSocket）。
-- **Jupyter Lab** — 資料科學環境，預裝 Python kernel。
-- **Terminal（ttyd）** — 輕量瀏覽器終端，快速 CLI 存取。
+### Supported interfaces
+- **Desktop (KasmVNC)** — a full Linux GUI desktop in the browser (HTML5 Canvas
+  + WebSocket).
+- **Jupyter Lab** — data-science environment with a preinstalled Python kernel.
+- **Terminal (ttyd)** — lightweight browser terminal for quick CLI access.
 
-### 安全與隔離
-- **跨租戶隔離** — 每個實例配發獨立的 127 字元隨機存取權杖；所有流量必須經 Traefik 代理並攜帶有效權杖才能到達容器。
-- **gVisor 沙箱** — 範本層可選擇 `runsc` runtime，攔截高風險 syscall 保護主機。
-- **GPU 透傳（NVProxy）** — gVisor 的 `--nvproxy` 將 NVIDIA ioctl 從沙箱代理到主機驅動（Turing/Ampere/Ada/Hopper）。
-- **JWT Cookie 驗證** — `ow_token` cookie + Traefik ForwardAuth 驗證 WebSocket upgrade。
-- **無頭實例驗證** — 代理伺服器端注入憑證（KasmVNC/Jupyter/ttyd），瀏覽器永看不到密鑰。
-- **群組式 RBAC** — 權限由群組旗標 + 範本白名單 + 實例額度構成，每次請求自 DB 重算（無過期權杖問題）。
+### Security & isolation
+- **Cross-tenant isolation** — every instance gets an independent 127-char
+  random access token; all traffic must pass through Traefik with a valid token
+  to reach the container.
+- **gVisor sandbox** — `runsc` runtime selectable per template, intercepting
+  high-risk syscalls to protect the host.
+- **GPU passthrough (NVProxy)** — gVisor's `--nvproxy` proxies NVIDIA ioctls
+  from the sandbox to the host driver (Turing/Ampere/Ada/Hopper).
+- **JWT cookie auth** — `ow_token` cookie + Traefik ForwardAuth validating
+  WebSocket upgrades.
+- **Headless instance auth** — the proxy injects credentials server-side
+  (KasmVNC/Jupyter/ttyd); the browser never sees the secrets.
+- **Group-based RBAC** — permissions consist of group flags + a template
+  whitelist + an instance ceiling, recomputed from the DB per request (no stale
+  token problem).
 
-### 資源治理
-- **Auto-Sleep（執行時限）** — 每範本 `max_run_seconds`，超過即執行 `timeout_action`（remove/stop/pause）；前端倒數警示。
-- **Keep Time（閒置回收）** — 瀏覽器分頁開啟、可見且聚焦時每 10 秒心跳；閒置超過 `keep_time_seconds` 即回收。
-- **頻寬控管** — 每範本上/下行 Mbps 上限，以核心 `tc`/HTB 在實例 veth 上執行。
-- **實例額度（ceiling）** — 群組 `max_instances` + 使用者個人 `direct_max_instances` 共同構成 effective ceiling。
+### Resource governance
+- **Auto-sleep (run-time limit)** — per-template `max_run_seconds`; exceeding it
+  triggers `timeout_action` (remove/stop/pause); the frontend counts down and
+  warns.
+- **Keep time (idle reclamation)** — the browser tab heartbeats every 10s while
+  open, visible, and focused; instances idle past `keep_time_seconds` are
+  reclaimed.
+- **Bandwidth shaping** — per-template up/down Mbps caps enforced at the kernel
+  via `tc`/HTB on the instance veth.
+- **Instance ceiling** — group `max_instances` + per-user `direct_max_instances`
+  combine into an effective ceiling.
 
-### 持久化使用者資料
-- **整個 home 目錄持久化** — 停止、重啟、刪除後資料仍在；首次掛載自動填入影像內建的環境設定。
-- **伺服器端解析路徑** — 主機路徑由 API 解析驗證為 `{root}/{template_name}/{user_id}`；客戶端永不提供路徑。
-- **三種啟動模式** — 使用持久化 / 不使用（暫時性）/ 重設（清空重來，前端有確認警示）。
-- **一範本一持久實例** — 同（範本, 擁有者）的第二次持久啟動回 409，直到舊實例移除。
+### Persistent user data
+- **Whole-home-directory persistence** — data survives stop, restart, and
+  delete; the first mount auto-populates the image's built-in environment.
+- **Server-side path resolution** — host paths are resolved and validated by the
+  API as `{root}/{template_name}/{user_id}`; the client never supplies paths.
+- **Three launch modes** — use persistent / don't use (ephemeral) / reset (wipe
+  and start over, with a frontend confirmation warning).
+- **One persistent instance per template** — a second persistent launch for the
+  same (template, owner) returns 409 until the old instance is removed.
 
-### 管理介面
-- **單頁儀表板** — 實例卡片、範本編輯、Sessions、Volumes、Groups、Users、Settings 全部集中一頁。
-- **群組與使用者管理** — 建立帳號、指派群組成員、設定個人額度。
-- **範本可見性** — `public` / `private` / `hidden` 三態 + 群組白名單。
+### Admin UI
+- **Single-page dashboard** — instance cards, template editing, Sessions,
+  Volumes, Groups, Users, and Settings all on one page.
+- **Group & user management** — create accounts, assign group memberships, set
+  per-user ceilings.
+- **Template visibility** — `public` / `private` / `hidden` plus a group
+  whitelist.
 
 ---
 
-## 設計哲學：Security · Stability · Performance
+## Design Philosophy: Security · Stability · Performance
 
-我們追求三者之間的**平衡最優**——任何一項都不以犧牲其他兩項為代價：
+We optimize for the **best balance of the three** — no single one is sacrificed
+for the other two:
 
-| 層 | 技術 | 我們換到什麼 |
+| Layer | Technology | What we buy |
 |---|---|---|
-| 控制平面 API | Rust | **Security + Performance**——記憶體安全 + 零成本抽象；<35MB RAM、高併發非阻塞 I/O |
-| 前端 | SvelteKit | **Performance + DX**——輕量靜態 SPA，又不犧牲開發便利 |
-| 反向代理 | Traefik | **Stability + Performance**——file provider + inotify 熱載入，路由增減**零停機** |
-| 靜態資產 | Nginx | **Performance**——HTTP 快取消除重複請求的 I/O 瓶頸 |
-| 容器 Runtime | Docker OCI + runC | **Performance**——標準 OCI runtime 快速建立實例 |
-| 容器 Runtime（強化） | gVisor（runsc） | **Security**——使用者空間核心攔截 syscall，大幅降低逃逸風險；可逐範本選擇 |
-| 實例網路 | 每實例 `/30` + 主機發布埠 | **Security（網路隔離）**——見下 |
+| Control-plane API | Rust | **Security + Performance** — memory safety + zero-cost abstractions; <35MB RAM, high-concurrency non-blocking I/O |
+| Frontend | SvelteKit | **Performance + DX** — a lightweight static SPA without sacrificing developer convenience |
+| Reverse proxy | Traefik | **Stability + Performance** — file provider + inotify hot reload; adding/removing routes is **zero-downtime** |
+| Static assets | Nginx | **Performance** — HTTP caching removes repeated I/O bottlenecks |
+| Container runtime | Docker OCI + runC | **Performance** — standard OCI runtime, fast instance creation |
+| Container runtime (hardened) | gVisor (runsc) | **Security** — a user-space kernel intercepts syscalls, sharply reducing escape risk; selectable per template |
+| Instance networking | Per-instance `/30` + host-published port | **Security (network isolation)** — see below |
 
-### 為什麼每實例獨立 `/30` 網段
+### Why a dedicated `/30` per instance
 
-單一扁平子網（如一個 `/16`）很方便，但同時是**橫向移動的攻擊面**：被攻陷的使用者可掃描共享網段、攻擊其他實例。
+A single flat subnet (e.g. one `/16`) is convenient, but it is also a
+**lateral-movement attack surface**: a compromised user can scan the shared
+segment and attack other instances.
 
-- 實例的服務埠**直接發布到 Docker bridge gateway 的主機埠**（`<host_gateway_ip>:<host_port>`）——Traefik 經 `host.docker.internal:<host_port>` 到達，永不使用容器 IP。
-- 對外網際網路使用**每實例專屬 `/30` 子網**：只有 gateway 與實例兩個可用 IP，自成一個 L2 網段，**東西向攻擊在結構上不可能發生**。
+- An instance's service port is **published directly to a host port on the
+  Docker bridge gateway** (`<host_gateway_ip>:<host_port>`) — Traefik reaches it
+  via `host.docker.internal:<host_port>` and never uses container IPs.
+- Outbound internet uses a **per-instance dedicated `/30` subnet**: only the
+  gateway and the instance have usable IPs, forming its own L2 segment —
+  **east-west attacks are structurally impossible**.
 
-這就是把網路層隔離推到極致：每個容器活在各自的泡泡裡，唯一的入口是那一個受 Traefik 控管的發布埠。
-
----
-
-## 我們刻意不做什麼（Anti-Goals / Out of Scope）
-
-憲法必須同時定義界線，避免範圍蔓延：
-
-1. **不做通用 PaaS** — 我們不是 Heroku/Vercel；專注於「互動式開發工作區」，不做無狀態 web app 托管。
-2. **不做多主機高可用（現階段）** — 目前是**單主機優先**；多主機編排（Tailscale mesh、叢集）列為路線圖，但單主機永遠要是可運作的最低門檻。
-3. **不做虛擬機** — 容器隔離是核心；KVM/QEMU 不在藍圖內。
-4. **不做 GPU 之外的硬體加速抽象** — NVProxy 只涵蓋 NVIDIA；AMD/Intel GPU 暫不承諾。
-5. **不追新版本不追新技術** — 任何依賴升級必須有明確理由（安全 / 效能 / 必須功能），不為升級而升級。
-6. **不做無 SSO 的企業級身份整合** — LDAP/OIDC/2FA 列為可選路線圖項目，不做為基本承諾。
+That is network isolation taken to the extreme: each container lives in its own
+bubble, with the single controlled published port as the only entrance.
 
 ---
 
-## 成功指標（如何知道我們成功了）
+## Anti-Goals / Out of Scope
 
-- **資源利用率**：一台 8GB 主機能同時服務多個活躍且互相隔離的開發環境，閒置實例自動釋放資源。
-- **啟動延遲**：從「點擊啟動」到「瀏覽器進入介面」在秒級內完成（容器建立 + 路由熱載入）。
-- **穩定安全**：網路層東西向隔離、每實例獨立憑證、gVisor 沙箱可選——預設設定下無已知攻擊路徑。
-- **DX 門檻**：一個 `pnpm run docker:up` 就能從原始碼部署整套平台；新使用者不需要設定指南就能建立帳號並啟動第一個實例。
+A constitution must also define boundaries to prevent scope creep:
+
+1. **No generic PaaS** — we are not Heroku/Vercel; we focus on "interactive
+   development workspaces", not stateless web-app hosting.
+2. **No multi-host high availability (for now)** — currently **single-host
+   first**; multi-host orchestration (Tailscale mesh, clustering) is on the
+   roadmap, but a single host must always remain the viable minimum bar.
+3. **No virtual machines** — container isolation is the core; KVM/QEMU are not
+   in scope.
+4. **No hardware-acceleration abstraction beyond GPUs** — NVProxy covers NVIDIA
+   only; AMD/Intel GPUs are not yet promised.
+5. **No upgrades for their own sake** — any dependency bump must have a clear
+   reason (security / performance / required feature).
+6. **No enterprise identity integration without SSO** — LDAP/OIDC/2FA are
+   optional roadmap items, not baseline commitments.
 
 ---
 
-## 相關文件
+## Success Metrics (how we know we won)
 
-| 文件 | 內容 |
+- **Resource utilization**: one 8GB host can serve multiple active, mutually
+  isolated dev environments, with idle instances auto-releasing resources.
+- **Launch latency**: from "click launch" to "browser enters the interface" in
+  seconds (container creation + route hot reload).
+- **Stable & secure**: east-west isolation at the network layer, per-instance
+  credentials, optional gVisor sandbox — no known attack path under default
+  settings.
+- **DX bar**: one `pnpm run docker:up` deploys the whole platform from source; a
+  new user can create an account and launch their first instance without a
+  setup guide.
+
+---
+
+## Related docs
+
+| Document | Content |
 |---|---|
-| [tech-stack.md](docs/developer-guide/tech-stack.md) | 技術決策、部署與更新流程（憲法第二條） |
-| [roadmap.md](roadmap.md) | 階段與時程規劃（憲法第三條） |
-| [docs/user-guide/architecture.md](docs/user-guide/architecture.md) | 系統架構、路由、生命週期、DB schema |
-| [docs/user-guide/rbac.md](docs/user-guide/rbac.md) | 權限模型（群組制） |
+| [tech-stack.md](docs/developer-guide/tech-stack.md) | Technology decisions, deployment & update flow (constitution, article two) |
+| [roadmap.md](roadmap.md) | Phase and schedule planning (constitution, article three) |
+| [docs/user-guide/architecture.md](docs/user-guide/architecture.md) | System architecture, routing, lifecycle, DB schema |
+| [docs/user-guide/rbac.md](docs/user-guide/rbac.md) | Permission model (group-based) |
