@@ -127,7 +127,7 @@ That idle control plane fits on the N100, mini-PC, or lab server that's already 
 | | **OpenWorkspace-Engine** | Kasm Workspaces | Coder |
 |---|---|---|---|
 | **License** | **Apache 2.0** | Proprietary | AGPLv3 + Enterprise paywall |
-| **Concurrent sessions** | **Unlimited** (hardware bound) | Capped (Community Edition) | Unlimited (hardware bound) |
+| **Concurrent sessions** | **Unlimited** (hardware bound) | Capped at 5 (Community Edition) | Unlimited (hardware bound) |
 | **Enterprise feature lock** | **None** | Yes (paywalled features) | Yes (OIDC, audit logs, RBAC) |
 | **Commercial use** | **Permitted & welcomed** | Restricted in Community Edition | Restricted by AGPLv3 |
 
