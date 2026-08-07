@@ -49,15 +49,21 @@ Each launch mode in the videos below:
 
 ### Use persistent storage
 
-https://github.com/user-attachments/assets/fc8eaa27-0e2e-47d1-9e31-83a0bce57f26
+<video controls src="https://github.com/user-attachments/assets/fc8eaa27-0e2e-47d1-9e31-83a0bce57f26" width="100%">
+  Your browser does not support the video tag.
+</video>
 
 ### No persistent storage
 
-https://github.com/user-attachments/assets/b7d80d4b-cca1-4547-9d71-3b42ab85fa7f
+<video controls src="https://github.com/user-attachments/assets/b7d80d4b-cca1-4547-9d71-3b42ab85fa7f" width="100%">
+  Your browser does not support the video tag.
+</video>
 
 ### Reset persistent storage
 
-https://github.com/user-attachments/assets/0ad81cd9-5ced-4ae3-bc89-a65f98fe94c3
+<video controls src="https://github.com/user-attachments/assets/0ad81cd9-5ced-4ae3-bc89-a65f98fe94c3" width="100%">
+  Your browser does not support the video tag.
+</video>
 
 ## Stop, start, delete
 
