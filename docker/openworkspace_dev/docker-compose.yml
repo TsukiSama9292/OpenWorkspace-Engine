@@ -13,9 +13,6 @@ services:
     container_name: ow-dev-traefik
     <<: *default-opts
     command:
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--providers.docker.network=ow-network"
       - "--providers.file.directory=/etc/traefik/dynamic"
       - "--providers.file.watch=true"
       - "--entrypoints.web.address=:80"
@@ -31,7 +28,6 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway" # 💥 讓 Traefik 容器能連回宿主機的 3000 和 5173
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./traefik/dynamic:/etc/traefik/dynamic
 

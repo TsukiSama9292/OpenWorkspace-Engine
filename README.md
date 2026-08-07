@@ -112,7 +112,8 @@ A rough side-by-side for a single shared box. Only our own column is measured �
 |---|---|---|---|
 | **License** | **Apache 2.0** | Proprietary (free tier capped) | AGPLv3 + Enterprise paywall |
 | **Control plane specs** | **2 CPU / 500 MB / 40 GB recommended** — measured idle **~68 MB RAM** | 2 CPU / 4 GB / 50 GB | 2 CPU / 1 GB |
-| **Network isolation** | **Per-instance `/30` out of the box** — no L2/L3 lateral movement | Shared Docker bridge | Shared Docker bridge |
+| **Network isolation** | **Per-instance `/30` out of the box** — no L2/L3 lateral movement | Shared bridge (Docker) / K8s CNI | Shared bridge (Docker) / K8s CNI |
+| **Network QoS (bandwidth shaping)** | **Native kernel-level limits per template (`tc`/HTB)** — upload/download Mbps out of the box | None built-in — needs external firewall/gateway or CNI-level setup | None built-in — needs external firewall/gateway or CNI-level setup |
 | **Runtime switch** | **runC ↔ gVisor per template from the web UI** | Host/K8s level, manual | Host/K8s level, manual |
 | **Docker-in-instance** | **`_dini` templates out of the box** — sandboxed under gVisor, full-privilege under runC (explicit UI warning) | Typically requires `--privileged` | Typically requires `--privileged` |
 | **Proxy architecture** | **Traefik + inotify hot-reload (no Docker socket mounted)** | NGINX | Coder proxy (Go) |
@@ -327,7 +328,7 @@ This runs `kill-dev.sh` → creates the `ow-network` Docker network → starts T
 
    Set secrets via environment variables or a `.env` file next to the compose file: `JWT_SECRET` (change from default), `ADMIN_PASSWORD`, `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`.
 
-> **Note on tc/HTB bandwidth shaping:** applying per-instance bandwidth caps requires `nsenter`/`tc` capabilities on the host. Run `pnpm run network:allow` once to grant them, or disable bandwidth limits on templates to skip `tc` entirely. See [docs/developer-guide/development.md](docs/developer-guide/development.md).
+> **Note on tc/HTB bandwidth shaping (development only):** when the API runs on the host (`pnpm run dev`), the unprivileged process needs elevated `nsenter`/`tc` capabilities — `pnpm run dev` grants them automatically via `network:allow` (`sudo setcap`). The **production compose runs the API as root inside a container** with `SYS_ADMIN`/`NET_ADMIN`/`SYS_PTRACE` and `pid: host`, so **no host-side setcap is needed there**. Templates with `0` bandwidth limits skip `tc` entirely. See [docs/developer-guide/development.md](docs/developer-guide/development.md).
 
 ### HTTPS in Production
 

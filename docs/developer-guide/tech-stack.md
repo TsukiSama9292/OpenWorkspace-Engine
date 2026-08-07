@@ -317,8 +317,11 @@ changing `JWT_SECRET` forces every logged-in user to re-login; changing
   (`check.sh` / `run_tests.sh`).
 - **GPU is NVIDIA-only + specific architectures** — NVProxy supports
   Turing/Ampere/Ada/Hopper.
-- **tc/HTB needs root capabilities** — requires `network:allow` for
-  `nsenter`/`tc`; failures are fail-open (logged, session not killed).
+- **tc/HTB needs root capabilities** — the host-run dev API requires
+  `network:allow` (`sudo setcap` on `nsenter`/`tc`); the production container
+  gets them via `cap_add` (`SYS_ADMIN`/`NET_ADMIN`/`SYS_PTRACE`) + `pid: host`,
+  so no host-side grant is needed there. Failures are fail-open (logged, session
+  not killed).
 
 ---
 
