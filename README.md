@@ -111,7 +111,7 @@ A rough side-by-side for a single shared box. Only our own column is measured �
 | Dimension | **OpenWorkspace-Engine** | Kasm Workspaces | Coder (v2) |
 |---|---|---|---|
 | **License** | **Apache 2.0** | Proprietary (free tier capped) | AGPLv3 + Enterprise paywall |
-| **Control plane specs** | **2 CPU / 500 MB / 40 GB recommended** — measured idle **~68 MB RAM** | 2 CPU / 4 GB / 50 GB | 2 CPU / 1 GB |
+| **Control plane specs** | **2 CPU / 100+ MB / 40 GB recommended** — measured idle **~68 MB RAM** | 2 CPU / 4 GB / 50 GB | 2 CPU / 1 GB |
 | **Network isolation** | **Per-instance `/30` out of the box** — no L2/L3 lateral movement | Shared bridge (Docker) / K8s CNI | Shared bridge (Docker) / K8s CNI |
 | **Network QoS (bandwidth shaping)** | **Native kernel-level limits per template (`tc`/HTB)** — upload/download Mbps out of the box | None built-in — needs external firewall/gateway or CNI-level setup | None built-in — needs external firewall/gateway or CNI-level setup |
 | **Runtime switch** | **runC ↔ gVisor per template from the web UI** | Host/K8s level, manual | Host/K8s level, manual |
