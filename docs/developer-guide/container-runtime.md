@@ -10,16 +10,16 @@
 
 Each template can choose one of two runtimes (Template → Advanced → **Runtime**):
 
-- **`runC` (Docker, default)**: the standard OCI runtime. Best performance and
+- **`runc` (OCI default)**: the standard OCI runtime. Best performance and
   full GPU compatibility (including NVIDIA Container Toolkit passthrough). The
-  server-level `OW_CONTAINER_RUNTIME` defaults to `docker`, and a template
+  server-level `OW_CONTAINER_RUNTIME` defaults to `runc`, and a template
   without an explicit runtime falls back to the server value.
 - **`runsc` (gVisor, optional hardening)**: a user-space kernel (Sentry)
   intercepts syscalls, sharply reducing the container-escape surface, at the
   cost of performance.
 
 Runtime selection lives in `runtime_to_host_config()` in
-`apps/api/src/docker.rs`: an empty string / `docker` leaves the runtime unset
+`apps/api/src/docker.rs`: an empty string / `runc` leaves the runtime unset
 (Docker's default, runc); any other value is passed to Docker as
 `--runtime <name>`.
 

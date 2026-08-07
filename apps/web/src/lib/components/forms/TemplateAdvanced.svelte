@@ -58,10 +58,10 @@
     <label class="col-span-2 flex flex-col gap-1">
       <span class={spanClass}>Runtime</span>
       <select data-testid="runtime-select" bind:value={containerRuntime} class={inputClass}>
-        <option value="docker">runC (Docker)</option>
+        <option value="runc">runc (OCI default)</option>
         <option value="runsc">runsc (gVisor)</option>
       </select>
-      <span class="text-xs text-surface-400">runC (Docker): fast, GPU-compatible (default). runsc (gVisor): sandboxed, slower.</span>
+      <span class="text-xs text-surface-400">runc (OCI default): fast, GPU-compatible (default). runsc (gVisor): sandboxed, slower.</span>
     </label>
   </div>
 

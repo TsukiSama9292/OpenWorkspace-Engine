@@ -7,6 +7,8 @@ use tokio::time::MissedTickBehavior;
 
 use crate::db::{WorkspaceInstanceRepository, WorkspaceTemplateRepository};
 use crate::docker::{DockerService, RemoteType};
+use crate::metrics::MetricsStore;
+use crate::monitor::{MetricsSampler, SAMPLE_EVERY_TICKS};
 use crate::vnc_cache::VncCache;
 
 const PROBE_TIMEOUT_SECS: i64 = 120;
@@ -16,6 +18,7 @@ pub async fn run(
     docker: Arc<dyn DockerService>,
     vnc_cache: VncCache,
     host_gateway_ip: String,
+    metrics: Arc<MetricsStore>,
 ) {
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
@@ -26,8 +29,19 @@ pub async fn run(
     let mut interval = tokio::time::interval(Duration::from_secs(3));
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
+    let mut sampler = MetricsSampler::new();
+    let mut tick: u32 = 0;
+
     loop {
         interval.tick().await;
+
+        tick += 1;
+        if tick.is_multiple_of(SAMPLE_EVERY_TICKS) {
+            let active = sampler.sample_once(&db, &*docker, &metrics).await;
+            if !active.is_empty() {
+                tracing::debug!("Monitor sampled {} active instances", active.len());
+            }
+        }
 
         let instance_repo = WorkspaceInstanceRepository::new(&db);
         let template_repo = WorkspaceTemplateRepository::new(&db);

@@ -45,14 +45,14 @@ INSTANCE_IDS=()
 STACK_UP=0
 
 # Instance matrix: "template_name|remote_type|image|runtime_value|runtime_label"
-# runtime_value is the API's container_runtime field; "docker" maps to runC.
+# runtime_value is the API's container_runtime field; "runc" maps to runC.
 MATRIX=(
     "bench-runsc-kasmvnc|kasmvnc|tsukisama9292/ow-kasmvnc-ubuntu-dini:jammy|runsc|runsc"
-    "bench-runc-kasmvnc|kasmvnc|tsukisama9292/ow-kasmvnc-ubuntu-dini:jammy|docker|runc"
+    "bench-runc-kasmvnc|kasmvnc|tsukisama9292/ow-kasmvnc-ubuntu-dini:jammy|runc|runc"
     "bench-runsc-ttyd|ttyd|tsukisama9292/ow-ttyd-ubuntu-dini:jammy|runsc|runsc"
-    "bench-runc-ttyd|ttyd|tsukisama9292/ow-ttyd-ubuntu-dini:jammy|docker|runc"
+    "bench-runc-ttyd|ttyd|tsukisama9292/ow-ttyd-ubuntu-dini:jammy|runc|runc"
     "bench-runsc-jupyter|jupyter|tsukisama9292/ow-jupyter-ubuntu-dini:jammy|runsc|runsc"
-    "bench-runc-jupyter|jupyter|tsukisama9292/ow-jupyter-ubuntu-dini:jammy|docker|runc"
+    "bench-runc-jupyter|jupyter|tsukisama9292/ow-jupyter-ubuntu-dini:jammy|runc|runc"
 )
 PLATFORM_CONTAINERS="ow-traefik ow-postgres ow-web ow-api"
 

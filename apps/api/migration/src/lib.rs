@@ -22,6 +22,8 @@ mod m20260803_000018_add_flat_rbac_tables;
 mod m20260803_000019_drop_legacy_contract;
 mod m20260803_000020_add_system_groups_and_drop_personal_contract;
 mod m20260803_000021_add_template_visibility;
+mod m20260803_000022_add_can_view_monitoring;
+mod m20260807_000023_rename_runtime_value_to_runc;
 
 pub struct Migrator;
 
@@ -50,6 +52,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260803_000019_drop_legacy_contract::Migration),
             Box::new(m20260803_000020_add_system_groups_and_drop_personal_contract::Migration),
             Box::new(m20260803_000021_add_template_visibility::Migration),
+            Box::new(m20260803_000022_add_can_view_monitoring::Migration),
+            Box::new(m20260807_000023_rename_runtime_value_to_runc::Migration),
         ]
     }
 }

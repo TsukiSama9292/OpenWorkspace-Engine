@@ -154,7 +154,7 @@ fn default_remote_type() -> String {
     "kasmvnc".to_string()
 }
 fn default_container_runtime() -> String {
-    "docker".to_string()
+    "runc".to_string()
 }
 fn default_timeout_action() -> String {
     "remove".to_string()

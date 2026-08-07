@@ -20,7 +20,8 @@ function context(overrides: Partial<EffectiveContext> = {}): EffectiveContext {
   return {
     user_id: 'me',
     username: 'me',
-    is_admin: false, tier: 0,
+    is_admin: false,
+    tier: 0,
     can_create_template: false,
     can_manage_users: false,
     can_manage_group_instances: false,
@@ -49,7 +50,14 @@ async function expandSidebar() {
   await fireEvent.mouseEnter(sidebar);
 }
 
-describe('orphaned-volumes nav entry', () => {
+async function renderExpanded(ctx: EffectiveContext) {
+  stubContext(ctx);
+  await auth.check();
+  render(Page);
+  await expandSidebar();
+}
+
+describe('monitor nav entry', () => {
   beforeEach(async () => {
     await auth.logout();
     mockApi.get.mockReset();
@@ -61,52 +69,31 @@ describe('orphaned-volumes nav entry', () => {
     vi.clearAllMocks();
   });
 
-  it('shows no Volumes entry for a plain user', async () => {
-    stubContext(context());
-    await auth.check();
-
-    render(Page);
-    await expandSidebar();
-
+  it('shows no Monitor entry for a plain user', async () => {
+    renderExpanded(context());
     await waitFor(() => {
-      expect(screen.queryByText('Volumes')).toBeNull();
-    });
-    expect(screen.getAllByText('Instances').length).toBeGreaterThan(0);
-  });
-
-  it('shows no Volumes entry for a group-instance manager who lacks the volumes permission', async () => {
-    stubContext(context({ can_manage_group_instances: true }));
-    await auth.check();
-
-    render(Page);
-    await expandSidebar();
-
-    await waitFor(() => {
-      expect(screen.queryByText('Volumes')).toBeNull();
+      expect(screen.queryByText('Monitor')).toBeNull();
     });
   });
 
-  it('shows the Volumes entry for a can_manage_users holder', async () => {
-    stubContext(context({ can_manage_users: true }));
-    await auth.check();
-
-    render(Page);
-    await expandSidebar();
-
+  it('shows no Monitor entry for a permission holder without the monitoring flag', async () => {
+    renderExpanded(context({ can_manage_users: true }));
     await waitFor(() => {
-      expect(screen.getByText('Volumes')).toBeTruthy();
+      expect(screen.queryByText('Monitor')).toBeNull();
     });
   });
 
-  it('shows the Volumes entry for a system admin', async () => {
-    stubContext(context({ is_admin: true, tier: 2 }));
-    await auth.check();
-
-    render(Page);
-    await expandSidebar();
-
+  it('shows the Monitor entry for a can_view_monitoring holder who is not an admin', async () => {
+    renderExpanded(context({ can_view_monitoring: true }));
     await waitFor(() => {
-      expect(screen.getByText('Volumes')).toBeTruthy();
+      expect(screen.getByText('Monitor')).toBeTruthy();
+    });
+  });
+
+  it('shows the Monitor entry for a system admin', async () => {
+    renderExpanded(context({ is_admin: true, tier: 2 }));
+    await waitFor(() => {
+      expect(screen.getByText('Monitor')).toBeTruthy();
     });
   });
 });

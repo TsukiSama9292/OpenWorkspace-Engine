@@ -5,7 +5,7 @@
 OpenWorkspace uses a **flat, group-based RBAC model**. There is no role hierarchy
 and no per-user role column. Instead:
 
-- Permissions live on **groups**. A group carries five boolean permission flags,
+- Permissions live on **groups**. A group carries six boolean permission flags,
   a per-group instance ceiling, and a template whitelist.
 - Users **belong to any number of groups**. Their effective permissions are the
   union (highest value wins) of everything their groups grant, plus an optional
@@ -33,8 +33,9 @@ effective ceiling and the global host ceiling.
 A group is a policy container with:
 
 - a **name** and description (names are cosmetic — identity is by `kind`);
-- five **permission flags**: `can_create_template`, `can_manage_users`,
-  `can_manage_group_instances`, `can_manage_docker`, `can_manage_registry`;
+- six **permission flags**: `can_create_template`, `can_manage_users`,
+  `can_manage_group_instances`, `can_manage_docker`, `can_manage_registry`,
+  `can_view_monitoring`;
 - a group **`max_instances`** ceiling (NULL/0 = unlimited);
 - a **template whitelist** (the set of templates members may launch).
 
@@ -74,9 +75,9 @@ ordinary custom groups and are allowed.
 
 | System group | `kind` | Permission flags | Default ceiling | Rules |
 |---|---|---|---|---|
-| **Admin** | `admin` | all five **TRUE**, fixed | unlimited (NULL) | cannot be renamed or deleted; flags fixed; ceiling editable by an admin |
-| **Manager** | `manager` | all five **TRUE** on seed, editable | 2 | cannot be renamed or deleted; flags editable by an admin; ceiling editable |
-| **User** | `user` | all five **FALSE**, fixed | 1 | cannot be renamed or deleted; flags fixed; ceiling editable |
+| **Admin** | `admin` | all six **TRUE**, fixed | unlimited (NULL) | cannot be renamed or deleted; flags fixed; ceiling editable by an admin |
+| **Manager** | `manager` | all six **TRUE** on seed, editable | 2 | cannot be renamed or deleted; flags editable by an admin; ceiling editable |
+| **User** | `user` | all six **FALSE**, fixed | 1 | cannot be renamed or deleted; flags fixed; ceiling editable |
 
 Membership in the **Admin** group is what makes a user an admin (`is_admin`).
 The seeded `admin` account is a member of it.
@@ -124,6 +125,7 @@ Tier guardrails are enforced on top of the flags, in the API layer:
 | | Create / edit / delete | admin only |
 | **Registry** | Manage (view / sync / set URL) | `can_manage_registry` (admin included) |
 | **Docker** | Raw container surface (list / create) | `can_manage_docker` (admin included) |
+| **Monitor** | View host and instance resource usage | `can_view_monitoring` (admin included); Admin and Manager groups carry it by default, User off |
 | **Persistent volumes** | View orphans / thorough cleanup | `can_manage_users` (admin included), never scoped by group |
 | **System settings** | Read / update (e.g. host ceiling) | admin only |
 

@@ -25,6 +25,7 @@ function context(overrides: Partial<EffectiveContext> = {}): EffectiveContext {
     can_manage_group_instances: false,
     can_manage_docker: false,
     can_manage_registry: false,
+    can_view_monitoring: false,
     effective_max_instances: 4,
     allowed_template_ids: [],
     group_ids: [],
@@ -46,7 +47,7 @@ function template(overrides: Partial<Template> = {}): Template {
     docker_registry: '',
     remote_type: 'kasmvnc',
     persistent_storage_path: '',
-    container_runtime: 'docker',
+    container_runtime: 'runc',
     max_run_seconds: null,
     timeout_action: 'remove',
     keep_time_seconds: null,
@@ -74,6 +75,7 @@ const group: Group = {
   can_manage_group_instances: true,
   can_manage_docker: true,
   can_manage_registry: true,
+  can_view_monitoring: true,
   max_instances: 2,
   template_ids: ['t1']
 };
@@ -160,6 +162,7 @@ describe('GroupPanel', () => {
         can_manage_group_instances: false,
         can_manage_docker: false,
         can_manage_registry: true,
+        can_view_monitoring: false,
         max_instances: 5,
         template_ids: ['t1', 't2']
       });

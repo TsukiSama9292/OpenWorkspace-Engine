@@ -285,6 +285,7 @@ pub mod group {
         pub can_manage_group_instances: bool,
         pub can_manage_docker: bool,
         pub can_manage_registry: bool,
+        pub can_view_monitoring: bool,
         /// `None` (NULL) means "unlimited" (the Admin group's ceiling).
         pub max_instances: Option<i32>,
         pub created_at: DateTimeUtc,
@@ -775,6 +776,7 @@ pub struct GroupRecord {
     pub can_manage_group_instances: bool,
     pub can_manage_docker: bool,
     pub can_manage_registry: bool,
+    pub can_view_monitoring: bool,
     pub max_instances: Option<i32>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -802,6 +804,7 @@ impl<'a> GroupRepository<'a> {
             can_manage_group_instances: m.can_manage_group_instances,
             can_manage_docker: m.can_manage_docker,
             can_manage_registry: m.can_manage_registry,
+            can_view_monitoring: m.can_view_monitoring,
             max_instances: m.max_instances,
             created_at: m.created_at,
             updated_at: m.updated_at,
@@ -848,6 +851,7 @@ impl<'a> GroupRepository<'a> {
         can_manage_group_instances: bool,
         can_manage_docker: bool,
         can_manage_registry: bool,
+        can_view_monitoring: bool,
         max_instances: i32,
     ) -> Result<Uuid, sea_orm::DbErr> {
         let id = Uuid::new_v4();
@@ -861,6 +865,7 @@ impl<'a> GroupRepository<'a> {
             can_manage_group_instances: Set(can_manage_group_instances),
             can_manage_docker: Set(can_manage_docker),
             can_manage_registry: Set(can_manage_registry),
+            can_view_monitoring: Set(can_view_monitoring),
             max_instances: Set(Some(max_instances)),
             ..Default::default()
         };
@@ -878,6 +883,7 @@ impl<'a> GroupRepository<'a> {
         can_manage_group_instances: bool,
         can_manage_docker: bool,
         can_manage_registry: bool,
+        can_view_monitoring: bool,
         max_instances: Option<i32>,
     ) -> Result<bool, sea_orm::DbErr> {
         let result = group::Entity::update(group::ActiveModel {
@@ -889,6 +895,7 @@ impl<'a> GroupRepository<'a> {
             can_manage_group_instances: Set(can_manage_group_instances),
             can_manage_docker: Set(can_manage_docker),
             can_manage_registry: Set(can_manage_registry),
+            can_view_monitoring: Set(can_view_monitoring),
             max_instances: Set(max_instances),
             ..Default::default()
         })
@@ -1264,6 +1271,23 @@ impl<'a> WorkspaceInstanceRepository<'a> {
     pub async fn list_by_status(&self, status: &str) -> Result<Vec<WorkspaceInstance>, sea_orm::DbErr> {
         let models = workspace_instance::Entity::find()
             .filter(workspace_instance::Column::Status.eq(status))
+            .order_by_asc(workspace_instance::Column::CreatedAt)
+            .all(self.db)
+            .await?;
+        Ok(models.into_iter().map(|m| m.into()).collect())
+    }
+
+    /// The Monitor-dashboard active set: instances the sampler should read
+    /// stats for and the snapshot endpoint should list (`running` / `starting`
+    /// / `paused`). `stopped` / `error` instances are excluded.
+    pub async fn list_active_for_monitoring(
+        &self,
+    ) -> Result<Vec<WorkspaceInstance>, sea_orm::DbErr> {
+        let models = workspace_instance::Entity::find()
+            .filter(
+                workspace_instance::Column::Status
+                    .is_in(["running", "starting", "paused"]),
+            )
             .order_by_asc(workspace_instance::Column::CreatedAt)
             .all(self.db)
             .await?;
@@ -1723,6 +1747,7 @@ impl<'a> PolicyRepository<'a> {
                 can_manage_group_instances: g.can_manage_group_instances,
                 can_manage_docker: g.can_manage_docker,
                 can_manage_registry: g.can_manage_registry,
+                can_view_monitoring: g.can_view_monitoring,
             })
             .collect();
 

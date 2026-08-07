@@ -1,5 +1,6 @@
-//! OpenAPI generation for the 17 safe endpoints (security-fuzzing spec,
-//! `.scratch/security-fuzzing/`). The spec is export-only: `ApiDoc::openapi()`
+//! OpenAPI generation for the 17 safe endpoints plus the admin-gated Monitor
+//! snapshot (`.scratch/security-fuzzing/`, `.scratch/monitor-dashboard/`). The
+//! spec is export-only: `ApiDoc::openapi()`
 //! is built from the handler annotations and serialized by the
 //! `export_openapi` binary into the committed `security/openapi.json`. Nothing
 //! here is ever served at runtime — there is no `/api/openapi.json` route.
@@ -42,10 +43,11 @@ use crate::system_settings::SystemSettings;
         crate::routes::workspace::docker_raw::list_docker_containers,
         crate::routes::workspace::persistent_volumes::list_persistent_volumes,
         crate::routes::admin_settings::get_settings,
+        crate::routes::monitor::snapshot,
     ),
     info(
         title = "OpenWorkspace API — security fuzz surface",
-        description = "OpenAPI spec for the 17 security-fuzzable endpoints (see .scratch/security-fuzzing). The 8 admin-gated operations are tagged `admin-gated` for the low-privilege RBAC-boundary pass. The spec is export-only and never served.",
+        description = "OpenAPI spec for the 17 security-fuzzable endpoints plus the admin-gated Monitor snapshot (see .scratch/security-fuzzing, .scratch/monitor-dashboard). Admin-gated operations are tagged `admin-gated` for the low-privilege RBAC-boundary pass. The spec is export-only and never served.",
         version = "1.0.0",
     )
 )]
@@ -198,6 +200,7 @@ pub struct GroupSchema {
     pub can_manage_group_instances: bool,
     pub can_manage_docker: bool,
     pub can_manage_registry: bool,
+    pub can_view_monitoring: bool,
     pub max_instances: Option<i32>,
     pub template_ids: Vec<Uuid>,
 }
@@ -241,6 +244,14 @@ pub struct VolumesEnvelope {
     pub volumes: Vec<VolumeSchema>,
 }
 
+/// Documentation-only envelope for the Monitor snapshot (the handler returns
+/// `Json<serde_json::Value>`; this schema describes its JSON shape).
+#[derive(utoipa::ToSchema)]
+pub struct MonitorSnapshotEnvelope {
+    pub host: serde_json::Value,
+    pub instances: Vec<serde_json::Value>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,12 +278,12 @@ mod tests {
         );
     }
 
-    /// Every annotated operation is present in the exported spec, and the 8
+    /// Every annotated operation is present in the exported spec, and the 9
     /// admin-gated operations carry the `admin-gated` tag the Pass-2 custom
     /// check relies on. Guards against a handler being annotated but not
     /// registered in `ApiDoc` (or losing its tag).
     #[test]
-    fn export_covers_all_17_safe_endpoints() {
+    fn export_covers_all_safe_endpoints() {
         let doc = ApiDoc::openapi();
         let paths = doc.paths.paths;
         let assert_path = |path: &str| {
@@ -295,6 +306,7 @@ mod tests {
         assert_path("/api/docker/containers");
         assert_path("/api/persistent-volumes");
         assert_path("/api/admin/settings");
+        assert_path("/api/monitor/snapshot");
 
         for admin_path in [
             "/api/users",
@@ -305,6 +317,7 @@ mod tests {
             "/api/docker/containers",
             "/api/persistent-volumes",
             "/api/admin/settings",
+            "/api/monitor/snapshot",
         ] {
             let op = paths
                 .get(admin_path)

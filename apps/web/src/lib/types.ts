@@ -100,6 +100,7 @@ export interface EffectiveContext {
   can_manage_group_instances: boolean;
   can_manage_docker: boolean;
   can_manage_registry: boolean;
+  can_view_monitoring: boolean;
   effective_max_instances: number;
   allowed_template_ids: string[];
   group_ids: string[];
@@ -120,6 +121,7 @@ export interface Group {
   can_manage_group_instances: boolean;
   can_manage_docker: boolean;
   can_manage_registry: boolean;
+  can_view_monitoring: boolean;
   max_instances: number | null;
   template_ids: string[];
 }
@@ -152,4 +154,37 @@ export interface ApiResult<T> {
   error?: string;
   status?: number;
   rejection?: PreflightRejection;
+}
+
+export type MonitorRange = '1h' | '24h';
+
+export interface MonitorHost {
+  cpu_percent: number;
+  mem_used_bytes: number;
+  mem_total_bytes: number;
+  disk_used_bytes: number;
+  disk_total_bytes: number;
+  cpu_series: number[];
+  mem_series: number[];
+  disk_series: number[];
+}
+
+export interface MonitorInstance {
+  id: string;
+  name: string;
+  owner: string;
+  template: string;
+  runtime: string;
+  status: Instance['status'];
+  uptime_secs: number | null;
+  cpu_percent: number;
+  mem_used_bytes: number;
+  mem_limit_bytes: number;
+  cpu_series: number[];
+  mem_series: number[];
+}
+
+export interface MonitorSnapshot {
+  host: MonitorHost;
+  instances: MonitorInstance[];
 }

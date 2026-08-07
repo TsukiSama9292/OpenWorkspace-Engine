@@ -37,6 +37,10 @@ impl AuthUser {
     pub fn can_manage_registry(&self) -> bool {
         self.is_admin() || self.context.can_manage_registry
     }
+
+    pub fn can_view_monitoring(&self) -> bool {
+        self.is_admin() || self.context.can_view_monitoring
+    }
 }
 
 /// Identity-only JWT claims: the user id and the expiry. The token never
@@ -144,6 +148,7 @@ mod tests {
         can_manage_group_instances: bool,
         can_manage_docker: bool,
         can_manage_registry: bool,
+        can_view_monitoring: bool,
     ) -> AuthUser {
         AuthUser {
             user_id: Uuid::new_v4(),
@@ -158,6 +163,7 @@ mod tests {
                 can_manage_group_instances,
                 can_manage_docker,
                 can_manage_registry,
+                can_view_monitoring,
                 effective_max_instances: 2,
                 allowed_template_ids: vec![],
                 group_ids: vec![],
@@ -168,29 +174,32 @@ mod tests {
 
     #[test]
     fn test_is_admin_backed_by_context_flag() {
-        assert!(auth_user(true, false, false, false, false, false).is_admin());
-        assert!(!auth_user(false, false, false, false, false, false).is_admin());
+        assert!(auth_user(true, false, false, false, false, false, false).is_admin());
+        assert!(!auth_user(false, false, false, false, false, false, false).is_admin());
     }
 
     #[test]
     fn test_compat_gates_reflect_context_flags() {
-        let manager = auth_user(false, true, true, true, true, true);
+        let manager = auth_user(false, true, true, true, true, true, true);
         assert!(manager.can_manage_users());
         assert!(manager.can_manage_docker());
         assert!(manager.can_manage_registry());
+        assert!(manager.can_view_monitoring());
 
-        let plain = auth_user(false, false, false, false, false, false);
+        let plain = auth_user(false, false, false, false, false, false, false);
         assert!(!plain.can_manage_users());
         assert!(!plain.can_manage_docker());
         assert!(!plain.can_manage_registry());
+        assert!(!plain.can_view_monitoring());
     }
 
     #[test]
     fn test_admin_bypasses_every_gate() {
-        let admin = auth_user(true, false, false, false, false, false);
+        let admin = auth_user(true, false, false, false, false, false, false);
         assert!(admin.can_manage_users());
         assert!(admin.can_manage_docker());
         assert!(admin.can_manage_registry());
+        assert!(admin.can_view_monitoring());
     }
 
     #[test]

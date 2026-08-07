@@ -4,7 +4,8 @@ import {
   mayLaunchTemplate,
   mayManageUsers,
   mayCreateTemplate,
-  mayEditTemplate
+  mayEditTemplate,
+  mayViewMonitoring
 } from '$lib/permissions';
 import type { EffectiveContext, Instance, Template } from '$lib/types';
 
@@ -19,6 +20,7 @@ function context(overrides: Partial<EffectiveContext> = {}): EffectiveContext {
     can_manage_group_instances: false,
     can_manage_docker: false,
     can_manage_registry: false,
+    can_view_monitoring: false,
     effective_max_instances: 4,
     allowed_template_ids: ['t1', 't2'],
     group_ids: ['g1'],
@@ -61,7 +63,7 @@ function template(overrides: Partial<Template> = {}): Template {
     docker_registry: '',
     remote_type: 'kasmvnc',
     persistent_storage_path: '',
-    container_runtime: 'docker',
+    container_runtime: 'runc',
     max_run_seconds: null,
     timeout_action: 'remove',
     keep_time_seconds: null,
@@ -216,5 +218,14 @@ describe('mayEditTemplate', () => {
 
   it('returns false without an authenticated context', () => {
     expect(mayEditTemplate(null, template({ owner_id: 'me' }))).toBe(false);
+  });
+});
+
+describe('mayViewMonitoring', () => {
+  it('is true for a can_view_monitoring holder and the system admin', () => {
+    expect(mayViewMonitoring(context({ can_view_monitoring: true }))).toBe(true);
+    expect(mayViewMonitoring(context({ is_admin: true, tier: 2 }))).toBe(true);
+    expect(mayViewMonitoring(context())).toBe(false);
+    expect(mayViewMonitoring(null)).toBe(false);
   });
 });

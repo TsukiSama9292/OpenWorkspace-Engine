@@ -9,6 +9,7 @@ import {
   canManageGroupInstances,
   canManageDocker,
   canManageRegistry,
+  canViewMonitoring,
   effectiveMaxInstances,
   allowedTemplateIds
 } from '$lib/stores/auth';
@@ -35,6 +36,7 @@ function context(overrides: Partial<EffectiveContext> = {}): EffectiveContext {
     can_manage_group_instances: false,
     can_manage_docker: false,
     can_manage_registry: false,
+    can_view_monitoring: false,
     effective_max_instances: 4,
     allowed_template_ids: ['t1', 't2'],
     group_ids: ['g1'],
@@ -58,6 +60,7 @@ describe('auth store', () => {
     expect(get(canManageGroupInstances)).toBe(false);
     expect(get(canManageDocker)).toBe(false);
     expect(get(canManageRegistry)).toBe(false);
+    expect(get(canViewMonitoring)).toBe(false);
     expect(get(effectiveMaxInstances)).toBe(0);
     expect(get(allowedTemplateIds)).toEqual([]);
   });
@@ -118,6 +121,7 @@ describe('auth store', () => {
     expect(get(canManageGroupInstances)).toBe(false);
     expect(get(canManageDocker)).toBe(false);
     expect(get(canManageRegistry)).toBe(false);
+    expect(get(canViewMonitoring)).toBe(false);
     expect(get(isAdmin)).toBe(false);
   });
 
@@ -131,6 +135,7 @@ describe('auth store', () => {
     expect(get(canManageGroupInstances)).toBe(true);
     expect(get(canManageDocker)).toBe(true);
     expect(get(canManageRegistry)).toBe(true);
+    expect(get(canViewMonitoring)).toBe(true);
   });
 
   it('derives effective_max_instances and the allowed template ids', async () => {

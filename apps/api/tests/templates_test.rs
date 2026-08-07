@@ -451,7 +451,7 @@ async fn test_template_to_json_fields_in_response() {
     assert_eq!(cfg["memory"], 8192);
     assert_eq!(cfg["gpu_count"], 1);
     assert_eq!(cfg["docker_registry"], "myreg.io");
-    assert_eq!(cfg["container_runtime"], "runsc");
+    assert_eq!(cfg["container_runtime"], "runc");
     assert_eq!(cfg["run_config"]["key"], "val");
     assert_eq!(cfg["exec_config"]["cmd"], true);
     assert_eq!(cfg["volume_mappings"]["/h"], "/c");
@@ -524,7 +524,7 @@ async fn test_create_template_default_container_runtime() {
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["template"]["container_runtime"], "runsc");
+    assert_eq!(body["template"]["container_runtime"], "runc");
 }
 
 #[tokio::test]

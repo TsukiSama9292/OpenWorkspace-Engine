@@ -29,6 +29,7 @@ management and admin pages appear only if your group grants the permission
 | **Volumes** | Orphaned persistent data, with a double-confirmed thorough cleanup | User managers and admins |
 | **Groups** | Group management and template whitelists | Admins |
 | **Users** | User accounts, group memberships, and personal ceilings | User managers and admins |
+| **Monitor** | Host CPU/RAM/disk and per-instance resource usage with sparklines | Groups with the monitoring flag (see [RBAC](rbac.md)) |
 | **Settings** | Server-wide options (e.g. the host instance limit) | Admins |
 
 ## Launching a session
@@ -65,6 +66,25 @@ actions available in that state:
   refreshed, so an active viewer never gets reclaimed.
 - Your session's address is unique and stable across stops and restarts — you
   can bookmark it.
+
+## Monitoring the host
+
+The **Monitor** page (for admins and groups granted the monitoring flag) answers
+"what is happening on the box right now":
+
+- Three **host cards** — CPU, RAM, Disk — show the current value and a 1-hour
+  sparkline of its history, so a transient spike is easy to tell from a
+  sustained climb.
+- An **Active Instances** table lists every running / starting / paused session
+  with its owner, template, runtime, uptime, and live CPU % / RAM usage (each
+  with a sparkline). Paused (auto-slept) sessions are greyed out with a
+  `[paused]` badge; stopped and failed sessions are not listed. Columns can be
+  sorted (e.g. by RAM) to find the worst offender.
+- A **1h / 24h** toggle switches between the recent fine-grained history and an
+  all-day coarse-grained view, so slow memory growth or a sustained CPU load
+  shows up. The page refreshes itself while open.
+- Granting or revoking the flag is done per group in the group editor (see
+  [RBAC](rbac.md)).
 
 ## Related docs
 

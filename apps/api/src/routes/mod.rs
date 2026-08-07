@@ -1,6 +1,7 @@
 pub(crate) mod admin_settings;
 pub(crate) mod auth;
 pub(crate) mod groups;
+pub(crate) mod monitor;
 pub(crate) mod proxy;
 pub(crate) mod users;
 pub(crate) mod workspace;
@@ -12,6 +13,7 @@ use std::sync::Arc;
 
 use crate::core::Settings;
 use crate::docker::DockerService;
+use crate::metrics::MetricsStore;
 use crate::openapi::HealthResponse;
 use crate::vnc_cache::VncCache;
 
@@ -21,6 +23,7 @@ pub struct AppState {
     pub docker: Arc<dyn DockerService>,
     pub vnc_cache: VncCache,
     pub settings: Settings,
+    pub metrics: Arc<MetricsStore>,
 }
 
 /// Liveness probe. Part of the fuzz surface, so it is a named handler with an
@@ -46,4 +49,5 @@ pub fn api_routes() -> Router<AppState> {
         .merge(admin_settings::routes())
         .merge(workspace::routes())
         .merge(proxy::routes())
+        .merge(monitor::routes())
 }

@@ -22,6 +22,7 @@ function context(overrides: Partial<EffectiveContext> = {}): EffectiveContext {
     can_manage_group_instances: false,
     can_manage_docker: false,
     can_manage_registry: false,
+    can_view_monitoring: false,
     effective_max_instances: 4,
     allowed_template_ids: [],
     group_ids: [],

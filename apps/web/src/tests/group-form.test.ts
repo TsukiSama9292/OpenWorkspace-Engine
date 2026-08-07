@@ -32,6 +32,7 @@ const group: Group = {
   can_manage_group_instances: true,
   can_manage_docker: true,
   can_manage_registry: true,
+  can_view_monitoring: true,
   max_instances: 2,
   template_ids: ['t1']
 };
@@ -79,6 +80,7 @@ describe('group form', () => {
         can_manage_group_instances: true,
         can_manage_docker: true,
         can_manage_registry: true,
+        can_view_monitoring: true,
         max_instances: 2,
         template_ids: ['t1']
       });
@@ -114,6 +116,7 @@ describe('group form', () => {
       });
       expect(adminInput.can_manage_docker).toBe(true);
       expect(adminInput.can_manage_registry).toBe(true);
+      expect(adminInput.can_view_monitoring).toBe(true);
 
       const userInput = buildGroupInput({
         ...groupFormFromGroup({ ...group, kind: 'user' }),
@@ -122,6 +125,7 @@ describe('group form', () => {
       });
       expect(userInput.can_create_template).toBe(false);
       expect(userInput.can_manage_users).toBe(false);
+      expect(userInput.can_view_monitoring).toBe(false);
     });
 
     it('does not force Manager or custom group flags', () => {

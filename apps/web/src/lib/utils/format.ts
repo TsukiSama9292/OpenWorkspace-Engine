@@ -4,6 +4,36 @@ export function formatMemory(bytes: number | null | undefined): string {
   return gb >= 1 ? `${gb} GB` : `${bytes / (1024 * 1024)} MB`;
 }
 
+export function formatBytes(bytes: number | null | undefined): string {
+  if (!bytes || bytes <= 0) return '—';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${Number.isInteger(value) ? value : value.toFixed(1)} ${units[unit]}`;
+}
+
+export function formatPercent(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return '—';
+  return `${Math.round(value)}%`;
+}
+
+export function formatUptime(secs: number | null | undefined): string {
+  if (secs == null || secs < 0) return '—';
+  const s = Math.floor(secs);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const rest = s % 60;
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${rest}s`;
+  return `${rest}s`;
+}
+
 export interface EnvVar {
   key: string;
   value: string;

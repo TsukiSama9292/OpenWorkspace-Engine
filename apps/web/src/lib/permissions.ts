@@ -66,6 +66,10 @@ export function mayCreateTemplate(ctx: PermissionContext): boolean {
   return ctx !== null && (ctx.is_admin || ctx.can_create_template);
 }
 
+export function mayViewMonitoring(ctx: PermissionContext): boolean {
+  return ctx !== null && (ctx.is_admin || ctx.can_view_monitoring);
+}
+
 export function mayEditTemplate(ctx: PermissionContext, template: Template): boolean {
   if (!ctx) return false;
   if (ctx.is_admin) return true;

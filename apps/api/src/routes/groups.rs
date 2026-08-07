@@ -42,6 +42,8 @@ struct GroupInput {
     can_manage_docker: bool,
     #[serde(default)]
     can_manage_registry: bool,
+    #[serde(default)]
+    can_view_monitoring: bool,
     #[serde(default = "default_max_instances")]
     max_instances: i32,
     #[serde(default)]
@@ -60,6 +62,7 @@ fn group_to_json(group: &GroupRecord, template_ids: &[Uuid]) -> serde_json::Valu
         "can_manage_group_instances": group.can_manage_group_instances,
         "can_manage_docker": group.can_manage_docker,
         "can_manage_registry": group.can_manage_registry,
+        "can_view_monitoring": group.can_view_monitoring,
         "max_instances": group.max_instances,
         "template_ids": template_ids,
     })
@@ -172,6 +175,7 @@ async fn create_group(
             input.can_manage_group_instances,
             input.can_manage_docker,
             input.can_manage_registry,
+            input.can_view_monitoring,
             input.max_instances,
         )
         .await
@@ -229,16 +233,17 @@ async fn update_group(
     // System-group permission flags are fixed: Admin always all-on, User always
     // all-off. `max_instances` stays editable for all three. Custom groups
     // (kind NULL) take the payload verbatim.
-    let (can_create_template, can_manage_users, can_manage_group_instances, can_manage_docker, can_manage_registry) =
+    let (can_create_template, can_manage_users, can_manage_group_instances, can_manage_docker, can_manage_registry, can_view_monitoring) =
         match existing.kind.as_deref() {
-            Some("admin") => (true, true, true, true, true),
-            Some("user") => (false, false, false, false, false),
+            Some("admin") => (true, true, true, true, true, true),
+            Some("user") => (false, false, false, false, false, false),
             _ => (
                 input.can_create_template,
                 input.can_manage_users,
                 input.can_manage_group_instances,
                 input.can_manage_docker,
                 input.can_manage_registry,
+                input.can_view_monitoring,
             ),
         };
 
@@ -252,6 +257,7 @@ async fn update_group(
             can_manage_group_instances,
             can_manage_docker,
             can_manage_registry,
+            can_view_monitoring,
             Some(input.max_instances),
         )
         .await

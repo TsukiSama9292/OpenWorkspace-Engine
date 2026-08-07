@@ -58,7 +58,7 @@ OpenWorkspace-Engine/
 │   └── base_images/          # shared base images
 ├── docs/                 # user guide + developer guide
 ├── references_repo/      # upstream sources (KasmVNC, gVisor, Docker docs)
-├── apps/api/migration/   # sqlx migrations (000001–000021)
+├── apps/api/migration/   # sqlx migrations (000001–000023)
 └── package.json          # turbo orchestration + dev scripts
 ```
 
@@ -77,7 +77,7 @@ apps/api/
 │   ├── network_qos.rs        # tc/HTB arg builders + veth matcher (pure, unit-tested)
 │   ├── health_worker.rs      # probe / auto-sleep / keep-time worker (3s tick)
 │   └── vnc_cache.rs          # DashMap access_token → {status}
-├── migration/src/            # sqlx migrations (000001–000021)
+├── migration/src/            # sqlx migrations (000001–000023)
 ├── scripts/                  # check.sh, run_tests.sh, create_test_pg.sh
 └── tests/                    # integration tests (nextest, --features docker)
 ```
@@ -93,7 +93,7 @@ All variables are read via `core/settings.rs` (`Settings::from_env`). Only `DATA
 | `ADMIN_PASSWORD` | `admin` | Bootstrap password for the seeded admin user |
 | `SERVER_HOST` / `SERVER_PORT` | `0.0.0.0` / `3000` | API bind address |
 | `DB_MAX_CONNECTIONS` | `5` | sqlx connection pool size |
-| `OW_CONTAINER_RUNTIME` | `docker` | Server-level default container runtime (`runsc`, `runc`, …); used when a template doesn't pin its own |
+| `OW_CONTAINER_RUNTIME` | `runc` | Server-level default container runtime (`runsc`, `runc`, …); used when a template doesn't pin its own |
 | `OW_HOST_GATEWAY_IP` | `172.17.0.1` | Host IP instances publish their ports on |
 | `OW_HOST_PORT_START` / `OW_HOST_PORT_END` | `10000` / `20000` | Host-port pool for instance services |
 | `OW_INSTANCE_NET_BASE` | `10.200.0.0/16` | CIDR base for per-instance `/30` nets (must be net-aligned; `NetBase::parse` validates) |
@@ -173,14 +173,14 @@ bash scripts/check.sh                # warning gate (must be silent)
 bash scripts/run_tests.sh            # cargo nextest run --features docker
 ```
 
-Coverage today: **158 unit tests** in `src/` and **324 integration tests** in `tests/` (auth, db, docker lifecycle, instances, registry, templates, users, vnc-verify, health). Integration tests require Docker (they create real containers/networks) and run in parallel via `cargo nextest`.
+Coverage today: **228 unit tests** in `src/` and **412 integration tests** in `tests/` (auth, db, docker lifecycle, instances, monitor, registry, templates, users, vnc-verify, health). Integration tests require Docker (they create real containers/networks) and run in parallel via `cargo nextest`.
 
 ### Web (`apps/web`)
 
 ```bash
 cd apps/web
 pnpm check        # svelte-kit sync + svelte-check (typecheck) + eslint (hard lint gate)
-pnpm test         # vitest run — 23 files, 290 tests
+pnpm test         # vitest run — 25 files, 310 tests
 ```
 
 Vitest uses `happy-dom` (unit + component tests). Playwright E2E lives in the standalone `e2e/` package and requires a **running** dev stack (`pnpm run test:e2e` smoke / `test:e2e:full` live VNC). Not run in CI.

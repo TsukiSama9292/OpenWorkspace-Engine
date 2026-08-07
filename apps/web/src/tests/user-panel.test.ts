@@ -26,6 +26,7 @@ function context(overrides: Partial<EffectiveContext> = {}): EffectiveContext {
     can_manage_group_instances: false,
     can_manage_docker: false,
     can_manage_registry: false,
+    can_view_monitoring: false,
     effective_max_instances: 4,
     allowed_template_ids: [],
     group_ids: [],
@@ -44,6 +45,7 @@ const adminGroup: Group = {
   can_manage_group_instances: true,
   can_manage_docker: true,
   can_manage_registry: true,
+  can_view_monitoring: true,
   max_instances: null,
   template_ids: []
 };
@@ -58,6 +60,7 @@ const managerGroup: Group = {
   can_manage_group_instances: true,
   can_manage_docker: true,
   can_manage_registry: true,
+  can_view_monitoring: true,
   max_instances: 2,
   template_ids: []
 };
@@ -72,6 +75,7 @@ const userGroup: Group = {
   can_manage_group_instances: false,
   can_manage_docker: false,
   can_manage_registry: false,
+  can_view_monitoring: false,
   max_instances: 1,
   template_ids: []
 };
@@ -86,6 +90,7 @@ const customGroup: Group = {
   can_manage_group_instances: false,
   can_manage_docker: false,
   can_manage_registry: false,
+  can_view_monitoring: false,
   max_instances: 2,
   template_ids: []
 };

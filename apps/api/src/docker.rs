@@ -11,6 +11,7 @@ use futures_util::stream::TryStreamExt;
 use std::collections::HashMap;
 use std::default::Default;
 use std::str::FromStr;
+use std::sync::Mutex;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -166,7 +167,7 @@ pub fn ow_dns_env(instance_dns: Option<&str>) -> Option<String> {
 
 pub fn runtime_to_host_config(value: &str) -> Option<String> {
     match value {
-        "" | "docker" => None,
+        "" | "runc" => None,
         other => Some(other.to_string()),
     }
 }
@@ -248,6 +249,42 @@ fn first_ipv4_subnet(network: &bollard::models::Network) -> Option<String> {
         .and_then(|c| c.subnet.clone())
 }
 
+/// One-shot per-container resource snapshot used by the Monitor dashboard.
+/// `cpu_percent` is `None` on the very first read for a container, because CPU
+/// usage is computed from the delta between two consecutive reads.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ContainerStats {
+    pub cpu_percent: Option<f64>,
+    pub mem_used_bytes: u64,
+    pub mem_limit_bytes: u64,
+}
+
+/// Previous one-shot counters, kept per container id so the next read can
+/// compute a CPU delta.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PrevCpu {
+    total_usage: u64,
+    system_cpu_usage: u64,
+}
+
+/// CPU busy percentage from two consecutive one-shot stats reads. `None` when
+/// there is no positive tick progress (first read, counter reset, or a
+/// non-monotonic system counter).
+pub fn cpu_percent_from_deltas(
+    prev_total_usage: u64,
+    cur_total_usage: u64,
+    prev_system_cpu_usage: u64,
+    cur_system_cpu_usage: u64,
+    online_cpus: u64,
+) -> Option<f64> {
+    if cur_total_usage < prev_total_usage || cur_system_cpu_usage <= prev_system_cpu_usage {
+        return None;
+    }
+    let cpu_delta = cur_total_usage - prev_total_usage;
+    let sys_delta = cur_system_cpu_usage - prev_system_cpu_usage;
+    Some((cpu_delta as f64 / sys_delta as f64) * online_cpus.max(1) as f64 * 100.0)
+}
+
 /// Trait for Docker operations, allowing mock implementations in tests.
 #[async_trait::async_trait]
 #[mockall::automock]
@@ -321,6 +358,14 @@ pub trait DockerService: Send + Sync {
         container_id: &str,
         port: u16,
     ) -> Result<bool, String>;
+
+    /// One-shot resource snapshot for the Monitor dashboard. CPU % is computed
+    /// from the delta against the previous read for the same container
+    /// (`None` on first read); a failed read is fail-open in the caller.
+    async fn container_stats(
+        &self,
+        container_id: &str,
+    ) -> Result<ContainerStats, String>;
 
     /// Create a clean, empty host data directory for an Instance and declare a
     /// Local Bind-mounted Named Volume over it. The API runs in a container and
@@ -446,12 +491,16 @@ pub async fn stop_and_remove_container(
 
 pub struct DockerClient {
     docker: Docker,
+    prev_cpu: Mutex<HashMap<String, PrevCpu>>,
 }
 
 impl DockerClient {
     pub async fn new() -> Result<Self, String> {
         let docker = Docker::connect_with_local_defaults().map_err(|e| e.to_string())?;
-        Ok(Self { docker })
+        Ok(Self {
+            docker,
+            prev_cpu: Mutex::new(HashMap::new()),
+        })
     }
 }
 
@@ -1085,6 +1134,55 @@ impl DockerService for DockerClient {
         Ok(ss_output_has_connection(&output, port))
     }
 
+    async fn container_stats(
+        &self,
+        container_id: &str,
+    ) -> Result<ContainerStats, String> {
+        use bollard::container::{Stats, StatsOptions};
+
+        let options = Some(StatsOptions {
+            stream: false,
+            one_shot: true,
+        });
+        let stats = self
+            .docker
+            .stats(container_id, options)
+            .try_next()
+            .await
+            .map_err(|e| format!("stats failed: {}", e))?
+            .ok_or_else(|| format!("stats stream empty for {}", container_id))?;
+        let stats = stats as Stats;
+
+        let cur_total = stats.cpu_stats.cpu_usage.total_usage;
+        let cur_system = stats.cpu_stats.system_cpu_usage.unwrap_or(0);
+        let online_cpus = stats.cpu_stats.online_cpus.unwrap_or(1);
+
+        let mut cache = self.prev_cpu.lock().expect("cpu cache lock poisoned");
+        let cpu_percent = match cache.get(container_id) {
+            Some(prev) => cpu_percent_from_deltas(
+                prev.total_usage,
+                cur_total,
+                prev.system_cpu_usage,
+                cur_system,
+                online_cpus,
+            ),
+            None => None,
+        };
+        cache.insert(
+            container_id.to_string(),
+            PrevCpu {
+                total_usage: cur_total,
+                system_cpu_usage: cur_system,
+            },
+        );
+
+        Ok(ContainerStats {
+            cpu_percent,
+            mem_used_bytes: stats.memory_stats.usage.unwrap_or(0),
+            mem_limit_bytes: stats.memory_stats.limit.unwrap_or(0),
+        })
+    }
+
     /// Create the (empty) host data directory: pre-create the full chain as the
     /// API process's user so Docker doesn't leave root-owned parent dirs, then
     /// an alpine helper container `chown`s the leaf to 1000:1000, and declare
@@ -1503,8 +1601,32 @@ mod tests {
     }
 
     #[test]
-    fn test_runtime_to_host_config_docker_returns_none() {
-        assert_eq!(runtime_to_host_config("docker"), None);
+    fn test_cpu_percent_from_deltas_computes_percentage() {
+        let pct = cpu_percent_from_deltas(1000, 2000, 20000, 25000, 1).expect("positive delta");
+        assert!((pct - 20.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_cpu_percent_from_deltas_scales_with_online_cpus() {
+        let pct = cpu_percent_from_deltas(1000, 2000, 20000, 25000, 2).expect("positive delta");
+        assert!((pct - 40.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_cpu_percent_from_deltas_no_progress_is_none() {
+        assert_eq!(cpu_percent_from_deltas(1000, 1000, 20000, 20000, 1), None);
+    }
+
+    #[test]
+    fn test_cpu_percent_from_deltas_counter_reset_is_none() {
+        assert_eq!(cpu_percent_from_deltas(1000, 500, 20000, 25000, 1), None);
+        assert_eq!(cpu_percent_from_deltas(1000, 2000, 25000, 25000, 1), None);
+        assert_eq!(cpu_percent_from_deltas(1000, 2000, 25000, 20000, 1), None);
+    }
+
+    #[test]
+    fn test_runtime_to_host_config_runc_returns_none() {
+        assert_eq!(runtime_to_host_config("runc"), None);
     }
 
     #[test]

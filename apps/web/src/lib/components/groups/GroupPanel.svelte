@@ -60,7 +60,8 @@
     can_manage_users: 'Manage users',
     can_manage_group_instances: 'Manage group instances',
     can_manage_docker: 'Manage Docker',
-    can_manage_registry: 'Manage registry'
+    can_manage_registry: 'Manage registry',
+    can_view_monitoring: 'View monitoring'
   };
 
   async function load() {

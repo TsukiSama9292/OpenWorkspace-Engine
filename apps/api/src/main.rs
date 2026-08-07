@@ -82,6 +82,7 @@ async fn main() {
         docker,
         vnc_cache: vnc_cache.clone(),
         settings: settings.clone(),
+        metrics: Arc::new(openworkspace_api::metrics::MetricsStore::new()),
     };
 
     // ── Spawn health worker ──
@@ -90,8 +91,9 @@ async fn main() {
         let worker_docker = state.docker.clone();
         let worker_vnc_cache = state.vnc_cache.clone();
         let worker_gateway_ip = state.settings.host_gateway_ip.clone();
+        let worker_metrics = state.metrics.clone();
         tokio::spawn(async move {
-            openworkspace_api::health_worker::run(worker_db, worker_docker, worker_vnc_cache, worker_gateway_ip).await;
+            openworkspace_api::health_worker::run(worker_db, worker_docker, worker_vnc_cache, worker_gateway_ip, worker_metrics).await;
         });
     }
 

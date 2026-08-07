@@ -13,6 +13,7 @@
     canCreateTemplate,
     canManageUsers,
     canManageGroupInstances,
+    canViewMonitoring,
     effectiveMaxInstances
   } from '$lib/stores/auth';
   import { mayControlInstance, mayLaunchTemplate } from '$lib/permissions';
@@ -23,6 +24,7 @@
   import GroupPanel from '$lib/components/groups/GroupPanel.svelte';
   import UserManagementPanel from '$lib/components/users/UserManagementPanel.svelte';
   import OrphanedVolumesPanel from '$lib/components/volumes/OrphanedVolumesPanel.svelte';
+  import MonitorPanel from '$lib/components/monitor/MonitorPanel.svelte';
   import type { Template, Instance, PreflightRejection } from '$lib/types';
 
   let sidebarOpen = $state(false);
@@ -358,6 +360,19 @@
           <span class="nav-section-label">Server</span>
         {/if}
 
+        {#if $canViewMonitoring}
+          <button
+            class="nav-item"
+            class:active={activeTab === 'monitor'}
+            onclick={() => navigateTab('monitor')}
+          >
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 3v18h18" /><path d="M7 14l4-4 3 3 5-6" />
+            </svg>
+            {#if sidebarOpen}<span class="nav-text">Monitor</span>{/if}
+          </button>
+        {/if}
+
         {#if $isAdmin}
           <button
             class="nav-item"
@@ -368,20 +383,6 @@
               <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
             </svg>
             {#if sidebarOpen}<span class="nav-text">Settings</span>{/if}
-          </button>
-
-          <button
-            class="nav-item"
-            class:active={activeTab === 'monitor'}
-            onclick={() => navigateTab('monitor')}
-          >
-            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M3 3v18h18" /><path d="M7 14l4-4 3 3 5-6" />
-            </svg>
-            {#if sidebarOpen}
-              <span class="nav-text">Monitor</span>
-              <span class="nav-badge">TODO</span>
-            {/if}
           </button>
 
           <button
@@ -689,12 +690,8 @@
     {:else if activeTab === 'settings' && $isAdmin}
       <AdminSettings />
 
-    {:else if activeTab === 'monitor' && $isAdmin}
-      <section class="ws-section">
-        <h2 class="section-title">Monitor</h2>
-        <p class="section-desc">Resource monitoring.</p>
-        <p class="empty-text">Not implemented yet. (待辦)</p>
-      </section>
+    {:else if activeTab === 'monitor' && $canViewMonitoring}
+      <MonitorPanel ctx={$auth} />
 
     {:else if activeTab === 'logs' && $isAdmin}
       <section class="ws-section">

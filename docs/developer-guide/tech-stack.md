@@ -68,9 +68,9 @@
 
 ### 4. Dual container runtime: runC + gVisor (hardening)
 
-- **runC (Docker)**: the standard OCI runtime, best performance, GPU-compatible;
-  the actual default — the API-level `container_runtime` defaults to `docker`
-  and the server-level `OW_CONTAINER_RUNTIME` defaults to `docker`; templates
+- **runC (runc)**: the standard OCI runtime, best performance, GPU-compatible;
+  the actual default — the API-level `container_runtime` defaults to `runc`
+  and the server-level `OW_CONTAINER_RUNTIME` defaults to `runc`; templates
   with no runtime fall back to the server value.
 - **runsc (gVisor)**: a user-space kernel intercepts syscalls, sharply reducing
   the container-escape risk; an optional hardening choice (slower), selected
@@ -141,6 +141,31 @@
 - Upgrading any dependency requires passing the full test suite (below) and a
   note of rationale in this document.
 
+### 11. Host + per-instance monitoring: in-memory sampler, no DB, no chart library
+
+- **Sampling cadence**: the 3-second `health_worker` tick keeps its duties; every
+  5th tick (15 s) a `MetricsSampler` reads host metrics from `/proc` (stat /
+  meminfo / mounts) and calls one-shot `docker stats` per active instance via
+  the new `DockerService::container_stats()` seam. Failed reads log and skip
+  (fail-open) — one dead container never stops the pass.
+- **CPU % needs deltas**: cumulative CPU vs system time is read twice, and the
+  first read returns no CPU % until a second sample exists (exactly how
+  `docker stats` computes it); the client caches per-container counters so
+  restarts never reuse stale deltas.
+- **Two-tier in-memory store** (`MetricsStore`, pure module): Tier 1 holds 240
+  samples at 15 s (1 hour); Tier 2 holds 288 five-minute mean+peak aggregates
+  (24 hours) folded from Tier 1. Nothing is persisted — a 100-instance box
+  costs ~2 MB, inside the < 35 MB API budget by two orders of magnitude.
+- **Why no Redis/Postgres/Influx**: single-process consistency (same rationale
+  as §5); monitoring data is ephemeral by design and not worth DB write
+  volume. If multi-host arrives, this store becomes a candidate for a shared
+  cache (see [caching-strategy.md](caching-strategy.md)).
+- **Frontend**: sparklines are hand-rolled SVG `<path>` (no chart library);
+  the Monitor tab polls a snapshot endpoint every 5 s while open.
+- Access is gated by the group flag `can_view_monitoring` (Admin/Manager on by
+  default, User off), a sixth flat-RBAC flag — see
+  [../user-guide/rbac.md](../user-guide/rbac.md).
+
 ---
 
 ## Quality Gates
@@ -151,8 +176,8 @@ Hard rules of the development flow (cannot be bypassed):
    (default + `docker` feature) **must produce no output**; no `#[allow(…)]`
    suppression attributes.
 2. **Test suites** — `apps/api/scripts/run_tests.sh` (cargo nextest, needs
-   Docker): 158 unit tests + 324 integration tests; `cd apps/web && pnpm test`:
-   23 files / 290 tests.
+   Docker): 228 unit tests + 412 integration tests; `cd apps/web && pnpm test`:
+   25 files / 310 tests.
 3. **Typecheck + lint** — `cd apps/web && pnpm check`
    (svelte-kit sync + svelte-check + eslint, a hard gate).
 4. Root `pnpm lint` acts on web only (eslint).
@@ -253,7 +278,7 @@ docker compose -f docker/openworkspace/docker-compose.yml up -d --build
 
 - `--build` rebuilds the `ow-web` / `ow-api` images.
 - **DB migrations run automatically**: sqlx applies any pending migration on API
-  startup (currently through `000021`) — no manual step.
+  startup (currently through `000023`) — no manual step.
 - **Zero-downtime routes**: Traefik hot-reloads the dynamic directory; new
   routes are live within seconds; no traefik restart during updates.
 
@@ -288,7 +313,7 @@ changing `JWT_SECRET` forces every logged-in user to re-login; changing
 | `ADMIN_PASSWORD` | `admin` | Startup password for the seeded admin |
 | `SERVER_HOST` / `SERVER_PORT` | `0.0.0.0` / `3000` | API bind address |
 | `DB_MAX_CONNECTIONS` | `5` | sqlx connection-pool size |
-| `OW_CONTAINER_RUNTIME` | `docker` | Server-level default container runtime (`runsc`, `runc`, …); applies when a template has none |
+| `OW_CONTAINER_RUNTIME` | `runc` | Server-level default container runtime (`runsc`, `runc`, …); applies when a template has none |
 | `OW_HOST_GATEWAY_IP` | `172.17.0.1` | Host IP instance published ports bind to |
 | `OW_HOST_PORT_START` / `OW_HOST_PORT_END` | `10000` / `20000` | Host-port pool |
 | `OW_INSTANCE_NET_BASE` | `10.200.0.0/16` | CIDR base for per-instance `/30` subnets (must stay subnet-aligned) |

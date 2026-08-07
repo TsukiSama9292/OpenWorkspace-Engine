@@ -54,6 +54,7 @@ describe('rbac contract client', () => {
     can_manage_group_instances: false,
     can_manage_docker: false,
     can_manage_registry: false,
+    can_view_monitoring: false,
     effective_max_instances: 4,
     allowed_template_ids: ['t1', 't2'],
     group_ids: ['g1'],
@@ -70,6 +71,7 @@ describe('rbac contract client', () => {
     can_manage_group_instances: true,
     can_manage_docker: true,
     can_manage_registry: true,
+    can_view_monitoring: true,
     max_instances: 2,
     template_ids: ['t1']
   };

@@ -240,7 +240,7 @@ likely not supported by this driver/CUDA stack (see the compatibility table).
 
 Once the runtime works with `docker run --runtime runsc`, set the Template's
 **Container Runtime** to `runsc` in the dashboard. The server-wide default is
-**runC (Docker)** — `OW_CONTAINER_RUNTIME` defaults to `docker`, so a template
+**runC (runc)** — `OW_CONTAINER_RUNTIME` defaults to `runc`, so a template
 with an empty runtime field launches with Docker's default (runc), the fastest
 option with full GPU compatibility. Choose `runsc` explicitly per template (or
 set `OW_CONTAINER_RUNTIME=runsc` server-wide) when you want the gVisor
@@ -249,9 +249,9 @@ sandbox; the API then launches that template's instances with the
 additionally need a CUDA-compatible image (e.g. a `cuda` base image) and a
 supported host driver.
 
-> The default container runtime is runC (Docker) end-to-end: the API
-> defaults `container_runtime` to `docker` and `OW_CONTAINER_RUNTIME` to
-> `docker`, so a template with an empty runtime field launches unsandboxed
+> The default container runtime is runC (runc) end-to-end: the API
+> defaults `container_runtime` to `runc` and `OW_CONTAINER_RUNTIME` to
+> `runc`, so a template with an empty runtime field launches unsandboxed
 > under runC. runsc (gVisor) is an optional per-template hardening choice
 > (slower, but sandboxed). Upstream runsc sources are in the reference clone
 > at `references_repo/gvisor/` (sparse-checked-out docs).

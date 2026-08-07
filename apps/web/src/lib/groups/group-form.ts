@@ -6,7 +6,8 @@ export const GROUP_FLAGS = [
   'can_manage_users',
   'can_manage_group_instances',
   'can_manage_docker',
-  'can_manage_registry'
+  'can_manage_registry',
+  'can_view_monitoring'
 ] as const;
 
 export type GroupFlag = (typeof GROUP_FLAGS)[number];
@@ -20,6 +21,7 @@ export interface GroupFormState {
   can_manage_group_instances: boolean;
   can_manage_docker: boolean;
   can_manage_registry: boolean;
+  can_view_monitoring: boolean;
   max_instances: string;
   template_ids: string[];
   loading: boolean;
@@ -40,6 +42,7 @@ export function createInitialGroupForm(): GroupFormState {
     can_manage_group_instances: false,
     can_manage_docker: false,
     can_manage_registry: false,
+    can_view_monitoring: false,
     max_instances: '2',
     template_ids: [],
     loading: false,
@@ -57,6 +60,7 @@ export function groupFormFromGroup(group: Group): GroupFormState {
     can_manage_group_instances: group.can_manage_group_instances,
     can_manage_docker: group.can_manage_docker,
     can_manage_registry: group.can_manage_registry,
+    can_view_monitoring: group.can_view_monitoring,
     max_instances: group.max_instances == null ? '' : String(group.max_instances),
     template_ids: [...group.template_ids],
     loading: false,
@@ -74,6 +78,7 @@ export function buildGroupInput(state: GroupFormState): GroupInput {
     can_manage_group_instances: systemFlags.can_manage_group_instances ?? state.can_manage_group_instances,
     can_manage_docker: systemFlags.can_manage_docker ?? state.can_manage_docker,
     can_manage_registry: systemFlags.can_manage_registry ?? state.can_manage_registry,
+    can_view_monitoring: systemFlags.can_view_monitoring ?? state.can_view_monitoring,
     max_instances: Number(state.max_instances) || 0,
     template_ids: [...state.template_ids]
   };
@@ -85,9 +90,10 @@ export function systemGroupFlags(kind: Group['kind']): {
   can_manage_group_instances?: boolean;
   can_manage_docker?: boolean;
   can_manage_registry?: boolean;
+  can_view_monitoring?: boolean;
 } {
-  if (kind === 'admin') return { can_create_template: true, can_manage_users: true, can_manage_group_instances: true, can_manage_docker: true, can_manage_registry: true };
-  if (kind === 'user') return { can_create_template: false, can_manage_users: false, can_manage_group_instances: false, can_manage_docker: false, can_manage_registry: false };
+  if (kind === 'admin') return { can_create_template: true, can_manage_users: true, can_manage_group_instances: true, can_manage_docker: true, can_manage_registry: true, can_view_monitoring: true };
+  if (kind === 'user') return { can_create_template: false, can_manage_users: false, can_manage_group_instances: false, can_manage_docker: false, can_manage_registry: false, can_view_monitoring: false };
   return {};
 }
 

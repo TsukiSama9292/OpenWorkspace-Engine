@@ -56,7 +56,7 @@ the guides. Link there when a reader would benefit.
 
 Two active apps: `apps/web/` (SvelteKit frontend) and `apps/api/` (Rust API). pnpm workspaces + Turborepo. `apps/vnc-ui/` was **removed** — do not reference it.
 
-- `apps/api/` — Axum REST API. `src/routes/` (auth, users, groups, templates, instances, registry, proxy, admin_settings), `src/docker.rs` (DockerService mockable seam + DockerClient container/network/volume/bandwidth ops), `src/host_port.rs` + `src/instance_net.rs` (flock allocators), `src/route_writer.rs` (Traefik YAML), `src/network_qos.rs` (tc/HTB), `src/health_worker.rs` (3s lifecycle worker), `migration/` (sqlx migrations `000001`–`000021`).
+- `apps/api/` — Axum REST API. `src/routes/` (auth, users, groups, templates, instances, registry, proxy, monitor, admin_settings), `src/docker.rs` (DockerService mockable seam + DockerClient container/network/volume/bandwidth ops), `src/host_port.rs` + `src/instance_net.rs` (flock allocators), `src/route_writer.rs` (Traefik YAML), `src/network_qos.rs` (tc/HTB), `src/metrics.rs` + `src/proc.rs` + `src/monitor.rs` (in-memory metrics store / `/proc` parsers / snapshot), `src/health_worker.rs` (3s lifecycle worker), `migration/` (sqlx migrations `000001`–`000023`).
 - `apps/web/` — SvelteKit static SPA (`adapter-static`, `ssr=false`). `src/lib/api/` (client + action helpers), `src/lib/stores/auth.ts` (EffectiveContext store), `src/lib/permissions.ts` (mayControlInstance / mayLaunchTemplate), `src/lib/preflight.ts`, `src/lib/vnc/` (noVNC core), `src/lib/components/` (panels: templates, instances, groups, users, volumes, admin).
 
 ## Key commands
@@ -73,7 +73,7 @@ pnpm run test:e2e:full# Playwright full: launch real instance → KasmVNC viewer
 
 # web only
 cd apps/web
-pnpm test             # vitest run — 23 files, 290 tests
+pnpm test             # vitest run — 25 files, 310 tests
 pnpm check            # svelte-kit sync + svelte-check (typecheck) + eslint . (hard lint gate)
 pnpm lint             # eslint . — flat config (eslint-plugin-svelte + typescript-eslint recommended)
 pnpm run analysis:web # soft report: eslint complexity / max-lines-per-function warnings — exit 0
@@ -81,7 +81,7 @@ pnpm run analysis:web # soft report: eslint complexity / max-lines-per-function 
 # api only
 cd apps/api
 bash scripts/check.sh          # zero-warning gate (both feature sets) — must produce NO output
-bash scripts/run_tests.sh      # cargo nextest run --features docker (158 unit + 324 integration tests)
+bash scripts/run_tests.sh      # cargo nextest run --features docker (228 unit + 412 integration tests)
 
 # Rust quality gates & analysis reports
 cd apps/api
@@ -194,12 +194,12 @@ Rust quality-gate model (see `.scratch/archive/quality-gates/spec.md`):
 
 ### Rust API (`apps/api`)
 
-- 158 unit tests in `src/` + 324 integration tests in `tests/` (auth, db, docker lifecycle, instances, registry, templates, users, groups, vnc-verify, health). Integration tests require Docker (real containers/networks), run in parallel via `cargo nextest`.
+- 228 unit tests in `src/` + 412 integration tests in `tests/` (auth, db, docker lifecycle, instances, monitor, registry, templates, users, groups, vnc-verify, health). Integration tests require Docker (real containers/networks), run in parallel via `cargo nextest`.
 - Gate: `bash scripts/check.sh` must be **silent** (zero warnings, both feature sets) before `bash scripts/run_tests.sh`.
 
 ### Web (`apps/web`)
 
-- `pnpm test` — vitest with `happy-dom` + `@testing-library/svelte`. **23 files / 290 tests** in `src/tests/` (auth-store, permissions, rbac-actions, preflight, rejection-notice, group-panel, user-panel, admin-settings, api-client, template-actions, dashboard-view, template-form, quick-launch, keepalive, keep-time-line, orphaned-volumes-*, countdown, format, …).
+- `pnpm test` — vitest with `happy-dom` + `@testing-library/svelte`. **25 files / 310 tests** in `src/tests/` (auth-store, permissions, rbac-actions, preflight, rejection-notice, group-panel, user-panel, admin-settings, api-client, template-actions, dashboard-view, template-form, quick-launch, keepalive, keep-time-line, orphaned-volumes-*, monitor-*, countdown, format, …).
 - `tests/mocks/` provides `app-navigation` (`goto`) and `app-stores` (`page`) stubs.
 - Playwright E2E configured but not actively run (requires live VNC containers). No CI currently.
 

@@ -4,6 +4,43 @@ Chronological, user-visible changes. Append, don't rewrite history.
 
 ## [Unreleased]
 
+### Resource Monitoring Dashboard (Monitor tab) (`.scratch/archive/monitor-dashboard/`)
+
+The Monitor tab is now a real operator view instead of an admin-only
+placeholder: host and per-instance resource usage, sampled in the background
+every 15 s and held in-memory for an hour of fine-grained history plus a full
+day of five-minute averages (nothing persisted).
+
+- **Three host cards** (CPU / RAM / Disk) with the current value and a 1-hour
+  sparkline — headroom at a glance before launching another instance.
+- **Active Instances table** (running / starting / paused) with owner,
+  template, runtime badge, uptime, and live CPU % / RAM (value + sparkline).
+  Paused (auto-slept) sessions are greyed with a `[paused]` badge; stopped and
+  failed sessions are hidden; columns are sortable to find the worst offender.
+- **1h / 24h range toggle**: 15-second detail for the last hour, or all-day
+  five-minute mean+peak trends for spotting slow memory growth / sustained load.
+- **New group permission `can_view_monitoring`** (the sixth RBAC flag): admins
+  and managers see the tab by default, plain users don't, and admins can grant
+  or revoke it per group in the group editor. Access to the underlying snapshot
+  is gated server-side by the same flag.
+- The sampler reuses the existing health-worker tick (a stats pass every 15 s),
+  reads host metrics from `/proc` and instance metrics via one-shot `docker
+  stats` — no new process, no chart library, no database writes.
+
+### Container runtime value renamed from `docker` to `runc`
+
+The template-level runtime value `docker` (which always meant "use Docker's
+default OCI runtime, runC") was renamed to `runc` for clarity. The default
+runtime is unchanged — runC, fastest with full GPU compatibility:
+
+- The API now accepts `runc` as the runC runtime value and no longer accepts
+  `docker`; `OW_CONTAINER_RUNTIME` and template create/update defaults are
+  `runc`. A migration rewrites any existing rows still holding `docker` to
+  `runc`, so existing templates keep launching under runC with no action.
+- The template form's Runtime dropdown now offers `runc (OCI default)`
+  (default; fast, GPU-compatible) and `runsc (gVisor)` (optional; sandboxed,
+  slower).
+
 ### Default container runtime is now runC (Docker); gVisor is optional
 
 Templates previously launched under `runsc` (gVisor) by default. The default

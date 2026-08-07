@@ -41,6 +41,9 @@ pub struct EffectiveContext {
     pub can_manage_group_instances: bool,
     pub can_manage_docker: bool,
     pub can_manage_registry: bool,
+    /// Monitor-dashboard gate: seeing the Monitor tab / snapshot endpoint
+    /// (admin or a group flag; Manager system group defaults on).
+    pub can_view_monitoring: bool,
     /// `0` means "no ceiling" (matches the `host_instance_limit = 0`
     /// convention). Non-zero values are exact per-user limits. Resolved as the
     /// *maximum* of the personal ceiling and every group ceiling, where 0/NULL
@@ -83,6 +86,7 @@ pub struct GroupPolicy {
     pub can_manage_group_instances: bool,
     pub can_manage_docker: bool,
     pub can_manage_registry: bool,
+    pub can_view_monitoring: bool,
 }
 
 /// Compute a user's effective context (spec Decision 4):
@@ -155,6 +159,7 @@ pub fn calculate_effective_context(
             .any(|g| g.can_manage_group_instances),
         can_manage_docker: groups.iter().any(|g| g.can_manage_docker),
         can_manage_registry: groups.iter().any(|g| g.can_manage_registry),
+        can_view_monitoring: groups.iter().any(|g| g.can_view_monitoring),
         effective_max_instances,
         allowed_template_ids,
         group_ids,
@@ -309,6 +314,7 @@ mod tests {
         group_instances: bool,
         docker: bool,
         registry: bool,
+        monitoring: bool,
     ) -> GroupPolicy {
         GroupPolicy {
             id,
@@ -319,6 +325,7 @@ mod tests {
             can_manage_group_instances: group_instances,
             can_manage_docker: docker,
             can_manage_registry: registry,
+            can_view_monitoring: monitoring,
         }
     }
 
@@ -332,9 +339,9 @@ mod tests {
     #[test]
     fn flags_or_across_groups() {
         let alice = user(uuid(1), None);
-        let g1 = group(uuid(10), None, Some(2), true, false, false, false, false);
-        let g2 = group(uuid(11), None, Some(4), false, true, false, true, false);
-        let g3 = group(uuid(12), None, Some(6), false, false, false, false, true);
+        let g1 = group(uuid(10), None, Some(2), true, false, false, false, false, false);
+        let g2 = group(uuid(11), None, Some(4), false, true, false, true, false, false);
+        let g3 = group(uuid(12), None, Some(6), false, false, false, false, true, false);
 
         let ctx = calculate_effective_context(&alice, &[g1, g2, g3], &map(&[]), &[]);
 
@@ -345,6 +352,17 @@ mod tests {
         assert!(!ctx.can_manage_group_instances);
         assert!(ctx.can_manage_docker);
         assert!(ctx.can_manage_registry);
+        assert!(!ctx.can_view_monitoring);
+    }
+
+    #[test]
+    fn monitoring_flag_or_across_groups() {
+        let alice = user(uuid(1), None);
+        let g1 = group(uuid(10), None, Some(2), false, false, false, false, false, true);
+        let g2 = group(uuid(11), None, Some(2), false, false, false, false, false, false);
+
+        let ctx = calculate_effective_context(&alice, &[g1, g2], &map(&[]), &[]);
+        assert!(ctx.can_view_monitoring);
     }
 
     #[test]
@@ -353,8 +371,8 @@ mod tests {
         let t2 = uuid(101);
         let t3 = uuid(102);
         let alice = user(uuid(1), None);
-        let g1 = group(uuid(10), None, Some(2), false, false, false, false, false);
-        let g2 = group(uuid(11), None, Some(2), false, false, false, false, false);
+        let g1 = group(uuid(10), None, Some(2), false, false, false, false, false, false);
+        let g2 = group(uuid(11), None, Some(2), false, false, false, false, false, false);
 
         // `user` no longer carries owned/personal template ids — only the
         // groups' whitelists feed the union.
@@ -372,8 +390,8 @@ mod tests {
     fn effective_ceiling_is_max_of_direct_and_groups() {
         // A personal ceiling can raise above the groups but never below them.
         let alice = user(uuid(1), Some(8));
-        let g1 = group(uuid(10), None, Some(2), false, false, false, false, false);
-        let g2 = group(uuid(11), None, Some(4), false, false, false, false, false);
+        let g1 = group(uuid(10), None, Some(2), false, false, false, false, false, false);
+        let g2 = group(uuid(11), None, Some(4), false, false, false, false, false, false);
 
         let ctx = calculate_effective_context(&alice, &[g1, g2], &map(&[]), &[]);
         assert_eq!(ctx.effective_max_instances, 8);
@@ -383,7 +401,7 @@ mod tests {
     #[test]
     fn group_ceiling_raises_personal_ceiling() {
         let alice = user(uuid(1), Some(2));
-        let g1 = group(uuid(10), None, Some(8), false, false, false, false, false);
+        let g1 = group(uuid(10), None, Some(8), false, false, false, false, false, false);
 
         let ctx = calculate_effective_context(&alice, &[g1], &map(&[]), &[]);
         assert_eq!(ctx.effective_max_instances, 8);
@@ -392,8 +410,8 @@ mod tests {
     #[test]
     fn group_max_fallback_when_no_direct() {
         let alice = user(uuid(1), None);
-        let g1 = group(uuid(10), None, Some(2), false, false, false, false, false);
-        let g2 = group(uuid(11), None, Some(6), false, false, false, false, false);
+        let g1 = group(uuid(10), None, Some(2), false, false, false, false, false, false);
+        let g2 = group(uuid(11), None, Some(6), false, false, false, false, false, false);
 
         let ctx = calculate_effective_context(&alice, &[g1, g2], &map(&[]), &[]);
         assert_eq!(ctx.effective_max_instances, 6);
@@ -403,7 +421,7 @@ mod tests {
     #[test]
     fn direct_zero_means_no_ceiling() {
         let alice = user(uuid(1), Some(0));
-        let g1 = group(uuid(10), None, Some(2), false, false, false, false, false);
+        let g1 = group(uuid(10), None, Some(2), false, false, false, false, false, false);
 
         let ctx = calculate_effective_context(&alice, &[g1], &map(&[]), &[]);
         assert_eq!(ctx.effective_max_instances, 0);
@@ -414,7 +432,7 @@ mod tests {
         // Admin group: NULL max_instances → unlimited, even next to a finite
         // personal ceiling.
         let admin = user(uuid(1), Some(3));
-        let g1 = group(uuid(10), Some("admin"), None, true, true, true, true, true);
+        let g1 = group(uuid(10), Some("admin"), None, true, true, true, true, true, true);
 
         let ctx = calculate_effective_context(&admin, &[g1], &map(&[]), &[]);
         assert_eq!(ctx.effective_max_instances, 0);
@@ -437,6 +455,7 @@ mod tests {
         assert!(!ctx.can_manage_group_instances);
         assert!(!ctx.can_manage_docker);
         assert!(!ctx.can_manage_registry);
+        assert!(!ctx.can_view_monitoring);
         assert!(ctx.group_ids.is_empty());
     }
 
@@ -445,7 +464,7 @@ mod tests {
         // Admin group grants root and every flag, but the whitelist still comes
         // only from group grants — no bypass.
         let admin = user(uuid(1), None);
-        let g1 = group(uuid(10), Some("admin"), Some(2), true, true, true, true, true);
+        let g1 = group(uuid(10), Some("admin"), Some(2), true, true, true, true, true, true);
 
         let ctx = calculate_effective_context(&admin, &[g1], &map(&[]), &[]);
 
@@ -456,6 +475,7 @@ mod tests {
         assert!(ctx.can_manage_group_instances);
         assert!(ctx.can_manage_docker);
         assert!(ctx.can_manage_registry);
+        assert!(ctx.can_view_monitoring);
         assert!(ctx.allowed_template_ids.is_empty(), "admins are not exempt");
         assert_eq!(ctx.effective_max_instances, 2);
         assert_eq!(ctx.group_ids, vec![uuid(10)]);
@@ -464,8 +484,8 @@ mod tests {
     #[test]
     fn manager_membership_tier() {
         let alice = user(uuid(1), None);
-        let g1 = group(uuid(10), Some("manager"), Some(4), false, false, false, false, false);
-        let g2 = group(uuid(11), Some("user"), Some(1), false, false, false, false, false);
+        let g1 = group(uuid(10), Some("manager"), Some(4), false, false, false, false, false, false);
+        let g2 = group(uuid(11), Some("user"), Some(1), false, false, false, false, false, false);
 
         let ctx = calculate_effective_context(&alice, &[g1, g2], &map(&[]), &[]);
         assert_eq!(ctx.tier, TIER_MANAGER);
@@ -478,7 +498,7 @@ mod tests {
     fn custom_group_named_admin_is_not_root() {
         // Identity is by kind: a custom group named "Admin" is tier 0.
         let alice = user(uuid(1), None);
-        let g1 = group(uuid(10), None, Some(2), false, false, false, false, false);
+        let g1 = group(uuid(10), None, Some(2), false, false, false, false, false, false);
 
         let ctx = calculate_effective_context(&alice, &[g1], &map(&[]), &[]);
         assert!(!ctx.is_admin);
@@ -488,8 +508,8 @@ mod tests {
     #[test]
     fn group_ids_collected() {
         let alice = user(uuid(1), None);
-        let g1 = group(uuid(10), None, Some(2), false, false, false, false, false);
-        let g2 = group(uuid(11), None, Some(2), false, false, false, false, false);
+        let g1 = group(uuid(10), None, Some(2), false, false, false, false, false, false);
+        let g2 = group(uuid(11), None, Some(2), false, false, false, false, false, false);
 
         let ctx = calculate_effective_context(&alice, &[g1, g2], &map(&[]), &[]);
         assert_eq!(ctx.group_ids, vec![uuid(10), uuid(11)]);
@@ -499,7 +519,7 @@ mod tests {
     fn duplicate_whitelist_ids_deduplicated() {
         let t1 = uuid(100);
         let alice = user(uuid(1), None);
-        let g1 = group(uuid(10), None, Some(2), false, false, false, false, false);
+        let g1 = group(uuid(10), None, Some(2), false, false, false, false, false, false);
 
         let ctx = calculate_effective_context(
             &alice,
@@ -520,8 +540,8 @@ mod tests {
         let t2 = uuid(101);
         let t3 = uuid(102);
         let alice = user(uuid(1), None);
-        let g1 = group(uuid(10), None, Some(2), false, false, false, false, false);
-        let g2 = group(uuid(11), None, Some(2), false, false, false, false, false);
+        let g1 = group(uuid(10), None, Some(2), false, false, false, false, false, false);
+        let g2 = group(uuid(11), None, Some(2), false, false, false, false, false, false);
 
         let ctx = calculate_effective_context(
             &alice,
@@ -539,7 +559,7 @@ mod tests {
         // launch list, admins included.
         let t1 = uuid(100);
         let alice = user(uuid(1), None);
-        let g1 = group(uuid(10), Some("admin"), None, true, true, true, true, true);
+        let g1 = group(uuid(10), Some("admin"), None, true, true, true, true, true, true);
 
         let ctx = calculate_effective_context(
             &alice,
@@ -575,7 +595,7 @@ mod tests {
     fn allow_all() -> EffectiveContext {
         calculate_effective_context(
             &user(uuid(1), Some(4)),
-            &[group(uuid(10), None, Some(4), false, false, false, false, false)],
+            &[group(uuid(10), None, Some(4), false, false, false, false, false, false)],
             &map(&[(uuid(10), &[uuid(200)])]),
             &[],
         )
@@ -604,7 +624,7 @@ mod tests {
         // is denied every private template.
         let admin = calculate_effective_context(
             &user(uuid(1), None),
-            &[group(uuid(10), Some("admin"), None, true, true, true, true, true)],
+            &[group(uuid(10), Some("admin"), None, true, true, true, true, true, true)],
             &map(&[]),
             &[],
         );
@@ -630,7 +650,7 @@ mod tests {
     fn pre_flight_zero_ceiling_means_unlimited() {
         let ctx = calculate_effective_context(
             &user(uuid(1), Some(0)),
-            &[group(uuid(10), None, Some(0), false, false, false, false, false)],
+            &[group(uuid(10), None, Some(0), false, false, false, false, false, false)],
             &map(&[(uuid(10), &[uuid(200)])]),
             &[],
         );
@@ -658,7 +678,7 @@ mod tests {
         // launches (spec Decision 3).
         let ctx = calculate_effective_context(
             &user(uuid(1), Some(4)),
-            &[group(uuid(10), None, Some(4), false, false, false, false, false)],
+            &[group(uuid(10), None, Some(4), false, false, false, false, false, false)],
             &map(&[]),
             &[],
         );
@@ -697,7 +717,7 @@ mod tests {
         // No bypass: an admin launching a hidden template is rejected too.
         let admin = calculate_effective_context(
             &user(uuid(1), None),
-            &[group(uuid(10), Some("admin"), None, true, true, true, true, true)],
+            &[group(uuid(10), Some("admin"), None, true, true, true, true, true, true)],
             &map(&[(uuid(10), &[uuid(500)])]),
             &[],
         );

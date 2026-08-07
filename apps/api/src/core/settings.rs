@@ -61,7 +61,7 @@ impl Settings {
                 .parse()
                 .map_err(|e| format!("DB_MAX_CONNECTIONS invalid: {}", e))?,
             container_runtime: get("OW_CONTAINER_RUNTIME")
-                .unwrap_or_else(|| "docker".to_string()),
+                .unwrap_or_else(|| "runc".to_string()),
             host_gateway_ip: get("OW_HOST_GATEWAY_IP")
                 .unwrap_or_else(|| "172.17.0.1".to_string()),
             host_port_start: get("OW_HOST_PORT_START")
@@ -101,7 +101,7 @@ mod tests {
             server_host: "0.0.0.0".to_string(),
             server_port: 3000,
             db_max_connections: 5,
-            container_runtime: "docker".to_string(),
+            container_runtime: "runc".to_string(),
             host_gateway_ip: "172.17.0.1".to_string(),
             host_port_start: 10000,
             host_port_end: 20000,
@@ -121,7 +121,7 @@ mod tests {
             server_host: "127.0.0.1".to_string(),
             server_port: 8080,
             db_max_connections: 10,
-            container_runtime: "docker".to_string(),
+            container_runtime: "runc".to_string(),
             host_gateway_ip: "172.17.0.1".to_string(),
             host_port_start: 10000,
             host_port_end: 20000,
@@ -141,7 +141,7 @@ mod tests {
             server_host: "0.0.0.0".to_string(),
             server_port: 3000,
             db_max_connections: 5,
-            container_runtime: "docker".to_string(),
+            container_runtime: "runc".to_string(),
             host_gateway_ip: "172.17.0.1".to_string(),
             host_port_start: 10000,
             host_port_end: 20000,
@@ -163,7 +163,7 @@ mod tests {
             server_host: "0.0.0.0".to_string(),
             server_port: 3000,
             db_max_connections: 5,
-            container_runtime: "docker".to_string(),
+            container_runtime: "runc".to_string(),
             host_gateway_ip: "172.17.0.1".to_string(),
             host_port_start: 10000,
             host_port_end: 20000,
@@ -225,7 +225,7 @@ mod tests {
         assert_eq!(settings.server_port, 3000);
         assert_eq!(settings.db_max_connections, 5);
         assert_eq!(settings.admin_password, "admin");
-        assert_eq!(settings.container_runtime, "docker");
+        assert_eq!(settings.container_runtime, "runc");
         assert_eq!(settings.host_gateway_ip, "172.17.0.1");
         assert_eq!(settings.host_port_start, 10000);
         assert_eq!(settings.host_port_end, 20000);
@@ -278,13 +278,13 @@ mod tests {
     }
 
     #[test]
-    fn test_container_runtime_default_is_docker() {
+    fn test_container_runtime_default_is_runc() {
         let settings = Settings::from_env(vars(&[
             ("DATABASE_URL", "postgres://localhost/test"),
             ("JWT_SECRET", "test"),
         ]))
         .unwrap();
-        assert_eq!(settings.container_runtime, "docker");
+        assert_eq!(settings.container_runtime, "runc");
     }
 
     #[test]

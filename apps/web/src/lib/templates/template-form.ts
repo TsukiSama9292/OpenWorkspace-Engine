@@ -80,7 +80,7 @@ export function createInitialFormState(): TemplateFormState {
     dns: '',
     shmSize: '',
     networkMode: '',
-    containerRuntime: 'docker',
+    containerRuntime: 'runc',
     maxRunSeconds: null,
     timeoutAction: 'remove',
     keepTimeSeconds: null,

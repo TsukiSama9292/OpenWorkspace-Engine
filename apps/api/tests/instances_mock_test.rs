@@ -88,7 +88,7 @@ impl MockContext {
             server_host: "127.0.0.1".to_string(),
             server_port: 0,
             db_max_connections: 5,
-            container_runtime: "docker".to_string(),
+            container_runtime: "runc".to_string(),
             host_gateway_ip: "172.17.0.1".to_string(),
             host_port_start: 10000,
             host_port_end: 20000,
@@ -111,6 +111,7 @@ impl MockContext {
             docker: Arc::new(mock_docker),
             vnc_cache: VncCache::new(),
             settings,
+            metrics: Arc::new(openworkspace_api::metrics::MetricsStore::new()),
         };
 
         let cors = tower_http::cors::CorsLayer::new()
@@ -1702,7 +1703,7 @@ async fn test_launch_instance_forwards_runsc_runtime() {
 async fn test_launch_instance_defaults_to_settings_runtime() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
-            .withf(|_, _, config, _, _| config.runtime == Some("runsc".to_string()))
+            .withf(|_, _, config, _, _| config.runtime == Some("runc".to_string()))
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
     }).await;
 
@@ -3384,7 +3385,7 @@ async fn test_gate_template_edit_delete_owner_only() {
     let edit_body = serde_json::json!({
         "name": "gate-owned-template", "image": "busybox:1",
         "cores": 2, "memory": 4294967296i64, "gpu_count": 0,
-        "remote_type": "kasmvnc", "container_runtime": "docker",
+        "remote_type": "kasmvnc", "container_runtime": "runc",
         "run_config": {}, "exec_config": {}, "volume_mappings": {},
         "timeout_action": "remove", "keep_time_action": "pause",
     });

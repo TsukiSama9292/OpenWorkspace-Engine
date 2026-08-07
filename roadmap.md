@@ -134,6 +134,22 @@ Not a product stage — an operational-observability milestone
 | Four-table report | platform-container peaks, per-instance peaks (remote type × runtime), runC vs runsc aggregation, host before→after delta + provenance (timestamp / default runtime / compose commit / image digests) |
 | Live E2E smoke | `scripts/benchmark/smoke_test.sh`: short-window full pipeline, verifying platform health, 6 instances running, report produced, host clean after teardown (incl. DB row re-check) |
 
+### ✅ Resource Monitoring Dashboard (Monitor tab)
+
+Not a whole stage — the first Stage-5 item to land
+(`.scratch/archive/monitor-dashboard/`). It replaces the admin-only Monitor
+placeholder with an operator view of "what is happening on the box".
+
+| Deliverable | Content |
+|---|---|
+| Host cards | CPU / RAM / Disk with current value + 1-hour native-SVG sparkline |
+| Active Instances table | running/starting/paused rows: owner, template, runtime badge, uptime, CPU % / RAM (value + sparkline); paused greyed with `[paused]` badge; stopped/errored excluded; sortable columns |
+| 1h / 24h range toggle | 15 s fine-grained (1 h) vs five-minute mean+peak aggregates (24 h) |
+| Background sampler | `health_worker` tick reuse (every 5th tick, 15 s): `/proc` host parsers + one-shot `docker stats` per active instance via new `DockerService::container_stats()`; fail-open |
+| In-memory `MetricsStore` | two-tier ring buffer (240 × 15 s + 288 × 5 min), nothing persisted, ~2 MB per 100-instance box |
+| RBAC flag `can_view_monitoring` | sixth flat group flag (Admin/Manager on by default, User off), gates the tab and the snapshot endpoint, checkbox in the group editor |
+| E2E | `e2e/tests/monitor.full.spec.ts` — real instance, live sparklines, 24h re-fetch, paused badge, RBAC boundary |
+
 ---
 
 ## In-progress / Planned Stages
@@ -146,7 +162,6 @@ Not a product stage — an operational-observability milestone
 | Item | Description | Priority |
 |---|---|---|
 | Audit logging | record login, instance start/stop/delete, permission changes, template edits, and other admin events; persisted to the DB and queryable in the UI | High |
-| Resource monitoring dashboard | host CPU/RAM/disk, per-instance resource usage, instance history (via cgroups / `/proc` / Docker stats) | High |
 | Operations Logs page | fill in the existing Logs placeholder tab (currently empty) | Medium |
 | Per-group/user resource quotas | beyond instance count, add group-level CPU / memory / GPU quotas | Medium |
 
@@ -244,7 +259,7 @@ Before any stage can be declared complete, all of the following must hold:
    browser, not merely present in the API.
 2. **Tests**: `cd apps/api && bash scripts/check.sh` (zero warnings) + `bash
    scripts/run_tests.sh` (nextest, Docker); `cd apps/web && pnpm check && pnpm
-   test` (290 tests) all green.
+   test` (310 tests) all green.
 3. **Docs**: the corresponding docs (architecture / api-reference / rbac /
    frontend / mission / tech-stack) are updated in sync, with no stale
    statements.
