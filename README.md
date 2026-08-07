@@ -116,7 +116,7 @@ A rough side-by-side for a single shared box. Only our own column is measured �
 | **Network QoS (bandwidth shaping)** | **Native kernel-level limits per template (`tc`/HTB)** — upload/download Mbps out of the box | None built-in — needs external firewall/gateway or CNI-level setup | None built-in — needs external firewall/gateway or CNI-level setup |
 | **Runtime switch** | **runC ↔ gVisor per template from the web UI** | Host/K8s level, manual | Host/K8s level, manual |
 | **Docker-in-Docker** | **`_dini` templates out of the box** — sandboxed under gVisor, full-privilege under runC (explicit UI warning) | Typically requires `--privileged` | Typically requires `--privileged` |
-| **Proxy architecture** | **Traefik + inotify hot-reload (no Docker socket mounted)** | NGINX | Coder proxy (Go) |
+| **Proxy architecture** | **Traefik + inotify hot-reload** | NGINX | Coder proxy (Go) |
 
 **Control plane memory at rest:**
 
