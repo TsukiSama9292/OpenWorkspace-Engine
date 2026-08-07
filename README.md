@@ -118,14 +118,6 @@ A rough side-by-side for a single shared box. Only our own column is measured �
 | **Docker-in-Docker** | **`_dini` templates out of the box** — sandboxed under gVisor, full-privilege under runC (explicit UI warning) | Typically requires `--privileged` | Typically requires `--privileged` |
 | **Proxy architecture** | **Traefik + inotify hot-reload** | NGINX | Coder proxy (Go) |
 
-**Control plane memory at rest:**
-
-```
-K8s + JupyterHub   ~2 GB+
-Coder / Gitpod     heavier
-OpenWorkspace      ~68 MB   (measured)
-```
-
 That idle control plane fits on the N100, mini-PC, or lab server that's already collecting dust — and it stays a rounding error next to even one running instance.
 
 ### The true open-source freedom
