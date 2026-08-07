@@ -1,12 +1,36 @@
 # [OpenWorkspace Engine](https://github.com/TsukiSama9292/OpenWorkspace-Engine)
 
-**Multi-tenant container orchestration platform** — turn any single Linux box into a shared dev environment by reviving its idle hardware: isolated desktops, Jupyter Lab, and terminal sessions in the browser, with group-based access control, network isolation, auto-sleep, and persistent user data.
+**Don't buy overpriced RAM — revive your idle servers for your team.**
+
+> 64 GB of DDR5 now costs around **$950** — more than an AR-15 rifle ($600). Your 2–5 year old servers already have that RAM — sitting idle below 10% utilization.
+
+**OpenWorkspace Engine** turns any single Linux box into a **multi-tenant cloud dev environment (Cloud IDE / CDE)**: isolated desktops, Jupyter Lab, and terminals in the browser — with group-based access control, per-instance network isolation, auto-sleep, and persistent user data. The entire control plane idles at **~68 MB RAM**.
+
+---
+
+## Quickstart
+
+**Production** — one command from the repo root:
+
+```bash
+docker compose -f docker/openworkspace/docker-compose.yml up -d
+```
+
+Instance template images are built (`pnpm run build:template-images`) or pulled from Docker Hub — see [Run it yourself](#run-it-yourself).
+
+**Development** — full stack (Traefik + PostgreSQL + Rust API + web dev server):
+
+```bash
+pnpm run dev
+```
+
+<video controls src="https://github.com/user-attachments/assets/b533a9a8-7690-4568-bf81-6bd09e629c1f" width="100%">
+  Your browser does not support the video tag.
+</video>
 
 ---
 
 ## Product Vision
-
-> A joke that isn't really a joke: 64 GB of DDR5 now costs around **$950** — more than an AR-15 rifle ($600).
 
 ### Core Pain Points
 
@@ -46,6 +70,15 @@ This project is engineered to reach a **balanced optimum of `Security`, `Stabili
 | **Container Runtime (hardened)** | **gVisor (runsc)** | **Security** — a user-space kernel intercepts syscalls, drastically reducing container-escape risk; selectable per template as an alternative to runC |
 | **Instance Networking** | Per-instance `/30` + host-published ports | **Security (network segmentation)** — see below |
 
+### Flexible Runtime Philosophy: performance when you need it, security when you demand it
+
+Different workloads need different trade-offs. OpenWorkspace-Engine lets administrators choose the container runtime **per template, directly from the web UI** — not a platform-wide gamble:
+
+- **runC — 100% native host performance.** For trusted internal teams, heavy AI/ML training (LLM fine-tuning), or CUDA workloads where syscall interception would cost a few percent, keep the template on standard `runC`: no virtualization layer, raw host speed.
+- **gVisor (runsc) — hardened multi-tenant isolation.** For guest users, untrusted code execution, or in-workspace Docker daemons (`_dini`), switch the template to `runsc` with one click: a user-space kernel intercepts syscalls and drastically reduces container-escape risk. NVProxy GPU passthrough works on both runtimes.
+
+**Trust your team → runC at full hardware speed. Let in a stranger or a risky workload → one click to gVisor.**
+
 ### Why per-instance `/30` networks instead of one shared subnet
 
 Managing every instance on a single flat virtual subnet (e.g. one `/16` or `/24`) is convenient, but it is also a **lateral-movement attack surface**: a compromised user could scan the shared segment and attack other instances from inside the network.
@@ -71,6 +104,42 @@ We benchmarked the full production stack on a real host (i5-12400F, 32 GB DDR4-2
 
 ---
 
+## How OpenWorkspace compares
+
+A rough side-by-side for a single shared box. Only our own column is measured — the rest come from project docs and community reports, so treat them as ballpark:
+
+| Dimension | **OpenWorkspace-Engine** | Kasm Workspaces | Coder (v2) |
+|---|---|---|---|
+| **License** | **Apache 2.0** | Proprietary (free tier capped) | AGPLv3 + Enterprise paywall |
+| **Control plane specs** | **2 CPU / 500 MB / 40 GB recommended** — measured idle **~68 MB RAM** | 2 CPU / 4 GB / 50 GB | 2 CPU / 1 GB |
+| **Network isolation** | **Per-instance `/30` out of the box** — no L2/L3 lateral movement | Shared Docker bridge | Shared Docker bridge |
+| **Runtime switch** | **runC ↔ gVisor per template from the web UI** | Host/K8s level, manual | Host/K8s level, manual |
+| **Docker-in-instance** | **`_dini` templates out of the box** — sandboxed under gVisor, full-privilege under runC (explicit UI warning) | Typically requires `--privileged` | Typically requires `--privileged` |
+| **Proxy architecture** | **Traefik + inotify hot-reload (no Docker socket mounted)** | NGINX | Coder proxy (Go) |
+
+**Control plane memory at rest:**
+
+```
+K8s + JupyterHub   ~2 GB+
+Coder / Gitpod     heavier
+OpenWorkspace      ~68 MB   (measured)
+```
+
+That idle control plane fits on the N100, mini-PC, or lab server that's already collecting dust — and it stays a rounding error next to even one running instance.
+
+### The true open-source freedom
+
+> **Why Apache 2.0?** Many "open-source" workspace platforms employ a bait-and-switch model: restrictive AGPLv3 licenses, hardcoded session limits, or essential security features locked behind "Enterprise" paywalls. OpenWorkspace-Engine is licensed under **Apache 2.0** — no artificial session limits, no locked features, no restrictions on commercial use. We rely entirely on Apache 2.0-compatible dependencies. If an agency wants to build a commercial SaaS on top of it — go ahead.
+
+| | **OpenWorkspace-Engine** | Kasm Workspaces | Coder |
+|---|---|---|---|
+| **License** | **Apache 2.0** | Proprietary | AGPLv3 + Enterprise paywall |
+| **Concurrent sessions** | **Unlimited** (hardware bound) | Capped (Community Edition) | Unlimited (hardware bound) |
+| **Enterprise feature lock** | **None** | Yes (paywalled features) | Yes (OIDC, audit logs, RBAC) |
+| **Commercial use** | **Permitted & welcomed** | Restricted in Community Edition | Restricted by AGPLv3 |
+
+---
+
 ## Terminology
 
 | Concept | Description |
@@ -91,10 +160,6 @@ Everything happens in a single-page web app — no install, no VPN. Open the pla
 3. **Wait for it to start.** The platform auto-detects when the session is ready, then takes you straight in.
 4. **Work in the browser.** Desktops (KasmVNC) open as a full screen with clipboard support; terminals (ttyd) and notebooks (Jupyter) open in a tabbed page.
 5. **Manage your sessions.** Each card shows status, a persistence badge, a live countdown of any time budget, and what you can do in that state — **Start / Stop** (stop keeps your data), **Pause / Resume** (pause uses almost no CPU), **Open**, **Delete** (data is kept; only a reset erases it).
-
-<video controls src="https://github.com/user-attachments/assets/b533a9a8-7690-4568-bf81-6bd09e629c1f" width="100%">
-  Your browser does not support the video tag.
-</video>
 
 Your session's address is unique and stable across stops and restarts — you can bookmark it. Full walkthrough: [docs/user-guide/frontend.md](docs/user-guide/frontend.md).
 
@@ -122,10 +187,16 @@ Every session runs in its own container on its own tiny network — an address s
 
 ## Architecture
 
-```
-Browser ──> Traefik :80 ──> Rust API :3000 (Axum)
-                        ──> SvelteKit SPA (nginx :80)
-                        ──> KasmVNC / ttyd / Jupyter Lab containers
+```mermaid
+flowchart LR
+    U[User browser] --> T{Traefik<br/>file provider}
+    T -->|/api| A[Rust API :3000]
+    T -->|/| W[SvelteKit SPA<br/>nginx :80]
+    T -->|/kasmvnc/ /ttyd/ /jupyter/| I[Instance container<br/>runc / gVisor]
+    A -->|bollard| D[Docker daemon]
+    D --> N[Per-instance /30<br/>+ host-published port]
+    A -.route YAML.-> F[dynamic/]
+    F -.inotify watch.-> T
 ```
 
 **Key mechanism:** The API generates per-instance Traefik route YAML files into a watched directory. Traefik hot-reloads them via inotify — new sessions are immediately accessible without a proxy restart.

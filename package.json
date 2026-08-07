@@ -2,7 +2,7 @@
   "name": "OpenWorkspace-Engine",
   "private": true,
   "scripts": {
-    "init": "bash ./scripts/docker-network.sh && bash ./scripts/docker-runtime-gvisor.sh",
+    "init": "bash ./scripts/docker-runtime-gvisor.sh",
     "clean": "chmod +x ./scripts/* && ./scripts/cleanup.sh",
     "network:allow": "sudo setcap cap_sys_ptrace,cap_sys_admin+ep /usr/bin/nsenter && sudo setcap cap_net_admin+ep /usr/sbin/tc && sudo /usr/sbin/getcap /usr/bin/nsenter /usr/sbin/tc",
     "network:deny": "sudo setcap -r /usr/bin/nsenter && sudo setcap -r /usr/sbin/tc && sudo /usr/sbin/getcap /usr/bin/nsenter /usr/sbin/tc",
