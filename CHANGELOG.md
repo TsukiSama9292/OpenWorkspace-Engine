@@ -4,6 +4,29 @@ Chronological, user-visible changes. Append, don't rewrite history.
 
 ## [Unreleased]
 
+### Log surfaces redesigned (Audit Logs page + Container Log modal)
+
+Log UI Redesign (`.scratch/log-ui-redesign/`). Layout and interaction overhaul
+of the two log surfaces — same dark glassmorphism + zinc/indigo look, no
+backend change:
+
+- **Audit Logs page**: the six filters now sit in an evenly aligned grid with
+  the date-range fields paired; Apply / Clear and the entry count moved to
+  their own right-aligned action row (the Sessions page filter bar inherits
+  the same alignment). Times render compactly (`2026-08-08 15:14`) with the
+  full time on hover, the caller IP column hides on narrow windows, and edit
+  rows expand via a clear keyboard-operable chevron button instead of a
+  hidden corner glyph.
+- **Container Log modal**: follow now genuinely pins to the newest line —
+  scrolling up pauses it (and the status text says so), scrolling to the
+  bottom resumes it. A Wrap toggle switches between wrapped lines and
+  alignment-faithful `white-space: pre` with horizontal scrolling. Lines are
+  numbered with stdout (blue) / stderr (red) color edges replacing the old
+  O/E letterboxes. The panel opens larger, gains a fullscreen toggle, an
+  A−/A+ text-size control remembered across sessions, and truncated header
+  titles.
+- **Tests**: new pure-helper and component test suites for both surfaces.
+
 ### Audit trail (Logs page) and on-demand instance logs
 
 Observability & Logs (`.scratch/archive/observability-logs/`). A queryable audit trail

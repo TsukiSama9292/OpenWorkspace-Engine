@@ -50,3 +50,6 @@ yarn-error.log*
 
 # Benchmark transient reports
 scripts/benchmark/reports/
+
+# Local agent tooling config (intentionally untracked in this repo)
+opencode.jsonc

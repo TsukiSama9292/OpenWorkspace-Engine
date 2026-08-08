@@ -107,6 +107,10 @@ struct CreateTemplateRequest {
     visibility: TemplateVisibility,
 }
 
+fn default_json_object() -> serde_json::Value {
+    serde_json::json!({})
+}
+
 #[derive(Deserialize)]
 struct UpdateTemplateRequest {
     name: String,
@@ -114,12 +118,16 @@ struct UpdateTemplateRequest {
     image: String,
     cores: i32,
     memory: i64,
+    #[serde(default)]
     gpu_count: i32,
     docker_registry: Option<String>,
     #[serde(default = "default_remote_type")]
     remote_type: String,
+    #[serde(default = "default_json_object")]
     run_config: serde_json::Value,
+    #[serde(default = "default_json_object")]
     exec_config: serde_json::Value,
+    #[serde(default = "default_json_object")]
     volume_mappings: serde_json::Value,
     persistent_storage_path: Option<String>,
     #[serde(default = "default_container_runtime")]

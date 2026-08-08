@@ -1,4 +1,7 @@
-import { expect, type Page, test } from '@playwright/test';
+import { expect, type APIRequestContext, type Page, test } from '@playwright/test';
+
+const TEMPLATE_NAME = 'e2e-live-instance-template';
+const IMAGE = 'tsukisama9292/ow-kasmvnc-ubuntu:jammy';
 
 async function loginAsAdmin(page: Page): Promise<void> {
   await page.goto('/login');
@@ -11,25 +14,50 @@ async function loginAsAdmin(page: Page): Promise<void> {
   await expect(page.locator('.dashboard')).toBeVisible();
 }
 
+async function ensureTemplate(req: APIRequestContext): Promise<string> {
+  const list = await req.get('/api/templates');
+  const existing = ((await list.json()).templates ?? []).find((t: any) => t.name === TEMPLATE_NAME);
+  if (existing) return existing.id as string;
+
+  const res = await req.post('/api/templates', {
+    data: {
+      name: TEMPLATE_NAME,
+      description: 'E2E live-instance fixture',
+      image: IMAGE,
+      cores: 1,
+      memory: 1073741824,
+      remote_type: 'kasmvnc',
+      container_runtime: 'runc',
+      visibility: 'public',
+    },
+  });
+  expect(res.ok()).toBeTruthy();
+  return ((await res.json()).template as { id: string }).id;
+}
+
 test('launches a real instance, opens the KasmVNC viewer over the proxied WebSocket, and tears down', async ({
   page,
 }) => {
   await loginAsAdmin(page);
 
-  const quickLaunch = page.locator('.template-card').first();
-  await quickLaunch.waitFor({ state: 'attached', timeout: 15_000 }).catch(() => {});
-  const launchable = page.locator('.template-card:not(.locked)').first();
-  if ((await launchable.count()) === 0) {
-    test.skip(true, 'No launchable templates in the dev stack — create one on the Templates tab first.');
-  }
-
-  const wsUrls: string[] = [];
-  page.on('websocket', (ws) => {
-    wsUrls.push(ws.url());
-  });
-
+  let templateId = '';
   let instanceId = '';
   try {
+    templateId = await ensureTemplate(page.request);
+    await page.goto('/');
+
+    const quickLaunch = page.locator('.template-card').first();
+    await quickLaunch.waitFor({ state: 'attached', timeout: 15_000 });
+    const launchable = page.locator('.template-card:not(.locked)').first();
+    if ((await launchable.count()) === 0) {
+      test.skip(true, 'No launchable templates in the dev stack — create one on the Templates tab first.');
+    }
+
+    const wsUrls: string[] = [];
+    page.on('websocket', (ws) => {
+      wsUrls.push(ws.url());
+    });
+
     await quickLaunch.click();
     await expect(page.locator('.modal-confirm')).toBeVisible();
     await page.locator('.modal-confirm').click();
@@ -64,6 +92,9 @@ test('launches a real instance, opens the KasmVNC viewer over the proxied WebSoc
           { timeout: 15_000 }
         )
         .toBe(false);
+    }
+    if (templateId) {
+      await page.request.delete(`/api/templates/${templateId}`);
     }
   }
 });

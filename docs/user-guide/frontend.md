@@ -103,11 +103,18 @@ The **Logs** page (for admins and groups granted the audit-logs flag) records
   resume / delete, including auto-sleep), template and group and user edits,
   registry and settings changes, and denied-access attempts by signed-in users.
 - Use the filter bar to narrow the list — by event type, actor, target, outcome,
-  or a date range. The list is newest-first and pages through long histories
-  automatically with a "load more" control.
-- Edit events expand to show exactly which fields changed and their before and
-  after values. Sensitive values (passwords, secrets, tokens, keys,
-  credentials) are always shown as `[REDACTED]`.
+  or a date range. The six controls sit in an evenly aligned grid with the
+  date-range pair together; the **Apply** / **Clear** buttons and the entry
+  count live on their own action row, so controls never shift around when the
+  window narrows. The list is newest-first and pages through long histories
+  automatically with a **Load more** control.
+- Times are shown compactly (for example `2026-08-08 15:14`); hover a time to
+  see the full date and time. On narrow windows the caller IP column hides so
+  the table keeps its layout instead of overflowing.
+- Edit events expand with a small chevron button (keyboard-operable) to show
+  exactly which fields changed and their before and after values. Sensitive
+  values (passwords, secrets, tokens, keys, credentials) are always shown as
+  `[REDACTED]`.
 - The trail is kept for 90 days and then pruned automatically.
 
 ## Reading a session's output
@@ -116,7 +123,19 @@ Every session card has a **Logs** button (for the owner, admins, and group
 managers entitled to control the session) that opens the session's console
 output — the last 200 lines by default:
 
-- Turn on **follow** to stream new output live while the session runs.
+- Turn on **follow** to stream new output live while the session runs. While
+  follow is active the view stays pinned to the newest line; scrolling up to
+  read older output pauses follow (the status text says so), and scrolling back
+  to the bottom resumes it.
+- Long lines can be read in two ways: **Wrap** keeps lines flowing within the
+  panel (default), or turn it off to keep terminal column alignment with
+  horizontal scrolling.
+- Each line is numbered, and stdout (blue) is visually separated from stderr
+  (red) by a colored edge so errors stand out.
+- The **A−** / **A+** controls adjust the text size to your display, and your
+  choice is remembered for every session's logs.
+- The panel opens large by default, with a **Fullscreen** toggle for long
+  output. Long instance names are truncated in the header (full name on hover).
 - When a stopped or paused session's logs are opened, the panel shows the tail
   plus a clear "session ended" state with the reason, so a dead session is
   still debuggable.

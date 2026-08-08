@@ -183,6 +183,23 @@ Docker, and bounded log rotation for instance and control-plane containers.
 | Instance log bounds | `json-file` `max-size=5m` `max-file=3` (~15 MB per instance) baked into the container config; control-plane logs rotated by compose (`max-size=10m` `max-file=3`) |
 | E2E | `e2e/tests/observability.full.spec.ts` — audit rows render + filter, real-instance logs tail/follow, RBAC boundary, SSE end states |
 
+### ✅ Log UI redesign (Audit Logs page + Container Log modal)
+
+Post-observability frontend polish (`.scratch/log-ui-redesign/`): both log
+surfaces got a structural layout/interaction overhaul while keeping the dark
+glassmorphism + zinc/indigo language — no backend change. `feature/log-ui-redesign`
+(`fcd7b12` + follow-up fixes).
+
+| Deliverable | Content |
+|---|---|
+| Audit filter bar | six filters in an `auto-fit` CSS grid (dates paired), Apply / Clear + entry count on a separate right-aligned action row; shared `.filter-bar` styles so the Sessions filter bar inherits the same alignment |
+| Audit table | compact `YYYY-MM-DD HH:MM` timestamps with the full locale string on hover; first-column minimum width lifted; IP column hidden via a `matchMedia`-driven class below ~900 px (markup stays for screen readers) |
+| Diff expansion | dedicated native chevron button in the Event cell (`aria-expanded` / `aria-controls`, keyboard-operable); row body no longer clickable; diff renders only before/after-shaped fields |
+| Log modal follow | pinned-to-bottom autoscroll via a pure helper (`shouldAutoscroll`): scroll-up pauses, back-to-bottom resumes; indicator shows streaming / paused / static; follow-off is labeled static |
+| Line rendering | line numbers + stdout blue / stderr red left-gutter stripes (replacing O/E letterboxes); Wrap toggle default-on switching to `white-space: pre` + horizontal scroll |
+| Size & type | default `min(900px, 92vw)` × `min(82vh, …)`, fullscreen toggle, truncated header title, A−/A+ font size 12–16 px persisted under one shared key |
+| Tests | `log-helpers` / `logs-panel` / `container-log-panel` vitest files (pure-helper + component tests) — full web suite 381 tests green, `svelte-check` 0 errors/warnings, eslint + `analysis:web` clean |
+
 ---
 
 ## In-progress / Planned Stages

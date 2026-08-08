@@ -587,30 +587,34 @@
         <h2 class="section-title">All Instances</h2>
 
         <div class="filter-bar">
-          <div class="filter-group">
-            <label class="filter-label" for="filter-user">User</label>
-            <select id="filter-user" class="filter-select" bind:value={filterUser}>
-              <option value="">All Users</option>
-              {#each uniqueUsers as user (user)}
-                <option value={user}>{user}</option>
-              {/each}
-            </select>
+          <div class="filter-grid">
+            <div class="filter-group">
+              <label class="filter-label" for="filter-user">User</label>
+              <select id="filter-user" class="filter-select" bind:value={filterUser}>
+                <option value="">All Users</option>
+                {#each uniqueUsers as user (user)}
+                  <option value={user}>{user}</option>
+                {/each}
+              </select>
+            </div>
+            <div class="filter-group">
+              <label class="filter-label" for="filter-status">Status</label>
+              <select id="filter-status" class="filter-select" bind:value={filterStatus}>
+                <option value="">All Statuses</option>
+                <option value="running">Running</option>
+                <option value="starting">Starting</option>
+                <option value="paused">Paused</option>
+                <option value="stopped">Stopped</option>
+                <option value="error">Error</option>
+              </select>
+            </div>
           </div>
-          <div class="filter-group">
-            <label class="filter-label" for="filter-status">Status</label>
-            <select id="filter-status" class="filter-select" bind:value={filterStatus}>
-              <option value="">All Statuses</option>
-              <option value="running">Running</option>
-              <option value="starting">Starting</option>
-              <option value="paused">Paused</option>
-              <option value="stopped">Stopped</option>
-              <option value="error">Error</option>
-            </select>
+          <div class="filter-actions-row">
+            <span class="filter-count">{filteredInstances.length} instance{filteredInstances.length !== 1 ? 's' : ''}</span>
+            {#if filterUser || filterStatus}
+              <button class="filter-clear" onclick={() => { filterUser = ''; filterStatus = ''; }}>Clear filters</button>
+            {/if}
           </div>
-          {#if filterUser || filterStatus}
-            <button class="filter-clear" onclick={() => { filterUser = ''; filterStatus = ''; }}>Clear filters</button>
-          {/if}
-          <span class="filter-count">{filteredInstances.length} instance{filteredInstances.length !== 1 ? 's' : ''}</span>
         </div>
 
         {#if filteredInstances.length === 0}
@@ -1336,26 +1340,41 @@
     color: #71717a;
   }
 
-  /* Filter Bar */
-  .filter-bar {
+  /* Filter Bar (shared: the Sessions view here and the audit filter bar in
+     the child LogsPanel both use this chrome) */
+  :global(.filter-bar) {
     display: flex;
-    align-items: flex-end;
-    gap: 1rem;
+    flex-direction: column;
+    gap: 0.75rem;
     margin-bottom: 1.5rem;
     padding: 0.75rem 1rem;
     background: rgba(0, 0, 0, 0.25);
     border: 1px solid rgba(255, 255, 255, 0.06);
     border-radius: 10px;
-    flex-wrap: wrap;
   }
 
-  .filter-group {
+  :global(.filter-grid) {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 0.75rem 1rem;
+    align-items: end;
+  }
+
+  :global(.filter-pair) {
+    grid-column: span 2;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 1rem;
+  }
+
+  :global(.filter-group) {
     display: flex;
     flex-direction: column;
     gap: 4px;
+    min-width: 0;
   }
 
-  .filter-label {
+  :global(.filter-label) {
     font-size: 0.6rem;
     font-weight: 600;
     color: #71717a;
@@ -1363,7 +1382,7 @@
     letter-spacing: 0.05em;
   }
 
-  .filter-select {
+  :global(.filter-select) {
     background: rgba(0, 0, 0, 0.4);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 6px;
@@ -1376,9 +1395,15 @@
     min-width: 140px;
   }
 
-  .filter-select:focus { border-color: #818cf8; }
+  :global(.filter-grid) select {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
 
-  .filter-clear {
+  :global(.filter-select:focus) { border-color: #818cf8; }
+
+  :global(.filter-clear) {
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid rgba(255, 255, 255, 0.08);
     color: #a1a1aa;
@@ -1390,12 +1415,19 @@
     transition: all 0.2s;
   }
 
-  .filter-clear:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
+  :global(.filter-clear:hover) { background: rgba(255, 255, 255, 0.1); color: #fff; }
 
-  .filter-count {
+  :global(.filter-actions-row) {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  :global(.filter-count) {
     font-size: 0.75rem;
     color: #52525b;
-    margin-left: auto;
+    margin-right: auto;
     white-space: nowrap;
   }
 

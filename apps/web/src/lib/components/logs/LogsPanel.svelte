@@ -3,6 +3,7 @@
   import { SvelteSet } from 'svelte/reactivity';
   import { fetchAudit } from '$lib/api/audit';
   import { mayViewAuditLogs } from '$lib/permissions';
+  import { formatAuditTime, fullAuditTime } from '$lib/logs/log-helpers';
   import type { AuditEntry, AuditOutcome, EffectiveContext } from '$lib/types';
 
   let {
@@ -93,6 +94,18 @@
   let loadingMore = $state(false);
   let error = $state('');
   let expanded = new SvelteSet<string>();
+  let narrow = $state(false);
+
+  $effect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia('(max-width: 899px)');
+    narrow = mq.matches;
+    const onChange = (event: MediaQueryListEvent) => {
+      narrow = event.matches;
+    };
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  });
 
   const hasFilters = $derived(
     action !== '' || actor.trim() !== '' || target.trim() !== '' ||
@@ -157,12 +170,6 @@
     loadFirstPage();
   }
 
-  function formatTime(iso: string): string {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
-    return d.toLocaleString();
-  }
-
   function actionLabel(value: string): string {
     for (const group of ACTION_GROUPS) {
       const found = group.options.find((o) => o.value === value);
@@ -171,24 +178,20 @@
     return value;
   }
 
-  function isDiffEntry(entry: AuditEntry): boolean {
-    if (!entry.detail || typeof entry.detail !== 'object') return false;
-    const values = Object.values(entry.detail);
-    return values.some(
-      (v) =>
-        v !== null &&
-        typeof v === 'object' &&
-        'before' in (v as Record<string, unknown>) &&
-        'after' in (v as Record<string, unknown>)
-    );
-  }
-
   function diffFields(entry: AuditEntry): [string, unknown, unknown][] {
     if (!entry.detail || typeof entry.detail !== 'object') return [];
-    return Object.entries(entry.detail).map(([field, value]) => {
-      const v = value as Record<string, unknown>;
-      return [field, v.before, v.after];
-    });
+    const fields: [string, unknown, unknown][] = [];
+    for (const [field, value] of Object.entries(entry.detail)) {
+      if (value !== null && typeof value === 'object' && 'before' in value && 'after' in value) {
+        const v = value as Record<string, unknown>;
+        fields.push([field, v.before, v.after]);
+      }
+    }
+    return fields;
+  }
+
+  function isDiffEntry(entry: AuditEntry): boolean {
+    return diffFields(entry).length > 0;
   }
 
   function toggleExpand(id: string) {
@@ -231,50 +234,54 @@
     </div>
 
     <div class="filter-bar">
-      <div class="filter-group">
-        <label class="filter-label" for="log-filter-action">Event type</label>
-        <select id="log-filter-action" class="filter-select" bind:value={action}>
-          <option value="">All events</option>
-          {#each ACTION_GROUPS as group (group.label)}
-            <optgroup label={group.label}>
-              {#each group.options as option (option.value)}
-                <option value={option.value}>{option.label}</option>
-              {/each}
-            </optgroup>
-          {/each}
-        </select>
+      <div class="filter-grid">
+        <div class="filter-group">
+          <label class="filter-label" for="log-filter-action">Event type</label>
+          <select id="log-filter-action" class="filter-select" bind:value={action}>
+            <option value="">All events</option>
+            {#each ACTION_GROUPS as group (group.label)}
+              <optgroup label={group.label}>
+                {#each group.options as option (option.value)}
+                  <option value={option.value}>{option.label}</option>
+                {/each}
+              </optgroup>
+            {/each}
+          </select>
+        </div>
+        <div class="filter-group">
+          <label class="filter-label" for="log-filter-actor">Actor</label>
+          <input id="log-filter-actor" class="modal-input" type="text" placeholder="Username…" bind:value={actor} />
+        </div>
+        <div class="filter-group">
+          <label class="filter-label" for="log-filter-target">Target</label>
+          <input id="log-filter-target" class="modal-input" type="text" placeholder="Instance / template…" bind:value={target} />
+        </div>
+        <div class="filter-group">
+          <label class="filter-label" for="log-filter-outcome">Outcome</label>
+          <select id="log-filter-outcome" class="filter-select" bind:value={outcome}>
+            <option value="">Any</option>
+            <option value="success">Success</option>
+            <option value="failure">Failure</option>
+          </select>
+        </div>
+        <div class="filter-pair">
+          <div class="filter-group">
+            <label class="filter-label" for="log-filter-after">After</label>
+            <input id="log-filter-after" class="modal-input" type="date" bind:value={afterDate} />
+          </div>
+          <div class="filter-group">
+            <label class="filter-label" for="log-filter-before">Before</label>
+            <input id="log-filter-before" class="modal-input" type="date" bind:value={beforeDate} />
+          </div>
+        </div>
       </div>
-      <div class="filter-group">
-        <label class="filter-label" for="log-filter-actor">Actor</label>
-        <input id="log-filter-actor" class="modal-input filter-text" type="text" placeholder="Username…" bind:value={actor} />
-      </div>
-      <div class="filter-group">
-        <label class="filter-label" for="log-filter-target">Target</label>
-        <input id="log-filter-target" class="modal-input filter-text" type="text" placeholder="Instance / template…" bind:value={target} />
-      </div>
-      <div class="filter-group">
-        <label class="filter-label" for="log-filter-outcome">Outcome</label>
-        <select id="log-filter-outcome" class="filter-select" bind:value={outcome}>
-          <option value="">Any</option>
-          <option value="success">Success</option>
-          <option value="failure">Failure</option>
-        </select>
-      </div>
-      <div class="filter-group">
-        <label class="filter-label" for="log-filter-after">After</label>
-        <input id="log-filter-after" class="modal-input filter-text" type="date" bind:value={afterDate} />
-      </div>
-      <div class="filter-group">
-        <label class="filter-label" for="log-filter-before">Before</label>
-        <input id="log-filter-before" class="modal-input filter-text" type="date" bind:value={beforeDate} />
-      </div>
-      <div class="filter-group filter-actions">
+      <div class="filter-actions-row">
+        <span class="filter-count">{entries.length} entr{entries.length === 1 ? 'y' : 'ies'}</span>
         <button class="modal-confirm filter-apply" onclick={loadFirstPage}>Apply</button>
         {#if hasFilters}
           <button class="filter-clear" onclick={clearFilters}>Clear</button>
         {/if}
       </div>
-      <span class="filter-count">{entries.length} entr{entries.length === 1 ? 'y' : 'ies'}</span>
     </div>
 
     {#if error}
@@ -287,7 +294,7 @@
       <p class="empty-text">No audit entries match the current filters.</p>
     {:else}
       <div class="instances-table-wrap">
-        <table class="instances-table audit-table">
+        <table class="instances-table audit-table" class:ip-hidden={narrow}>
           <thead>
             <tr>
               <th>Time</th>
@@ -295,19 +302,29 @@
               <th>Event</th>
               <th>Target</th>
               <th>Outcome</th>
-              <th>IP</th>
+              <th class="ip-th">IP</th>
             </tr>
           </thead>
           <tbody>
             {#each entries as entry (entry.id)}
               {@const diff = isDiffEntry(entry)}
-              <tr class="audit-row" class:expandable={diff} onclick={() => diff && toggleExpand(entry.id)}>
-                <td class="td-date">{formatTime(entry.created_at)}</td>
+              <tr class="audit-row">
+                <td class="td-date" title={fullAuditTime(entry.created_at)}>{formatAuditTime(entry.created_at)}</td>
                 <td class="td-owner">{entry.actor_name || 'system'}</td>
                 <td class="td-action">
                   <span class="action-chip">{actionLabel(entry.action)}</span>
                   {#if diff}
-                    <span class="diff-toggle">{expanded.has(entry.id) ? '−' : '+'}</span>
+                    <button
+                      type="button"
+                      class="diff-toggle"
+                      class:open={expanded.has(entry.id)}
+                      aria-expanded={expanded.has(entry.id)}
+                      aria-controls={`audit-diff-${entry.id}`}
+                      onclick={() => toggleExpand(entry.id)}
+                    >
+                      <span class="diff-chevron" aria-hidden="true">▸</span>
+                      <span class="sr-only">{expanded.has(entry.id) ? 'Hide changes' : 'Show changes'}</span>
+                    </button>
                   {/if}
                 </td>
                 <td class="td-target">
@@ -327,7 +344,7 @@
               </tr>
               {#if diff && expanded.has(entry.id)}
                 <tr class="audit-diff-row">
-                  <td colspan="6">
+                  <td colspan="6" id={`audit-diff-${entry.id}`}>
                     <div class="audit-diff">
                       {#each diffFields(entry) as [field, before, after] (field)}
                         <div class="audit-diff-field">
@@ -358,15 +375,43 @@
 {/if}
 
 <style>
-  .filter-text {
-    width: 160px;
+  .modal-input {
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
     padding: 0.45rem 0.65rem;
+    color: #f4f4f5;
+    font-size: 0.8rem;
+    font-family: inherit;
+    outline: none;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
   }
 
-  .filter-actions {
-    flex-direction: row;
-    align-items: center;
-    gap: 6px;
+  .modal-input:focus {
+    border-color: #818cf8;
+  }
+
+  .modal-input::placeholder {
+    color: #52525b;
+  }
+
+  .modal-confirm {
+    background: #6366f1;
+    border: 1px solid #6366f1;
+    color: #fff;
+    padding: 0.45rem 0.9rem;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.2s;
+  }
+
+  .modal-confirm:hover {
+    background: #4f46e5;
   }
 
   .filter-apply {
@@ -374,16 +419,45 @@
     font-size: 0.75rem;
   }
 
+  .error-badge {
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.2);
+    color: #f87171;
+    font-size: 0.8rem;
+    padding: 0.5rem;
+    border-radius: 6px;
+    text-align: center;
+    margin-top: 0.5rem;
+  }
+
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.72rem;
+    font-weight: 500;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    text-transform: capitalize;
+  }
+
+  .status-dot-inline {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #52525b;
+    flex-shrink: 0;
+  }
+
+  .status-badge.dot-active { color: #4ade80; border-color: rgba(34, 197, 94, 0.2); }
+  .status-badge.dot-active .status-dot-inline { background: #22c55e; }
+  .status-badge.dot-error { color: #f87171; border-color: rgba(239, 68, 68, 0.2); }
+  .status-badge.dot-error .status-dot-inline { background: #ef4444; }
+
   .audit-table td {
     cursor: default;
-  }
-
-  .audit-row.expandable {
-    cursor: pointer;
-  }
-
-  .audit-row.expandable:hover .action-chip {
-    border-color: rgba(99, 102, 241, 0.4);
   }
 
   .action-chip {
@@ -403,14 +477,47 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 16px;
-    height: 16px;
-    margin-left: 6px;
-    font-size: 0.75rem;
-    color: #a5b4fc;
-    border: 1px solid rgba(129, 140, 248, 0.3);
-    border-radius: 4px;
+    width: 22px;
+    height: 22px;
+    margin-left: 8px;
     vertical-align: middle;
+    background: rgba(99, 102, 241, 0.12);
+    border: 1px solid rgba(129, 140, 248, 0.3);
+    border-radius: 6px;
+    color: #a5b4fc;
+    cursor: pointer;
+    line-height: 1;
+    transition: border-color 0.15s, background 0.15s;
+  }
+
+  .diff-toggle:hover {
+    background: rgba(99, 102, 241, 0.22);
+  }
+
+  .diff-toggle:focus-visible {
+    outline: 2px solid #818cf8;
+    outline-offset: 1px;
+  }
+
+  .diff-chevron {
+    display: inline-block;
+    transition: transform 0.15s ease;
+  }
+
+  .diff-toggle.open .diff-chevron {
+    transform: rotate(90deg);
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   .target-name {
@@ -427,9 +534,31 @@
     font-family: monospace;
   }
 
+  .audit-table.ip-hidden th.ip-th,
+  .audit-table.ip-hidden td.td-ip {
+    display: none;
+  }
+
+  :global(.instances-table.audit-table th:first-child),
+  :global(.instances-table.audit-table td:first-child) {
+    min-width: 0;
+  }
+
   .audit-diff-row td {
     background: rgba(0, 0, 0, 0.25);
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    animation: audit-diff-in 0.18s ease-out;
+  }
+
+  @keyframes audit-diff-in {
+    from {
+      opacity: 0;
+      transform: translateY(-2px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
   }
 
   .audit-diff {
@@ -472,5 +601,15 @@
     display: flex;
     justify-content: center;
     margin-top: 1rem;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .diff-chevron {
+      transition: none;
+    }
+
+    .audit-diff-row td {
+      animation: none;
+    }
   }
 </style>
