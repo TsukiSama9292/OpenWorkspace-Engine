@@ -105,6 +105,7 @@
     dragging = true;
     dragStartX = pointerToX(e);
     dragCurX = dragStartX;
+    svg?.setPointerCapture?.(e.pointerId);
   }
 
   function onPointerMove(e: PointerEvent) {
@@ -118,6 +119,7 @@
 
   function onPointerUp(e: PointerEvent) {
     if (!dragging) return;
+    svg?.releasePointerCapture?.(e.pointerId);
     dragging = false;
     hover = null;
     if (Math.abs(dragCurX - dragStartX) > DRAG_THRESHOLD_PX) {
@@ -136,7 +138,6 @@
 
   function onPointerLeave() {
     hover = null;
-    dragging = false;
   }
 
   function backToNow() {
