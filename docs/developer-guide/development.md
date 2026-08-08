@@ -10,6 +10,11 @@
 | Node.js | ≥ 18 | SvelteKit/Vite toolchain |
 | Rust toolchain | stable | API (Axum), migrations, nextest |
 
+> **Supported platforms:** AMD64 (x86_64) and ARM64 (aarch64). The Docker Hub
+> template images are published multi-arch for both; other architectures are
+> untested. gVisor (`runsc`) is only available on these two architectures, so
+> `runsc`-pinned templates cannot launch elsewhere.
+
 ## Quick Start
 
 ```bash

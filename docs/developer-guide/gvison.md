@@ -9,6 +9,15 @@ For GPU work, gVisor ships **NVProxy** (`runsc --nvproxy`): it intercepts the
 container's NVIDIA driver ioctls and proxies them to the host driver. The
 container never gets raw device access, and the sandbox still sees CUDA.
 
+## Platform availability
+
+gVisor (`runsc`) is released only for **AMD64 (x86_64)** and **ARM64
+(aarch64)**. OpenWorkspace inherits this limit: a template pinned to the
+`runsc` runtime can only launch on those two architectures. On any other
+platform, gVisor sandboxing is unavailable — keep such hosts on the default
+`runC` runtime. (The platform as a whole is built for these same two
+architectures; see [tech-stack.md](tech-stack.md).)
+
 ## GPU Hardware Compatibility
 
 ### Officially supported (per [gVisor docs](https://gvisor.dev/docs/user_guide/gpu/))

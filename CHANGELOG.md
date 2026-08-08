@@ -4,6 +4,15 @@ Chronological, user-visible changes. Append, don't rewrite history.
 
 ## [Unreleased]
 
+### Docs: published images + platform support
+
+- Instance template images are now published to Docker Hub
+  (`tsukisama9292/ow-*-ubuntu*:jammy`) as **multi-arch** for AMD64 (x86_64)
+  and ARM64 (aarch64) — both architectures pull the same tag. gVisor (`runsc`)
+  is documented as AMD64/ARM64-only, so `runsc`-pinned templates are limited
+  to those platforms; other architectures are untested. Documented in
+  README.md and the developer guide.
+
 ### Log surfaces redesigned (Audit Logs page + Container Log modal)
 
 Log UI Redesign (`.scratch/log-ui-redesign/`). Layout and interaction overhaul

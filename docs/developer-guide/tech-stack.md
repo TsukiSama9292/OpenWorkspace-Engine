@@ -348,6 +348,13 @@ changing `JWT_SECRET` forces every logged-in user to re-login; changing
   by flock, but the cache remains per-process.
 - **No CI** — no `.github` CI yet; quality gates rely on local scripts
   (`check.sh` / `run_tests.sh`).
+- **Platform support: AMD64 + ARM64 only** — the Rust API and the published
+  instance images (`tsukisama9292/ow-*-ubuntu*:jammy`, multi-arch) are built
+  for AMD64 (x86_64) and ARM64 (aarch64); other platforms are untested. gVisor
+  (`runsc`) is released only for these two architectures, so `runsc`-pinned
+  templates cannot launch anywhere else. The platform's support envelope is
+  bounded mainly by the Rust API server — other platforms may work, but are
+  not verified.
 - **GPU is NVIDIA-only + specific architectures** — NVProxy supports
   Turing/Ampere/Ada/Hopper.
 - **tc/HTB needs root capabilities** — the host-run dev API requires

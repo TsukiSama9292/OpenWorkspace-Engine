@@ -228,6 +228,28 @@ Full ADR-style record (in Chinese): [docs/developer-guide/tech-stack.md](docs/de
 | **Package Management** | pnpm + Turborepo | pnpm 9 / turbo 2 |
 | **Instance Images** | KasmVNC / Jupyter Lab / ttyd (built + `_dini` variants) | — |
 
+## Platform support
+
+The platform and the published instance images support **two CPU architectures**:
+
+- **AMD64 (x86_64)** — standard Intel/AMD servers, desktops, mini-PCs
+- **ARM64 (aarch64)** — e.g. NVIDIA DGX Spark, Raspberry Pi-class machines
+
+The template images on Docker Hub (`tsukisama9292/ow-*-ubuntu*:jammy`) are
+published **multi-arch** for both platforms, so an AMD64 or ARM64 host can
+`docker pull` them directly. Other architectures are untested.
+
+Two caveats:
+
+- **gVisor (`runsc`) is only available on AMD64 (x86_64) and ARM64.** The
+  gVisor release only targets these two architectures, so templates pinned to
+  the `runsc` container runtime can only launch on an AMD64 or ARM64 host — on
+  any other platform, keep templates on the default `runC` runtime.
+- **Platform support is bounded mainly by the Rust API server**, whose
+  host-side binaries and dependencies are built for these two architectures.
+  If you are interested, you are welcome to try other platforms and report
+  whether they work.
+
 ## Project Structure
 
 ```
