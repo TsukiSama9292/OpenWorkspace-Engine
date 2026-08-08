@@ -209,8 +209,8 @@ glassmorphism + zinc/indigo language — no backend change. `feature/log-ui-rede
 | Item | Description | Priority |
 |---|---|---|
 | Persistent-data backup/snapshot | periodic backup of `server-pgdata` and user home dirs; simple restore flow | High |
-| Orphaned-folder cleanup | remove persistent folders that no longer exist in the DB (the existing "Thorough Cleanup" in the UI) | Medium |
-| Graceful shutdown/startup | restore instance state, rebuild routes, re-declare volumes after reboot | Medium |
+| ~~Orphaned-folder cleanup~~ | remove persistent folders that no longer exist in the DB — **✅ already shipped** as the Volumes-tab "Thorough Cleanup" (`OrphanedVolumesPanel` + `/api/persistent-volumes/{id}/cleanup`, landed in the RBAC-volumes work) | ~~Medium~~ Done |
+| ~~Graceful shutdown/startup~~ | restore instance state, rebuild routes, re-declare volumes after reboot — **✅ already shipped**: instance containers get `unless-stopped`, so running instances auto-resume on daemon reboot; route files persist on disk in `traefik/dynamic` and traefik hot-reloads them; lost volume declarations are re-created by `ensure_persistent_volume` on start (`instances.rs`) | ~~Medium~~ Done |
 | Health self-checks | aggregate health endpoints for API/Traefik/DB for external monitoring (uptime checks) | Low |
 | Per-group/user resource quotas | beyond instance count, add group-level CPU / memory / GPU quotas | Medium |
 
@@ -282,6 +282,8 @@ glassmorphism + zinc/indigo language — no backend change. `feature/log-ui-rede
 - ✅ whole-home persistence
 - ✅ three launch modes (use / no / reset)
 - ✅ delete keeps data, restart re-populates
+- ✅ orphaned-volume cleanup (Volumes-tab "Thorough Cleanup")
+- ✅ running instances resume on host/daemon reboot (`unless-stopped`)
 
 ### Admin
 - ✅ single-page dashboard
