@@ -208,7 +208,8 @@ glassmorphism + zinc/indigo language — no backend change. `feature/log-ui-rede
 
 | Item | Description | Priority |
 |---|---|---|
-| Persistent-data backup/snapshot | periodic backup of `server-pgdata` and user home dirs; simple restore flow | High |
+| ~~Control-plane backup & restore~~ | transitional **CLI-only** procedures for the control-plane DB (`pg_dump` / `psql`, stop-before-restore) — **✅ shipped as docs** in `docs/developer-guide/backup-and-restore.md`. Automated backup (Rust API / web UI) is deliberately **not** scheduled for now | ~~High~~ Done |
+| ~~Persistent-data backup/snapshot~~ | automated snapshot of user home dirs is **out of scope** for the platform — the DB layer covers server data only. Durability of user instance data is an **ops/infrastructure** concern: only a PV backend with its own backup/restore (e.g. NAS) provides it; host `tar` is best-effort, not a substitute (`backup-and-restore.md` §1) | ~~High~~ Low (infra) |
 | ~~Orphaned-folder cleanup~~ | remove persistent folders that no longer exist in the DB — **✅ already shipped** as the Volumes-tab "Thorough Cleanup" (`OrphanedVolumesPanel` + `/api/persistent-volumes/{id}/cleanup`, landed in the RBAC-volumes work) | ~~Medium~~ Done |
 | ~~Graceful shutdown/startup~~ | restore instance state, rebuild routes, re-declare volumes after reboot — **✅ already shipped**: instance containers get `unless-stopped`, so running instances auto-resume on daemon reboot; route files persist on disk in `traefik/dynamic` and traefik hot-reloads them; lost volume declarations are re-created by `ensure_persistent_volume` on start (`instances.rs`) | ~~Medium~~ Done |
 | Health self-checks | aggregate health endpoints for API/Traefik/DB for external monitoring (uptime checks) | Low |
@@ -284,6 +285,8 @@ glassmorphism + zinc/indigo language — no backend change. `feature/log-ui-rede
 - ✅ delete keeps data, restart re-populates
 - ✅ orphaned-volume cleanup (Volumes-tab "Thorough Cleanup")
 - ✅ running instances resume on host/daemon reboot (`unless-stopped`)
+- ✅ control-plane DB backup/restore via transitional CLI (`docs/developer-guide/backup-and-restore.md`; automated backup not planned)
+- ⛔ no built-in user-data backup — persistent instance data durability is the storage backend's responsibility (NAS / backup-capable storage)
 
 ### Admin
 - ✅ single-page dashboard
