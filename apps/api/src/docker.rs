@@ -3,7 +3,7 @@ use bollard::container::{
     StartContainerOptions, StopContainerOptions, UploadToContainerOptions, WaitContainerOptions,
 };
 use bollard::image::CreateImageOptions;
-use bollard::models::{ContainerSummary, Ipam, IpamConfig};
+use bollard::models::{ContainerSummary, Ipam, IpamConfig, RestartPolicy};
 use bollard::network::CreateNetworkOptions;
 use bollard::volume::{CreateVolumeOptions, RemoveVolumeOptions};
 use bollard::Docker;
@@ -572,6 +572,13 @@ impl DockerService for DockerClient {
 
         let config = Config {
             image: Some(image),
+            host_config: Some(bollard::models::HostConfig {
+                restart_policy: Some(RestartPolicy {
+                    name: Some(bollard::models::RestartPolicyNameEnum::UNLESS_STOPPED),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
             ..Default::default()
         };
 
@@ -769,6 +776,10 @@ impl DockerService for DockerClient {
                 None
             },
             runtime: config.runtime.as_deref().and_then(runtime_to_host_config),
+            restart_policy: Some(RestartPolicy {
+                name: Some(bollard::models::RestartPolicyNameEnum::UNLESS_STOPPED),
+                ..Default::default()
+            }),
             port_bindings: config.host_port.map(|host_port| {
                 let host_ip = config.host_gateway_ip.as_deref().unwrap_or("172.17.0.1");
                 let bindings = port_bindings_for(&config.remote_type, host_ip, host_port);

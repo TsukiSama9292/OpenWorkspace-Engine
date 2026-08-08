@@ -316,6 +316,14 @@ async fn test_create_container_dini_off_keeps_hardened_defaults() {
         Some(vec!["NET_RAW".to_string(), "NET_ADMIN".to_string()])
     );
     assert!(host_config.tmpfs.is_none());
+    let restart_policy = host_config
+        .restart_policy
+        .as_ref()
+        .expect("expected restart policy");
+    assert_eq!(
+        restart_policy.name,
+        Some(bollard::models::RestartPolicyNameEnum::UNLESS_STOPPED)
+    );
 
     let env = inspect
         .config

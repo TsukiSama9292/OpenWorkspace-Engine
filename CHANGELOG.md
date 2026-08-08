@@ -4,6 +4,14 @@ Chronological, user-visible changes. Append, don't rewrite history.
 
 ## [Unreleased]
 
+### Instance containers now restart with `unless-stopped`
+
+Instance (and raw admin-panel) containers are created with the `unless-stopped`
+restart policy, so a host or Docker daemon restart brings running instances
+back automatically. A deliberate stop — from the UI, the API, or auto-sleep —
+still stays stopped; only a container that was running at daemon shutdown is
+resumed.
+
 ### Monitor tab: interactive time-series charts and instance detail modal
 
 Monitor Dashboard Optimization (`.scratch/archive/monitor-dashboard-optimization/`).
