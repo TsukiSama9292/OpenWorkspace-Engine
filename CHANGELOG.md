@@ -6,7 +6,7 @@ Chronological, user-visible changes. Append, don't rewrite history.
 
 ### Audit trail (Logs page) and on-demand instance logs
 
-Observability & Logs (`.scratch/observability-logs/`). A queryable audit trail
+Observability & Logs (`.scratch/archive/observability-logs/`). A queryable audit trail
 of administrative and security events, plus an on-demand container-log viewer:
 
 - **Audit trail**: every meaningful action — sign-ins and failed sign-ins,

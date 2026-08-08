@@ -170,7 +170,7 @@ axis that auto-switches resolution as you zoom.
 ### ✅ Observability & Logs (audit trail + on-demand container logs)
 
 Stage 5's observability trio
-(`.scratch/observability-logs/`): a queryable audit trail of administrative
+(`.scratch/archive/observability-logs/`): a queryable audit trail of administrative
 and security events, an on-demand container-log viewer streamed live from
 Docker, and bounded log rotation for instance and control-plane containers.
 
