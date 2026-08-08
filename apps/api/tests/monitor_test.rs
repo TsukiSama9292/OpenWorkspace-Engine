@@ -1,7 +1,7 @@
 //! Monitor-dashboard endpoint tests (monitor-dashboard spec, ticket 03):
-//! RBAC gating (403 without the flag, 200 for admin), range parsing, host +
-//! instance payload shape, and the fail-open sampler behavior against a
-//! mocked `DockerService`.
+//! RBAC gating (403 without the flag, 200 for admin), host + instance payload
+//! shape (both granularity tiers in one snapshot), and the fail-open sampler
+//! behavior against a mocked `DockerService`.
 
 mod common;
 
@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use common::ensure_pg;
 use openworkspace_api::core::Settings;
-use openworkspace_api::docker::{ContainerStats, MockDockerService};
-use openworkspace_api::metrics::{MetricsStore, Range};
+use openworkspace_api::docker::{ContainerStats, ContainerStatsError, MockDockerService};
+use openworkspace_api::metrics::MetricsStore;
 use openworkspace_api::monitor::MetricsSampler;
 use openworkspace_api::routes::{AppState, api_routes};
 use openworkspace_api::vnc_cache::VncCache;
@@ -216,8 +216,9 @@ impl MonitorContext {
     }
 
     /// Create a template + a `running` instance owned by `owner_id`, returning
-    /// the instance id.
-    async fn seed_running_instance(&self, owner_id: &str) -> String {
+    /// the instance id. `template_memory` is the template's memory cap in bytes
+    /// (0 = unlimited).
+    async fn seed_running_instance(&self, owner_id: &str, template_memory: i64) -> String {
         use openworkspace_api::db::{workspace_instance, workspace_template};
         use sea_orm::{ActiveModelTrait, Set};
         let now = chrono::Utc::now();
@@ -229,7 +230,7 @@ impl MonitorContext {
             owner_id: Set(owner_id.parse().unwrap()),
             image: Set("kasmweb/base-desktop:1.14.0".to_string()),
             cores: Set(2),
-            memory: Set(4096),
+            memory: Set(template_memory),
             gpu_count: Set(0),
             docker_registry: Set(None),
             run_config: Set(serde_json::json!({})),
@@ -304,20 +305,12 @@ async fn test_monitor_snapshot_denied_without_flag_and_granted_with_flag() {
 }
 
 #[tokio::test]
-async fn test_monitor_snapshot_invalid_range_is_400() {
-    let ctx = MonitorContext::new(|_| {}).await;
-    let admin_token = ctx.login("admin", "admin").await;
-    let resp = ctx.get_snapshot(&admin_token, Some("1y")).await;
-    assert_eq!(resp.status(), 400);
-}
-
-#[tokio::test]
 async fn test_monitor_snapshot_returns_host_and_instances() {
     let ctx = MonitorContext::new(|_| {}).await;
     let admin_token = ctx.login("admin", "admin").await;
 
     let owner = ctx.create_plain_user(&admin_token, "owner-user").await;
-    ctx.seed_running_instance(&owner).await;
+    ctx.seed_running_instance(&owner, 4_096_000_000).await;
 
     // A full sampler pass populates the store: host from /proc (fail-open to
     // zeros if unreadable) and the instance from a one-shot container stat.
@@ -347,12 +340,64 @@ async fn test_monitor_snapshot_returns_host_and_instances() {
     assert_eq!(inst["owner"], "owner-user");
     assert_eq!(inst["status"], "running");
     assert_eq!(inst["cpu_percent"], 17.5);
+    assert_eq!(inst["cpu_limit_percent"].as_f64(), Some(200.0), "2-core template");
     assert_eq!(inst["mem_used_bytes"].as_u64(), Some(1_500_000_000));
     assert_eq!(inst["mem_limit_bytes"].as_u64(), Some(4_096_000_000));
+    assert!(body["host"]["cpu_cores"].as_u64().unwrap() >= 1);
 
-    // The snapshot endpoint is range-aware: 24h selects the Tier-2 series.
+    // One pass produces exactly one fine point, timestamped, with the value
+    // reported by the sampler.
+    let fine = inst["cpu_fine"].as_array().unwrap();
+    assert_eq!(fine.len(), 1);
+    assert!(fine[0]["t"].as_i64().is_some(), "fine points carry a timestamp");
+    assert_eq!(fine[0]["v"].as_f64(), Some(17.5));
+    assert_eq!(inst["mem_fine"].as_array().unwrap().len(), 1);
+
+    // Both tiers are always returned in one snapshot; the old ?range= toggle
+    // is gone, so a stale value is ignored and the fine tier stays present.
     let body: serde_json::Value = ctx.get_snapshot(&admin_token, Some("24h")).await.json().await.unwrap();
-    assert!(body["instances"][0]["cpu_series"].as_array().unwrap().is_empty());
+    let inst = &body["instances"][0];
+    assert_eq!(inst["cpu_fine"].as_array().unwrap().len(), 1);
+    assert!(inst["cpu_coarse"].as_array().unwrap().is_empty(), "no window folded in one pass");
+    assert!(body["host"].get("cpu_fine").is_some(), "host carries fine tier");
+    assert!(body["host"].get("cpu_coarse").is_some(), "host carries coarse tier");
+    assert!(body["host"].get("disk_fine").is_some(), "host carries disk fine tier");
+}
+
+#[tokio::test]
+async fn test_monitor_snapshot_mem_limit_is_zero_when_template_unlimited() {
+    let ctx = MonitorContext::new(|_| {}).await;
+    let admin_token = ctx.login("admin", "admin").await;
+
+    let owner = ctx.create_plain_user(&admin_token, "owner-user").await;
+    ctx.seed_running_instance(&owner, 0).await;
+
+    let mut sampler = MetricsSampler::new();
+    let mock = {
+        let mut m = MockDockerService::new();
+        m.expect_container_stats().returning(|_| {
+            Box::pin(async {
+                Ok(ContainerStats {
+                    cpu_percent: Some(17.5),
+                    mem_used_bytes: 1_500_000_000,
+                    // The daemon reports the host RAM as the cgroup limit for an
+                    // unlimited container; it must NOT leak through as a "max".
+                    mem_limit_bytes: 32_000_000_000,
+                })
+            })
+        });
+        m
+    };
+    sampler.sample_once(&ctx.db, &mock, &ctx.metrics).await;
+
+    let body: serde_json::Value = ctx.get_snapshot(&admin_token, None).await.json().await.unwrap();
+    let inst = &body["instances"][0];
+    assert_eq!(inst["mem_used_bytes"].as_u64(), Some(1_500_000_000));
+    assert_eq!(
+        inst["mem_limit_bytes"].as_u64(),
+        Some(0),
+        "unlimited template -> no fake max"
+    );
 }
 
 #[tokio::test]
@@ -361,13 +406,13 @@ async fn test_monitor_sampler_container_stats_failure_is_fail_open() {
     let admin_token = ctx.login("admin", "admin").await;
 
     let owner = ctx.create_plain_user(&admin_token, "owner-user").await;
-    ctx.seed_running_instance(&owner).await;
+    ctx.seed_running_instance(&owner, 0).await;
 
     let mut sampler = MetricsSampler::new();
     let mock = {
         let mut m = MockDockerService::new();
         m.expect_container_stats().returning(|_| {
-            Box::pin(async { Err("docker daemon unreachable".to_string()) })
+            Box::pin(async { Err(ContainerStatsError::Other("docker daemon unreachable".to_string())) })
         });
         m
     };
@@ -378,7 +423,40 @@ async fn test_monitor_sampler_container_stats_failure_is_fail_open() {
     let body: serde_json::Value = ctx.get_snapshot(&admin_token, None).await.json().await.unwrap();
     assert_eq!(body["instances"].as_array().unwrap().len(), 1);
     assert_eq!(body["instances"][0]["cpu_percent"], 0.0);
-    assert!(body["instances"][0]["cpu_series"].as_array().unwrap().is_empty());
+    assert!(body["instances"][0]["cpu_fine"].as_array().unwrap().is_empty());
+    assert!(body["instances"][0]["cpu_coarse"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_monitor_sampler_container_gone_is_fail_open_not_alarm() {
+    // A 404 "No such container" is the normal teardown race (instance stopped
+    // or deleted between the active list and the stats read): the pass must
+    // stay fail-open and the instance listed, exactly like a real failure.
+    let ctx = MonitorContext::new(|_| {}).await;
+    let admin_token = ctx.login("admin", "admin").await;
+
+    let owner = ctx.create_plain_user(&admin_token, "owner-user").await;
+    ctx.seed_running_instance(&owner, 0).await;
+
+    let mut sampler = MetricsSampler::new();
+    let mock = {
+        let mut m = MockDockerService::new();
+        m.expect_container_stats().returning(|_| {
+            Box::pin(async {
+                Err(ContainerStatsError::ContainerNotFound(
+                    "No such container: 110916571b".to_string(),
+                ))
+            })
+        });
+        m
+    };
+    let sampled = sampler.sample_once(&ctx.db, &mock, &ctx.metrics).await;
+    assert_eq!(sampled.len(), 1, "the instance is still listed");
+
+    let body: serde_json::Value = ctx.get_snapshot(&admin_token, None).await.json().await.unwrap();
+    assert_eq!(body["instances"].as_array().unwrap().len(), 1);
+    assert_eq!(body["instances"][0]["cpu_percent"], 0.0);
+    assert!(body["instances"][0]["cpu_fine"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -398,7 +476,7 @@ async fn test_monitor_snapshot_first_cpu_read_is_zero() {
             disk_total_bytes: 0,
         },
     );
-    let snap = store.snapshot(Range::Hour);
+    let snap = store.snapshot();
     let (_, entity) = &snap.instances[0];
     assert_eq!(entity.cpu_percent, 0.0);
     assert_eq!(entity.mem_used_bytes, 1);

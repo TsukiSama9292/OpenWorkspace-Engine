@@ -160,8 +160,16 @@
   as §5); monitoring data is ephemeral by design and not worth DB write
   volume. If multi-host arrives, this store becomes a candidate for a shared
   cache (see [caching-strategy.md](caching-strategy.md)).
-- **Frontend**: sparklines are hand-rolled SVG `<path>` (no chart library);
-  the Monitor tab polls a snapshot endpoint every 5 s while open.
+- **Frontend**: charts are hand-rolled SVG (no chart library). The snapshot
+  returns **timestamped two-tier points** per metric (`*_fine` 15 s + `*_coarse`
+  5 min). A pure math module, `apps/web/src/lib/chart/`, owns the time↔x
+  mapping, fine/coarse merging by visible window, nearest-point lookup, drag
+  selection → zoom, zoom clamping, and follow-state transitions — DOM-free and
+  unit-tested. A reusable `TimeSeriesChart` component renders hover crosshair +
+  readout, click-to-pin, drag-select with live stats + auto-zoom, follow /
+  "back to now", and the 1 h fine-data boundary marker; the small row
+  sparklines use a lighter `Sparkline` (tooltip + pin). The Monitor tab polls a
+  snapshot endpoint every 5 s while open.
 - Access is gated by the group flag `can_view_monitoring` (Admin/Manager on by
   default, User off), a sixth flat-RBAC flag — see
   [../user-guide/rbac.md](../user-guide/rbac.md).

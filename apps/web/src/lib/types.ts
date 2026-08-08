@@ -156,17 +156,25 @@ export interface ApiResult<T> {
   rejection?: PreflightRejection;
 }
 
-export type MonitorRange = '1h' | '24h';
+/** One timestamped point in a monitor series: epoch-seconds + numeric value. */
+export interface SeriesPoint {
+  t: number;
+  v: number;
+}
 
 export interface MonitorHost {
+  cpu_cores: number;
   cpu_percent: number;
   mem_used_bytes: number;
   mem_total_bytes: number;
   disk_used_bytes: number;
   disk_total_bytes: number;
-  cpu_series: number[];
-  mem_series: number[];
-  disk_series: number[];
+  cpu_fine: SeriesPoint[];
+  cpu_coarse: SeriesPoint[];
+  mem_fine: SeriesPoint[];
+  mem_coarse: SeriesPoint[];
+  disk_fine: SeriesPoint[];
+  disk_coarse: SeriesPoint[];
 }
 
 export interface MonitorInstance {
@@ -178,10 +186,13 @@ export interface MonitorInstance {
   status: Instance['status'];
   uptime_secs: number | null;
   cpu_percent: number;
+  cpu_limit_percent: number;
   mem_used_bytes: number;
   mem_limit_bytes: number;
-  cpu_series: number[];
-  mem_series: number[];
+  cpu_fine: SeriesPoint[];
+  cpu_coarse: SeriesPoint[];
+  mem_fine: SeriesPoint[];
+  mem_coarse: SeriesPoint[];
 }
 
 export interface MonitorSnapshot {

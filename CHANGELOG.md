@@ -4,6 +4,58 @@ Chronological, user-visible changes. Append, don't rewrite history.
 
 ## [Unreleased]
 
+### Monitor tab: interactive time-series charts and instance detail modal
+
+Monitor Dashboard Optimization (`.scratch/archive/monitor-dashboard-optimization/`).
+The 1h / 24h range toggle is gone, replaced by a single 24-hour interactive
+time axis that picks the right resolution as you zoom (fine 15 s points for
+the last hour, coarse 5 min averages beyond):
+
+- **Interactive charts everywhere**: hover shows a crosshair with the exact
+  value + timestamp, click pins the readout, dragging across a chart highlights
+  the range with live average / max / min stats and zooms on release. The
+  charts start with the right edge following "now"; zooming or panning
+  disengages follow and a "back to now" button re-engages it.
+- **Enlarged host cards**: CPU / RAM / Disk are now full interactive charts
+  (~180 px tall, 3-across) instead of small sparklines.
+- **Instance detail modal**: each row's new Detail button opens the instance's
+  CPU and memory as two full interactive charts, reading from the snapshot the
+  panel already fetched (no extra request). Close via the overlay, the ×
+  button, or Esc.
+- **Row sparklines** gain a light hover tooltip and click-to-pin.
+- The snapshot now returns **timestamped two-tier points** per metric
+  (`*_fine` / `*_coarse`) — endpoint and gating unchanged.
+
+### Monitor tab: readable layout and meaningful used/max memory charts
+
+Polish pass on the Monitor tab (`.scratch/archive/monitor-dashboard/`):
+
+- **Layout**: instance-table data cells now align left like the Instance name
+  column (no more right-aligned numbers), and the type is bumped to match the
+  rest of the site — bigger host-card values, larger CPU/RAM values, badges,
+  and status text.
+- **Meaningful memory charts**: sparklines are now scaled to a real domain
+  instead of each row's own local min/max — CPU against 0–100%, instance RAM
+  against the template's memory cap, and host cards against their totals — so
+  "used / max" reads as a genuine fraction. The instance Memory cell shows
+  `used / cap (percent)`; templates configured without a memory cap show the
+  used bytes with an `(unlimited)` hint instead of a misleading "max" (the
+  container's cgroup would otherwise report the host's RAM as its limit).
+- The snapshot now reports the **template-configured memory cap** as the
+  instance limit (`0` = unlimited) rather than the raw container cgroup limit.
+- Instance **used** memory now matches `docker stats`: the reclaimable page
+  cache (`inactive_file`) is excluded from the raw cgroup usage, so a browser
+  session that caches ~540 MB of file pages reads as ~260 MB, not ~800 MB.
+- Instance **CPU** is now shown as used/max against the template's core
+  budget, in the same per-core-% unit Docker uses (`200%` = 2 cores): the
+  Memory-style cell reads `18% / 200% (9%)` and the sparkline is scaled to the
+  core limit instead of a hard 100% cap (which clipped multi-core usage).
+  Templates without a CPU cap show the used value with an `(unlimited)` hint,
+  with the sparkline scaled to the host's core count.
+- A container that vanishes mid-sample (instance stopped or deleted between
+  the monitor pass's list and stats read) is now logged at debug instead of
+  alarm — a `No such container` 404 is expected teardown, not a fault.
+
 ### Resource Monitoring Dashboard (Monitor tab) (`.scratch/archive/monitor-dashboard/`)
 
 The Monitor tab is now a real operator view instead of an admin-only

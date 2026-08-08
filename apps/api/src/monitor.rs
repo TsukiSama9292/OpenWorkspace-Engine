@@ -7,7 +7,7 @@ use sea_orm::DatabaseConnection;
 use uuid::Uuid;
 
 use crate::db::WorkspaceInstanceRepository;
-use crate::docker::DockerService;
+use crate::docker::{ContainerStatsError, DockerService};
 use crate::metrics::{MetricsStore, Sample};
 use crate::proc::{self, CpuCounters};
 
@@ -32,8 +32,10 @@ impl MetricsSampler {
 
     /// One full sampling pass (host + active instances). Every failure is
     /// fail-open: a failed host read leaves zeros for that metric, a failed
-    /// `container_stats` read logs and skips that instance. Returns the ids of
-    /// the active instances sampled.
+    /// `container_stats` read logs and skips that instance. A container that
+    /// no longer exists (404 — instance stopped or deleted mid-pass, or a
+    /// stuck record) is logged at debug; other stats failures at warn. Returns
+    /// the ids of the active instances sampled.
     pub async fn sample_once(
         &mut self,
         db: &DatabaseConnection,
@@ -68,7 +70,12 @@ impl MetricsSampler {
                         },
                     );
                 }
-                Err(e) => tracing::warn!(
+                Err(ContainerStatsError::ContainerNotFound(e)) => tracing::debug!(
+                    "monitor: container gone for '{}' (stopped/deleted since last pass): {}",
+                    inst.name,
+                    e
+                ),
+                Err(ContainerStatsError::Other(e)) => tracing::warn!(
                     "monitor: container stats failed for '{}': {}",
                     inst.name,
                     e

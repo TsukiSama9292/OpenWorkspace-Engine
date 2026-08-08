@@ -150,6 +150,23 @@ placeholder with an operator view of "what is happening on the box".
 | RBAC flag `can_view_monitoring` | sixth flat group flag (Admin/Manager on by default, User off), gates the tab and the snapshot endpoint, checkbox in the group editor |
 | E2E | `e2e/tests/monitor.full.spec.ts` — real instance, live sparklines, 24h re-fetch, paused badge, RBAC boundary |
 
+### ✅ Monitor Dashboard Optimization (interactive time-series)
+
+Operator-view iteration on the Monitor tab
+(`.scratch/archive/monitor-dashboard-optimization/`). Replaces the static
+sparklines and the 1h / 24h toggle with a single 24-hour interactive time
+axis that auto-switches resolution as you zoom.
+
+| Deliverable | Content |
+|---|---|
+| Snapshot payload | timestamped two-tier points `{ t, v }` per metric (`*_fine` / `*_coarse`); endpoint + `can_view_monitoring` gating unchanged |
+| Interactive charts | hand-written SVG `TimeSeriesChart` (no library): hover crosshair + value/time readout, click-to-pin, drag-select with live avg/max/min stats + auto-zoom, follow / "back to now", 1 h fine-data boundary marker |
+| Host cards | CPU / RAM / Disk enlarged to full interactive charts (~180 px tall, 3-across) |
+| Instance detail modal | per-row Detail button opens CPU + memory interactive charts from the already-fetched snapshot (no extra request); close via overlay / × / Esc |
+| Row sparklines | light hover tooltip + click-to-pin on the existing `Sparkline` |
+| Pure chart math | `apps/web/src/lib/chart/` module (time↔x, merging, nearest-point, zoom clamping, follow state) — DOM-free and unit-tested |
+| E2E | `e2e/tests/monitor.full.spec.ts` — live interactive host charts, drag-zoom + back-to-now, detail modal, paused badge, RBAC boundary |
+
 ---
 
 ## In-progress / Planned Stages

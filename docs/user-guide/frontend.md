@@ -72,17 +72,22 @@ actions available in that state:
 The **Monitor** page (for admins and groups granted the monitoring flag) answers
 "what is happening on the box right now":
 
-- Three **host cards** — CPU, RAM, Disk — show the current value and a 1-hour
-  sparkline of its history, so a transient spike is easy to tell from a
-  sustained climb.
+- Three **host cards** — CPU, RAM, Disk — are full interactive charts of the
+  last 24 hours. They start showing the newest data and keep updating while the
+  page is open; hover a point for the exact value + time, click to pin a
+  readout, or drag across a chart to zoom into a range (with the average / max
+  / min of the selection shown live). A "back to now" button returns to the
+  live view after you zoom around.
 - An **Active Instances** table lists every running / starting / paused session
   with its owner, template, runtime, uptime, and live CPU % / RAM usage (each
-  with a sparkline). Paused (auto-slept) sessions are greyed out with a
-  `[paused]` badge; stopped and failed sessions are not listed. Columns can be
-  sorted (e.g. by RAM) to find the worst offender.
-- A **1h / 24h** toggle switches between the recent fine-grained history and an
-  all-day coarse-grained view, so slow memory growth or a sustained CPU load
-  shows up. The page refreshes itself while open.
+  with a small sparkline you can hover for a value and click to pin). Paused
+  (auto-slept) sessions are greyed out with a `[paused]` badge; stopped and
+  failed sessions are not listed. Columns can be sorted (e.g. by RAM) to find
+  the worst offender.
+- Each row has a **Detail** button that opens the instance's own CPU and memory
+  charts as full interactive views, so you can trace a memory leak or a CPU
+  spin on a single workload. The charts resolve automatically: fine-grained
+  (15 s) points inside the last hour, five-minute averages further back.
 - Granting or revoking the flag is done per group in the group editor (see
   [RBAC](rbac.md)).
 

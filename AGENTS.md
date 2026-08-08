@@ -73,7 +73,7 @@ pnpm run test:e2e:full# Playwright full: launch real instance → KasmVNC viewer
 
 # web only
 cd apps/web
-pnpm test             # vitest run — 25 files, 310 tests
+pnpm test             # vitest run — 27 files, 353 tests
 pnpm check            # svelte-kit sync + svelte-check (typecheck) + eslint . (hard lint gate)
 pnpm lint             # eslint . — flat config (eslint-plugin-svelte + typescript-eslint recommended)
 pnpm run analysis:web # soft report: eslint complexity / max-lines-per-function warnings — exit 0
@@ -81,7 +81,8 @@ pnpm run analysis:web # soft report: eslint complexity / max-lines-per-function 
 # api only
 cd apps/api
 bash scripts/check.sh          # zero-warning gate (both feature sets) — must produce NO output
-bash scripts/run_tests.sh      # cargo nextest run --features docker (228 unit + 412 integration tests)
+bash scripts/run_tests.sh      # cargo nextest run --features docker (648 unit + integration tests)
+bash scripts/run_tests.sh --test monitor_test   # args pass through to nextest (see "Rust API tests" below)
 
 # Rust quality gates & analysis reports
 cd apps/api
@@ -98,6 +99,92 @@ Rust quality-gate model (see `.scratch/archive/quality-gates/spec.md`):
 - Security fuzzing: `pnpm run security:api` fuzzes the 17 safe endpoints of a **running** dev stack (`pnpm run dev:nosudo`) with Schemathesis in two passes — admin session (schema-conformance + no-5xx) and a self-provisioned `fuzz-user` session (RBAC boundary: `admin-gated` ops must never 2xx). Runs via the `ow-schemathesis` Docker image built from `apps/api/scripts/schemathesis.Dockerfile` (the official `schemathesis:stable` image bundles a broken `tracecov` plugin that crashes `run`), no host Python / pipx. The spec is regenerated each run; fixed `--seed` (default 20260101) makes failures reproducible. Fuzzes the API directly at `http://localhost:3000` (Traefik's `/api` router can't reach `/health`).
 
 `pnpm lint` runs `eslint .` in `apps/web` only; root `turbo lint` runs per-package (web only).
+
+## Long-running dev servers: never run them in the foreground, always via setsid
+
+`pnpm run dev` / `pnpm run dev:nosudo` start **long-running foreground
+processes** (concurrently → cargo watch api + vite web). Inside an agent/tool
+shell (opencode, VS Code Task, etc.) they must **never** be run directly:
+
+- The tool waits for the command's stdout/stderr pipes to close before it
+  returns. A foreground dev server never exits, so the tool blocks until its
+  timeout, then **kills the whole process group** — taking the stack down
+  mid-run (you'll see cargo compile logs, then `SIGTERM` / `Command failed`).
+- `nohup ... &` alone does **not** save you: the tool still tracks the process
+  tree and kills it at timeout. Only `setsid` (new session → outside the
+  tool's process group) escapes.
+
+### The only supported way to boot the dev stack (E2E / security:api)
+
+```bash
+# 1. Write a tiny launcher (keeps the launch command short and greppable):
+cat > /tmp/opencode/ow-dev/start.sh <<'EOF'
+#!/usr/bin/env bash
+cd /home/user/workspace/OpenWorkspace-Engine || exit 1
+exec pnpm run dev:nosudo
+EOF
+chmod +x /tmp/opencode/ow-dev/start.sh
+
+# 2. Launch fully detached: new session + all fds redirected off the tool's pipes.
+setsid /tmp/opencode/ow-dev/start.sh </dev/null >/tmp/opencode/ow-dev/stack.log 2>&1 &
+
+# 3. The launch command itself WILL time out in the tool — that is expected and
+#    harmless. Verify the stack survives and becomes ready (use tail -n, NOT tail -f):
+tail -n 20 /tmp/opencode/ow-dev/stack.log    # api log: SQL queries flowing = api up
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost/            # 200 = web up
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/health # 200 = api up
+# Note: /login 308s to /login/ (trailingSlash='always') — browsers follow it; curl does not show 200 there.
+```
+
+Then run the E2E suite (`pnpm run test:e2e:full`) or the security fuzzer
+(`pnpm run security:api`) in normal foreground commands. When done, tear down
+(also see the `pkill` warning below):
+
+```bash
+pkill -f "[c]oncurrently --kill-others"       # kills concurrently; children may survive
+kill $(pgrep -f "[v]ite dev") $(pgrep -f "[o]penworkspace-api") 2>/dev/null  # orphaned children
+fuser -k 5173/tcp 2>/dev/null                 # vite holds 5173; also 3000 if needed
+docker stop ow-dev-postgres ow-dev-traefik && docker rm ow-dev-postgres ow-dev-traefik
+```
+
+### pkill -f kills the tool's own shell — always use the `[x]` bracket trick
+
+`pkill -f "some text"` matches the **full command line** of every process —
+including the wrapping `bash -c '... pkill -f "some text" ...'` that the tool
+spawns to run your command. It then SIGTERMs its own parent: the shell dies
+mid-command, the stdout/stderr pipes never close, and the tool hangs forever
+(pipe deadlock).
+
+- Always write the pattern with a character class so the pattern can't match
+  itself: `pkill -f "[c]argo watch"` (matches `cargo watch` but not the literal
+  `[c]argo watch` in its own command line).
+- The same trap applies to `pgrep` and to `grep` on `ps` output: never leave
+  the bare target string anywhere in the same command line (even `|| echo "no
+  cargo watch"` reintroduces the literal string and matches).
+- Alternative safe cleanup by port: `fuser -k 5173/tcp`.
+
+## Rust API tests: always via `scripts/run_tests.sh`, never raw cargo
+
+In `apps/api`, run tests **only** through the wrapper — raw
+`cargo nextest run` / `cargo test` will fail with `PG_PORT must be set`
+(`tests/common/pg.rs`):
+
+```bash
+cd apps/api
+bash scripts/run_tests.sh                      # full suite: cargo nextest run --features docker
+bash scripts/run_tests.sh --test monitor_test  # any args pass straight through to nextest
+bash scripts/run_tests.sh --test monitor_test test_monitor_snapshot_returns_host_and_instances
+```
+
+`run_tests.sh` does the harness setup you can't skip:
+- sources `scripts/create_test_pg.sh` → starts the Postgres test container and
+  exports `PG_HOST` / `PG_PORT`;
+- sets `TRAEFIK_DYNAMIC_DIR` to `apps/api/target/traefik-dynamic` so route
+  files written by the API under test never land in the dev traefik dir;
+- traps EXIT → tears down the PG container and runs `scripts/cleanup.sh tests`.
+
+Gates in order: `bash scripts/check.sh` (must be silent, both feature sets)
+first, then `bash scripts/run_tests.sh <args>`.
 
 ## Build/deploy flow (production: `docker/openworkspace/`)
 
@@ -194,12 +281,12 @@ Rust quality-gate model (see `.scratch/archive/quality-gates/spec.md`):
 
 ### Rust API (`apps/api`)
 
-- 228 unit tests in `src/` + 412 integration tests in `tests/` (auth, db, docker lifecycle, instances, monitor, registry, templates, users, groups, vnc-verify, health). Integration tests require Docker (real containers/networks), run in parallel via `cargo nextest`.
+- 648 tests (unit + integration: auth, db, docker lifecycle, instances, monitor, registry, templates, users, groups, vnc-verify, health). Integration tests require Docker (real containers/networks), run in parallel via `cargo nextest`.
 - Gate: `bash scripts/check.sh` must be **silent** (zero warnings, both feature sets) before `bash scripts/run_tests.sh`.
 
 ### Web (`apps/web`)
 
-- `pnpm test` — vitest with `happy-dom` + `@testing-library/svelte`. **25 files / 310 tests** in `src/tests/` (auth-store, permissions, rbac-actions, preflight, rejection-notice, group-panel, user-panel, admin-settings, api-client, template-actions, dashboard-view, template-form, quick-launch, keepalive, keep-time-line, orphaned-volumes-*, monitor-*, countdown, format, …).
+- `pnpm test` — vitest with `happy-dom` + `@testing-library/svelte`. **27 files / 353 tests** in `src/tests/` (auth-store, permissions, rbac-actions, preflight, rejection-notice, group-panel, user-panel, admin-settings, api-client, template-actions, dashboard-view, template-form, quick-launch, keepalive, keep-time-line, orphaned-volumes-*, monitor-*, countdown, format, …).
 - `tests/mocks/` provides `app-navigation` (`goto`) and `app-stores` (`page`) stubs.
 - Playwright E2E configured but not actively run (requires live VNC containers). No CI currently.
 

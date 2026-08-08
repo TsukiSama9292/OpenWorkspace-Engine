@@ -1039,17 +1039,6 @@
     "/api/monitor/snapshot": {
       "get": {
         "operationId": "snapshot",
-        "parameters": [
-          {
-            "description": "Resolution: `1h` (15 s series) or `24h` (5 min aggregates); defaults to `1h`.",
-            "in": "query",
-            "name": "range",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -1059,10 +1048,7 @@
                 }
               }
             },
-            "description": "host and per-instance resource series"
-          },
-          "400": {
-            "description": "invalid range value"
+            "description": "host and per-instance resource series: fine (15 s, last hour) + coarse (5 min, 24 h) tiers"
           },
           "401": {
             "description": "missing or invalid ow_token"

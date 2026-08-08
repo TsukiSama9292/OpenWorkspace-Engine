@@ -113,7 +113,7 @@ async function createFlaggedUser(req: APIRequestContext, username: string, flag:
   created.users.push(((await res.json()).user as { id: string }).id);
 }
 
-test('Monitor tab shows live host + instance metrics, range toggle, and paused badge', async ({
+test('Monitor tab shows live interactive host charts, row sparklines, detail modal, and paused badge', async ({
   page,
 }) => {
   await loginAs(page, ADMIN.username, ADMIN.password);
@@ -126,25 +126,18 @@ test('Monitor tab shows live host + instance metrics, range toggle, and paused b
     expect(instance.id).toMatch(/^[0-9a-f-]{36}$/);
     await waitForRunning(page.request, instance.id);
 
-    const snapshotUrls: string[] = [];
-    page.on('request', (req) => {
-      if (req.url().includes('/api/monitor/snapshot')) snapshotUrls.push(req.url());
-    });
-
     await openMonitorTab(page);
 
-    await expect(page.locator('.host-card')).toHaveCount(3, { timeout: 15_000 });
-    await expect
-      .poll(
-        () =>
-          page
-            .locator('.host-card')
-            .first()
-            .locator('svg[data-testid="sparkline"] path.sparkline-line')
-            .getAttribute('d'),
-        { timeout: 90_000, intervals: [3_000] }
-      )
-      .toBeTruthy();
+    const hostCards = page.locator('.host-card');
+    await expect(hostCards).toHaveCount(3, { timeout: 15_000 });
+    for (let i = 0; i < 3; i++) {
+      await expect
+        .poll(
+          () => hostCards.nth(i).locator('.time-series-chart path.chart-line').getAttribute('d'),
+          { timeout: 90_000, intervals: [3_000] }
+        )
+        .toBeTruthy();
+    }
 
     const row = page.locator('.monitor-row').filter({ hasText: instance.name });
     await expect(row).toBeVisible({ timeout: 90_000 });
@@ -160,12 +153,31 @@ test('Monitor tab shows live host + instance metrics, range toggle, and paused b
         .toBeTruthy();
     }
 
-    await page.locator('.range-btn', { hasText: '24h' }).click();
-    await expect
-      .poll(() => snapshotUrls.some((u) => u.includes('range=24h')), { timeout: 15_000 })
-      .toBe(true);
-    await expect(page.locator('.host-card')).toHaveCount(3);
-    await expect(page.locator('.monitor-row').filter({ hasText: instance.name })).toBeVisible();
+    const firstHostChart = hostCards.first().locator('.time-series-chart');
+    const box = await firstHostChart.boundingBox();
+    expect(box).not.toBeNull();
+    if (box) {
+      // Drag across the left third of the host chart: highlights a range with
+      // live stats, then zooms on release (follow disengages).
+      await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.5);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width * 0.45, box.y + box.height * 0.5, { steps: 5 });
+      await expect(hostCards.first().locator('.chart-stats')).toBeVisible();
+      await page.mouse.up();
+      await expect(hostCards.first().locator('.chart-back')).toBeVisible();
+      await expect(hostCards.first().locator('.chart-live')).toHaveCount(0);
+      await hostCards.first().locator('.chart-back').click();
+      await expect(hostCards.first().locator('.chart-live')).toBeVisible();
+    }
+
+    // Instance detail modal: two interactive charts, closed via the × button.
+    await row.locator('.row-detail').click();
+    const modal = page.locator('[data-testid="instance-modal"]');
+    await expect(modal).toBeVisible({ timeout: 15_000 });
+    await expect(modal.locator('.time-series-chart')).toHaveCount(2);
+    await expect(modal.locator('.chart-live')).toHaveCount(2);
+    await modal.locator('[data-testid="modal-close"]').click();
+    await expect(modal).toHaveCount(0);
 
     const pause = await page.request.post(`/api/instances/${instance.id}/pause`);
     expect(pause.ok()).toBeTruthy();

@@ -38,15 +38,18 @@ pub struct AggregatedSample {
     pub disk_total_bytes: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Range {
-    /// Tier-1 fine-grained series (15 s), 1 hour.
-    Hour,
-    /// Tier-2 aggregated series (5 min), 24 hours.
-    Day,
+/// One timestamped point in a series: epoch-seconds `t` + numeric value `v`.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct SeriesPoint {
+    pub t: i64,
+    pub v: f64,
 }
 
 /// What the snapshot endpoint returns for one entity (host or instance).
+///
+/// Both tiers are always present: `*_fine` (15 s, last hour) and `*_coarse`
+/// (5 min aggregates, 24 hours), so a single snapshot carries the whole
+/// interactive time axis and the frontend picks a resolution per window.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct EntitySnapshot {
     pub cpu_percent: f64,
@@ -54,9 +57,12 @@ pub struct EntitySnapshot {
     pub mem_total_bytes: u64,
     pub disk_used_bytes: u64,
     pub disk_total_bytes: u64,
-    pub cpu_series: Vec<f64>,
-    pub mem_series: Vec<u64>,
-    pub disk_series: Vec<u64>,
+    pub cpu_fine: Vec<SeriesPoint>,
+    pub cpu_coarse: Vec<SeriesPoint>,
+    pub mem_fine: Vec<SeriesPoint>,
+    pub mem_coarse: Vec<SeriesPoint>,
+    pub disk_fine: Vec<SeriesPoint>,
+    pub disk_coarse: Vec<SeriesPoint>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -138,29 +144,50 @@ impl EntityMetrics {
 }
 
 impl EntitySnapshot {
-    fn from_metrics(m: &EntityMetrics, range: Range) -> Self {
+    fn from_metrics(m: &EntityMetrics) -> Self {
         let latest = m.tier1.back();
-        let (cpu_series, mem_series, disk_series) = match range {
-            Range::Hour => (
-                m.tier1.iter().map(|s| s.cpu_percent).collect(),
-                m.tier1.iter().map(|s| s.mem_used_bytes).collect(),
-                m.tier1.iter().map(|s| s.disk_used_bytes).collect(),
-            ),
-            Range::Day => (
-                m.tier2.iter().map(|s| s.cpu_mean).collect(),
-                m.tier2.iter().map(|s| s.mem_used_mean).collect(),
-                m.tier2.iter().map(|s| s.disk_used_mean).collect(),
-            ),
-        };
+        let cpu_fine = m
+            .tier1
+            .iter()
+            .map(|s| SeriesPoint { t: s.ts, v: s.cpu_percent })
+            .collect();
+        let cpu_coarse = m
+            .tier2
+            .iter()
+            .map(|s| SeriesPoint { t: s.ts, v: s.cpu_mean })
+            .collect();
+        let mem_fine = m
+            .tier1
+            .iter()
+            .map(|s| SeriesPoint { t: s.ts, v: s.mem_used_bytes as f64 })
+            .collect();
+        let mem_coarse = m
+            .tier2
+            .iter()
+            .map(|s| SeriesPoint { t: s.ts, v: s.mem_used_mean as f64 })
+            .collect();
+        let disk_fine = m
+            .tier1
+            .iter()
+            .map(|s| SeriesPoint { t: s.ts, v: s.disk_used_bytes as f64 })
+            .collect();
+        let disk_coarse = m
+            .tier2
+            .iter()
+            .map(|s| SeriesPoint { t: s.ts, v: s.disk_used_mean as f64 })
+            .collect();
         EntitySnapshot {
             cpu_percent: latest.map(|s| s.cpu_percent).unwrap_or(0.0),
             mem_used_bytes: latest.map(|s| s.mem_used_bytes).unwrap_or(0),
             mem_total_bytes: latest.map(|s| s.mem_total_bytes).unwrap_or(0),
             disk_used_bytes: latest.map(|s| s.disk_used_bytes).unwrap_or(0),
             disk_total_bytes: latest.map(|s| s.disk_total_bytes).unwrap_or(0),
-            cpu_series,
-            mem_series,
-            disk_series,
+            cpu_fine,
+            cpu_coarse,
+            mem_fine,
+            mem_coarse,
+            disk_fine,
+            disk_coarse,
         }
     }
 }
@@ -201,14 +228,14 @@ impl MetricsStore {
         state.instances.retain(|id, _| ids.contains(id));
     }
 
-    pub fn snapshot(&self, range: Range) -> Snapshot {
+    pub fn snapshot(&self) -> Snapshot {
         let state = self.inner.lock().expect("metrics lock poisoned");
         Snapshot {
-            host: EntitySnapshot::from_metrics(&state.host, range),
+            host: EntitySnapshot::from_metrics(&state.host),
             instances: state
                 .instances
                 .iter()
-                .map(|(id, m)| (*id, EntitySnapshot::from_metrics(m, range)))
+                .map(|(id, m)| (*id, EntitySnapshot::from_metrics(m)))
                 .collect(),
         }
     }
@@ -241,10 +268,34 @@ mod tests {
         for i in 0..(TIER1_CAPACITY + 1) {
             store.record_host(sample(i as i64, i as f64, i as u64));
         }
-        let snap = store.snapshot(Range::Hour);
-        assert_eq!(snap.host.cpu_series.len(), TIER1_CAPACITY);
-        assert_eq!(snap.host.cpu_series[0], 1.0);
-        assert_eq!(*snap.host.cpu_series.last().unwrap(), TIER1_CAPACITY as f64);
+        let snap = store.snapshot();
+        assert_eq!(snap.host.cpu_fine.len(), TIER1_CAPACITY);
+        assert_eq!(snap.host.cpu_fine[0].t, 1);
+        assert_eq!(snap.host.cpu_fine[0].v, 1.0);
+        assert_eq!(snap.host.cpu_fine.last().unwrap().v, TIER1_CAPACITY as f64);
+    }
+
+    #[test]
+    fn snapshot_returns_both_tiers_with_timestamps() {
+        let store = MetricsStore::new();
+        for i in 0..25 {
+            store.record_host(sample(i as i64, i as f64, (i * 1000) as u64));
+        }
+        let snap = store.snapshot();
+        let host = &snap.host;
+        assert_eq!(host.cpu_fine.len(), 25, "fine carries every tier-1 sample");
+        assert_eq!(host.cpu_fine[0].t, 0);
+        assert_eq!(host.cpu_fine[24].v, 24.0);
+        assert_eq!(
+            host.cpu_coarse.len(),
+            1,
+            "one 20-sample window folded at sample 19"
+        );
+        assert_eq!(host.cpu_coarse[0].t, 19, "coarse ts is the window end");
+        assert_eq!(host.mem_fine[24].v, 24_000.0, "mem bytes ride as numbers");
+        assert_eq!(host.mem_coarse[0].v, 9_500.0, "mem mean (0..19 avg)");
+        assert_eq!(host.disk_fine.len(), 25);
+        assert_eq!(host.disk_coarse.len(), 1);
     }
 
     #[test]
@@ -265,9 +316,9 @@ mod tests {
         for i in 0..40 {
             store.record_host(sample(i as i64, i as f64, i as u64));
         }
-        let snap = store.snapshot(Range::Day);
-        assert_eq!(snap.host.cpu_series.len(), 2);
-        assert!((snap.host.cpu_series[0] - 9.5).abs() < 1e-9);
+        let snap = store.snapshot();
+        assert_eq!(snap.host.cpu_coarse.len(), 2);
+        assert!((snap.host.cpu_coarse[0].v - 9.5).abs() < 1e-9);
     }
 
     #[test]
@@ -276,15 +327,15 @@ mod tests {
         for i in 0..(TIER2_CAPACITY * WINDOW_SAMPLES + WINDOW_SAMPLES) {
             store.record_host(sample(i as i64, i as f64, i as u64));
         }
-        let snap = store.snapshot(Range::Day);
-        assert_eq!(snap.host.cpu_series.len(), TIER2_CAPACITY);
+        let snap = store.snapshot();
+        assert_eq!(snap.host.cpu_coarse.len(), TIER2_CAPACITY);
     }
 
     #[test]
     fn snapshot_latest_values_from_last_sample() {
         let store = MetricsStore::new();
         store.record_host(sample(1, 11.0, 5_000_000_000));
-        let snap = store.snapshot(Range::Hour);
+        let snap = store.snapshot();
         assert_eq!(snap.host.cpu_percent, 11.0);
         assert_eq!(snap.host.mem_used_bytes, 5_000_000_000);
         assert_eq!(snap.host.mem_total_bytes, 32_000_000_000);
@@ -299,10 +350,12 @@ mod tests {
         let b = Uuid::new_v4();
         store.record_instance(a, sample(1, 42.0, 1_000));
         store.record_instance(b, sample(1, 7.0, 2_000));
-        let snap = store.snapshot(Range::Hour);
+        let snap = store.snapshot();
         assert_eq!(snap.instances.len(), 2);
         let snap_a = snap.instances.iter().find(|(id, _)| *id == a).unwrap();
         assert_eq!(snap_a.1.cpu_percent, 42.0);
+        assert_eq!(snap_a.1.cpu_fine.len(), 1);
+        assert_eq!(snap_a.1.cpu_fine[0].v, 42.0);
     }
 
     #[test]
@@ -313,7 +366,7 @@ mod tests {
         store.record_instance(a, sample(1, 1.0, 1));
         store.record_instance(b, sample(1, 2.0, 2));
         store.retain_active(&[a]);
-        let snap = store.snapshot(Range::Hour);
+        let snap = store.snapshot();
         assert_eq!(snap.instances.len(), 1);
         assert_eq!(snap.instances[0].0, a);
     }
@@ -321,9 +374,10 @@ mod tests {
     #[test]
     fn empty_store_snapshots_zeros() {
         let store = MetricsStore::new();
-        let snap = store.snapshot(Range::Hour);
+        let snap = store.snapshot();
         assert_eq!(snap.host.cpu_percent, 0.0);
-        assert!(snap.host.cpu_series.is_empty());
+        assert!(snap.host.cpu_fine.is_empty());
+        assert!(snap.host.cpu_coarse.is_empty());
         assert!(snap.instances.is_empty());
     }
 }

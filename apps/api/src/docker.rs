@@ -259,6 +259,26 @@ pub struct ContainerStats {
     pub mem_limit_bytes: u64,
 }
 
+/// Why a one-shot `container_stats` read failed. `ContainerNotFound` is a
+/// normal condition during teardown (an instance is stopped or deleted, which
+/// removes its container, between the active-instance list and the stats read)
+/// — or a stuck record whose container vanished — so the caller can log it at
+/// debug rather than alarm. Any other failure is a real problem.
+#[derive(Debug)]
+pub enum ContainerStatsError {
+    ContainerNotFound(String),
+    Other(String),
+}
+
+impl std::fmt::Display for ContainerStatsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ContainerNotFound(msg) => write!(f, "container not found: {}", msg),
+            Self::Other(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
 /// Previous one-shot counters, kept per container id so the next read can
 /// compute a CPU delta.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -283,6 +303,20 @@ pub fn cpu_percent_from_deltas(
     let cpu_delta = cur_total_usage - prev_total_usage;
     let sys_delta = cur_system_cpu_usage - prev_system_cpu_usage;
     Some((cpu_delta as f64 / sys_delta as f64) * online_cpus.max(1) as f64 * 100.0)
+}
+
+/// Reported memory usage minus the reclaimable page cache (`inactive_file`),
+/// matching the convention of `docker stats`. The raw cgroup `usage` counter
+/// includes file pages the kernel can evict on memory pressure, so it
+/// overstates how much an instance actually occupies; the CLI reports
+/// `usage - inactive_file` (cgroup v2 key `inactive_file`, v1
+/// `total_inactive_file`). Saturating: never underflow below zero.
+fn mem_usage_excluding_page_cache(usage: u64, inactive_file: u64) -> u64 {
+    if inactive_file < usage {
+        usage - inactive_file
+    } else {
+        usage
+    }
 }
 
 /// Trait for Docker operations, allowing mock implementations in tests.
@@ -361,11 +395,12 @@ pub trait DockerService: Send + Sync {
 
     /// One-shot resource snapshot for the Monitor dashboard. CPU % is computed
     /// from the delta against the previous read for the same container
-    /// (`None` on first read); a failed read is fail-open in the caller.
+    /// (`None` on first read); a failed read is fail-open in the caller. A
+    /// container that no longer exists is reported distinctly (`NotFound`).
     async fn container_stats(
         &self,
         container_id: &str,
-    ) -> Result<ContainerStats, String>;
+    ) -> Result<ContainerStats, ContainerStatsError>;
 
     /// Create a clean, empty host data directory for an Instance and declare a
     /// Local Bind-mounted Named Volume over it. The API runs in a container and
@@ -1137,7 +1172,7 @@ impl DockerService for DockerClient {
     async fn container_stats(
         &self,
         container_id: &str,
-    ) -> Result<ContainerStats, String> {
+    ) -> Result<ContainerStats, ContainerStatsError> {
         use bollard::container::{Stats, StatsOptions};
 
         let options = Some(StatsOptions {
@@ -1149,8 +1184,14 @@ impl DockerService for DockerClient {
             .stats(container_id, options)
             .try_next()
             .await
-            .map_err(|e| format!("stats failed: {}", e))?
-            .ok_or_else(|| format!("stats stream empty for {}", container_id))?;
+            .map_err(|e| {
+                if is_container_not_found(&e) {
+                    ContainerStatsError::ContainerNotFound(e.to_string())
+                } else {
+                    ContainerStatsError::Other(format!("stats failed: {}", e))
+                }
+            })?
+            .ok_or_else(|| ContainerStatsError::Other(format!("stats stream empty for {}", container_id)))?;
         let stats = stats as Stats;
 
         let cur_total = stats.cpu_stats.cpu_usage.total_usage;
@@ -1176,9 +1217,16 @@ impl DockerService for DockerClient {
             },
         );
 
+        let mem_usage = stats.memory_stats.usage.unwrap_or(0);
+        let inactive_file = match &stats.memory_stats.stats {
+            Some(bollard::container::MemoryStatsStats::V1(v1)) => v1.total_inactive_file,
+            Some(bollard::container::MemoryStatsStats::V2(v2)) => v2.inactive_file,
+            None => 0,
+        };
+
         Ok(ContainerStats {
             cpu_percent,
-            mem_used_bytes: stats.memory_stats.usage.unwrap_or(0),
+            mem_used_bytes: mem_usage_excluding_page_cache(mem_usage, inactive_file),
             mem_limit_bytes: stats.memory_stats.limit.unwrap_or(0),
         })
     }
@@ -1622,6 +1670,23 @@ mod tests {
         assert_eq!(cpu_percent_from_deltas(1000, 500, 20000, 25000, 1), None);
         assert_eq!(cpu_percent_from_deltas(1000, 2000, 25000, 25000, 1), None);
         assert_eq!(cpu_percent_from_deltas(1000, 2000, 25000, 20000, 1), None);
+    }
+
+    #[test]
+    fn test_mem_usage_excluding_page_cache_subtracts_inactive_file() {
+        let used = mem_usage_excluding_page_cache(800_000_000, 540_000_000);
+        assert_eq!(used, 260_000_000);
+    }
+
+    #[test]
+    fn test_mem_usage_excluding_page_cache_no_cache_keeps_usage() {
+        assert_eq!(mem_usage_excluding_page_cache(800_000_000, 0), 800_000_000);
+        assert_eq!(mem_usage_excluding_page_cache(800_000_000, 800_000_000), 800_000_000);
+    }
+
+    #[test]
+    fn test_mem_usage_excluding_page_cache_cache_over_usage_is_saturating() {
+        assert_eq!(mem_usage_excluding_page_cache(100, 999), 100);
     }
 
     #[test]

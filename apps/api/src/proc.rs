@@ -59,6 +59,28 @@ pub fn cpu_busy_percent(prev: &CpuCounters, cur: &CpuCounters) -> f64 {
     (busy_delta as f64 / total_delta as f64) * 100.0
 }
 
+/// Number of logical CPUs in `/proc/stat` text, counted from the `cpuN` per-CPU
+/// lines (the aggregate `cpu` line is excluded). 0 when the text is malformed.
+fn count_cpu_lines(text: &str) -> u64 {
+    text.lines()
+        .filter(|line| {
+            line.starts_with("cpu")
+                && line
+                    .as_bytes()
+                    .get(3)
+                    .is_some_and(|b| b.is_ascii_digit())
+        })
+        .count() as u64
+}
+
+/// Number of logical CPUs on the host (from `/proc/stat`), at least 1.
+pub fn host_cpu_count() -> u64 {
+    std::fs::read_to_string("/proc/stat")
+        .map(|text| count_cpu_lines(&text))
+        .unwrap_or(0)
+        .max(1)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MemInfo {
     pub total_kb: u64,
@@ -160,6 +182,31 @@ mod tests {
         let prev = base_counters();
         let cur = CpuCounters { user: 51400, ..prev };
         assert_eq!(cpu_busy_percent(&prev, &cur), 0.0);
+    }
+
+    #[test]
+    fn count_cpu_lines_counts_per_cpu_lines_not_aggregate() {
+        let text = "\
+cpu  51428 5448 28883 32964784 39949 0 3098 0 0 0
+cpu0  1 2 3 4 5 6 7 8 9 10
+cpu1  1 2 3 4 5 6 7 8 9 10
+cpu2  1 2 3 4 5 6 7 8 9 10
+cpu03  1 2 3 4 5 6 7 8 9 10
+intr 1234
+";
+        assert_eq!(count_cpu_lines(text), 4);
+    }
+
+    #[test]
+    fn count_cpu_lines_malformed_is_zero() {
+        assert_eq!(count_cpu_lines(""), 0);
+        assert_eq!(count_cpu_lines("cpu  1 2 3\n"), 0);
+        assert_eq!(count_cpu_lines("bogus\nintr 1\n"), 0);
+    }
+
+    #[test]
+    fn host_cpu_count_reads_proc_stat() {
+        assert!(host_cpu_count() >= 1);
     }
 
     const MEMINFO_FIXTURE: &str = "\
