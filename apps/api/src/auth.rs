@@ -19,6 +19,10 @@ pub struct AuthUser {
     /// The context computed by the policy module from the DB. Permission
     /// changes take effect on the next request without re-login.
     pub context: EffectiveContext,
+    /// Client IP resolved from the request headers (rightmost `X-Forwarded-For`,
+    /// then `X-Real-IP`) — carried on the extractor so audit emission sites
+    /// never read headers themselves (audit spec Decision 5).
+    pub client_ip: Option<String>,
 }
 
 impl AuthUser {
@@ -40,6 +44,10 @@ impl AuthUser {
 
     pub fn can_view_monitoring(&self) -> bool {
         self.is_admin() || self.context.can_view_monitoring
+    }
+
+    pub fn can_view_audit_logs(&self) -> bool {
+        self.is_admin() || self.context.can_view_audit_logs
     }
 }
 
@@ -98,8 +106,36 @@ impl FromRequestParts<AppState> for AuthUser {
             user_id,
             username: user.username,
             context,
+            client_ip: crate::audit::client_ip(&parts.headers),
         })
     }
+}
+
+/// Resolve the `ow_token` cookie to a user id (identity only, no DB lookups).
+/// Used by the audit `auth.forbidden` middleware to identify authenticated
+/// actors on rejected requests without re-running the full `AuthUser`
+/// extractor (spec Decision 3: anonymous 401/403 noise is never audited).
+pub fn user_id_from_cookie(
+    headers: &axum::http::HeaderMap,
+    jwt_secret: &str,
+) -> Option<Uuid> {
+    let token = headers
+        .get(header::COOKIE)?
+        .to_str()
+        .ok()?
+        .split(';')
+        .find(|c| c.trim().starts_with("ow_token="))?
+        .trim()
+        .strip_prefix("ow_token=")?;
+
+    let token_data = decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(jwt_secret.as_bytes()),
+        &Validation::default(),
+    )
+    .ok()?;
+
+    token_data.claims.sub.parse::<Uuid>().ok()
 }
 
 pub fn create_token(user_id: &Uuid, jwt_secret: &str) -> Result<String, StatusCode> {
@@ -149,6 +185,7 @@ mod tests {
         can_manage_docker: bool,
         can_manage_registry: bool,
         can_view_monitoring: bool,
+        can_view_audit_logs: bool,
     ) -> AuthUser {
         AuthUser {
             user_id: Uuid::new_v4(),
@@ -164,42 +201,47 @@ mod tests {
                 can_manage_docker,
                 can_manage_registry,
                 can_view_monitoring,
+                can_view_audit_logs,
                 effective_max_instances: 2,
                 allowed_template_ids: vec![],
                 group_ids: vec![],
                 direct_max_instances: None,
             },
+            client_ip: Some("203.0.113.9".to_string()),
         }
     }
 
     #[test]
     fn test_is_admin_backed_by_context_flag() {
-        assert!(auth_user(true, false, false, false, false, false, false).is_admin());
-        assert!(!auth_user(false, false, false, false, false, false, false).is_admin());
+        assert!(auth_user(true, false, false, false, false, false, false, false).is_admin());
+        assert!(!auth_user(false, false, false, false, false, false, false, false).is_admin());
     }
 
     #[test]
     fn test_compat_gates_reflect_context_flags() {
-        let manager = auth_user(false, true, true, true, true, true, true);
+        let manager = auth_user(false, true, true, true, true, true, true, true);
         assert!(manager.can_manage_users());
         assert!(manager.can_manage_docker());
         assert!(manager.can_manage_registry());
         assert!(manager.can_view_monitoring());
+        assert!(manager.can_view_audit_logs());
 
-        let plain = auth_user(false, false, false, false, false, false, false);
+        let plain = auth_user(false, false, false, false, false, false, false, false);
         assert!(!plain.can_manage_users());
         assert!(!plain.can_manage_docker());
         assert!(!plain.can_manage_registry());
         assert!(!plain.can_view_monitoring());
+        assert!(!plain.can_view_audit_logs());
     }
 
     #[test]
     fn test_admin_bypasses_every_gate() {
-        let admin = auth_user(true, false, false, false, false, false, false);
+        let admin = auth_user(true, false, false, false, false, false, false, false);
         assert!(admin.can_manage_users());
         assert!(admin.can_manage_docker());
         assert!(admin.can_manage_registry());
         assert!(admin.can_view_monitoring());
+        assert!(admin.can_view_audit_logs());
     }
 
     #[test]

@@ -30,6 +30,7 @@ management and admin pages appear only if your group grants the permission
 | **Groups** | Group management and template whitelists | Admins |
 | **Users** | User accounts, group memberships, and personal ceilings | User managers and admins |
 | **Monitor** | Host CPU/RAM/disk and per-instance resource usage with sparklines | Groups with the monitoring flag (see [RBAC](rbac.md)) |
+| **Logs** | The audit trail: who did what, when, and from where | Groups with the audit-logs flag (see [RBAC](rbac.md)) |
 | **Settings** | Server-wide options (e.g. the host instance limit) | Admins |
 
 ## Launching a session
@@ -90,6 +91,37 @@ The **Monitor** page (for admins and groups granted the monitoring flag) answers
   (15 s) points inside the last hour, five-minute averages further back.
 - Granting or revoking the flag is done per group in the group editor (see
   [RBAC](rbac.md)).
+
+## Viewing the audit trail
+
+The **Logs** page (for admins and groups granted the audit-logs flag) records
+"who did what" on the box:
+
+- Every meaningful action is logged with the actor, the action, its target,
+  whether it succeeded, the caller's IP, and the time. This includes sign-ins
+  and failed sign-ins, session lifecycle events (create / start / stop / pause /
+  resume / delete, including auto-sleep), template and group and user edits,
+  registry and settings changes, and denied-access attempts by signed-in users.
+- Use the filter bar to narrow the list — by event type, actor, target, outcome,
+  or a date range. The list is newest-first and pages through long histories
+  automatically with a "load more" control.
+- Edit events expand to show exactly which fields changed and their before and
+  after values. Sensitive values (passwords, secrets, tokens, keys,
+  credentials) are always shown as `[REDACTED]`.
+- The trail is kept for 90 days and then pruned automatically.
+
+## Reading a session's output
+
+Every session card has a **Logs** button (for the owner, admins, and group
+managers entitled to control the session) that opens the session's console
+output — the last 200 lines by default:
+
+- Turn on **follow** to stream new output live while the session runs.
+- When a stopped or paused session's logs are opened, the panel shows the tail
+  plus a clear "session ended" state with the reason, so a dead session is
+  still debuggable.
+- Color codes in tool output are rendered as colors. Closing the panel stops
+  the stream.
 
 ## Related docs
 

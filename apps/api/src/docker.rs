@@ -1,13 +1,15 @@
 use bollard::container::{
-    Config, CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
-    StartContainerOptions, StopContainerOptions, UploadToContainerOptions, WaitContainerOptions,
+    Config, CreateContainerOptions, ListContainersOptions, LogOutput, LogsOptions,
+    RemoveContainerOptions, StartContainerOptions, StopContainerOptions, UploadToContainerOptions,
+    WaitContainerOptions,
 };
 use bollard::image::CreateImageOptions;
 use bollard::models::{ContainerSummary, Ipam, IpamConfig, RestartPolicy};
 use bollard::network::CreateNetworkOptions;
 use bollard::volume::{CreateVolumeOptions, RemoveVolumeOptions};
 use bollard::Docker;
-use futures_util::stream::TryStreamExt;
+use futures_util::stream::{BoxStream, TryStreamExt};
+use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::default::Default;
 use std::str::FromStr;
@@ -190,6 +192,23 @@ pub fn port_bindings_for(
     bindings
 }
 
+/// Per-instance container log driver options: `json-file` capped at 5 MB × 3
+/// files (~15 MB on disk per instance), so on-demand log viewing can never
+/// fill the host. Mirrors the control-plane rotation for the API container.
+pub fn instance_log_config() -> bollard::models::HostConfigLogConfig {
+    bollard::models::HostConfigLogConfig {
+        typ: Some("json-file".to_string()),
+        config: Some(
+            [
+                ("max-size".to_string(), "5m".to_string()),
+                ("max-file".to_string(), "3".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+    }
+}
+
 /// The network lifecycle operations that are treated idempotently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetworkOp {
@@ -271,6 +290,29 @@ pub enum ContainerStatsError {
 }
 
 impl std::fmt::Display for ContainerStatsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ContainerNotFound(msg) => write!(f, "container not found: {}", msg),
+            Self::Other(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+/// Streamed container stdout/stderr for the on-demand Logs panel. Items are
+/// bollard `LogOutput` chunks (`StdOut`/`StdErr`); the endpoint assembles them
+/// into lines.
+pub type ContainerLogStream = BoxStream<'static, Result<LogOutput, bollard::errors::Error>>;
+
+/// Why a `container_logs` request failed up front. `ContainerNotFound` is
+/// normal during teardown or for a stuck record whose container vanished — the
+/// Logs endpoint surfaces it as `end (deleted)` instead of an error stream.
+#[derive(Debug)]
+pub enum ContainerLogsError {
+    ContainerNotFound(String),
+    Other(String),
+}
+
+impl std::fmt::Display for ContainerLogsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ContainerNotFound(msg) => write!(f, "container not found: {}", msg),
@@ -401,6 +443,19 @@ pub trait DockerService: Send + Sync {
         &self,
         container_id: &str,
     ) -> Result<ContainerStats, ContainerStatsError>;
+
+    /// Stream an instance container's stdout/stderr for the on-demand Logs
+    /// panel. `tail` is the number of historical lines to send first (negative
+    /// or zero = no history, follow live only); `follow` keeps the stream open
+    /// for new output. The returned stream yields raw bollard `LogOutput`
+    /// chunks; `ContainerNotFound` (container gone between resolve and read) is
+    /// reported distinctly so the endpoint can close with `end (deleted)`.
+    async fn container_logs(
+        &self,
+        container_id: &str,
+        tail: i64,
+        follow: bool,
+    ) -> Result<ContainerLogStream, ContainerLogsError>;
 
     /// Create a clean, empty host data directory for an Instance and declare a
     /// Local Bind-mounted Named Volume over it. The API runs in a container and
@@ -776,6 +831,7 @@ impl DockerService for DockerClient {
                 None
             },
             runtime: config.runtime.as_deref().and_then(runtime_to_host_config),
+            log_config: Some(instance_log_config()),
             restart_policy: Some(RestartPolicy {
                 name: Some(bollard::models::RestartPolicyNameEnum::UNLESS_STOPPED),
                 ..Default::default()
@@ -1240,6 +1296,54 @@ impl DockerService for DockerClient {
             mem_used_bytes: mem_usage_excluding_page_cache(mem_usage, inactive_file),
             mem_limit_bytes: stats.memory_stats.limit.unwrap_or(0),
         })
+    }
+
+    async fn container_logs(
+        &self,
+        container_id: &str,
+        tail: i64,
+        follow: bool,
+    ) -> Result<ContainerLogStream, ContainerLogsError> {
+        let options = Some(LogsOptions::<String> {
+            stdout: true,
+            stderr: true,
+            follow,
+            tail: if tail > 0 { tail.to_string() } else { "0".to_string() },
+            ..Default::default()
+        });
+        let mut stream = self.docker.logs(container_id, options).boxed();
+
+        // Docker only reports a missing container when the stream is first
+        // polled. Peek the first item so callers get a definitive
+        // `ContainerNotFound` before committing to an SSE response; the first
+        // chunk is then re-emitted ahead of the rest of the stream.
+        //
+        // A running-but-silent container (follow=true, no output yet) yields
+        // nothing within the peek window — that must not block the SSE upgrade
+        // indefinitely, so the peek times out and the (unconsumed) stream is
+        // returned as-is. A missing container errors immediately instead, so
+        // the not-found detection is preserved.
+        match tokio::time::timeout(
+            crate::DOCKER_LOGS_PEEK_TIMEOUT,
+            stream.next(),
+        )
+        .await
+        {
+            Ok(Some(Ok(first))) => {
+                let combined = futures_util::stream::iter(vec![Ok(first)]).chain(stream);
+                Ok(Box::pin(combined))
+            }
+            Ok(Some(Err(e))) if is_container_not_found(&e) => {
+                Err(ContainerLogsError::ContainerNotFound(e.to_string()))
+            }
+            Ok(Some(Err(e))) => Err(ContainerLogsError::Other(format!("logs failed: {}", e))),
+            // No history at all (silent container, tail=0, follow=false) is a
+            // clean empty result — a missing container surfaces as a 404 error
+            // item instead.
+            Ok(None) => Ok(Box::pin(futures_util::stream::iter(vec![]))),
+            // Quiet running container: return the unconsumed follow stream.
+            Err(_elapsed) => Ok(Box::pin(stream)),
+        }
     }
 
     /// Create the (empty) host data directory: pre-create the full chain as the
@@ -1713,6 +1817,15 @@ mod tests {
     #[test]
     fn test_runtime_to_host_config_runsc_returns_some() {
         assert_eq!(runtime_to_host_config("runsc"), Some("runsc".to_string()));
+    }
+
+    #[test]
+    fn test_instance_log_config_json_file_capped_at_5m_times_3() {
+        let cfg = instance_log_config();
+        assert_eq!(cfg.typ.as_deref(), Some("json-file"));
+        let config = cfg.config.as_ref().expect("log config map");
+        assert_eq!(config.get("max-size").map(String::as_str), Some("5m"));
+        assert_eq!(config.get("max-file").map(String::as_str), Some("3"));
     }
 
     #[test]

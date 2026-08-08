@@ -1,19 +1,28 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
+    response::{
+        sse::{Event, Sse},
+        IntoResponse, Response,
+    },
     routing::{get, post},
     Json, Router,
 };
+use futures_util::{Stream, StreamExt};
+use sea_orm::DatabaseConnection;
 use serde::Deserialize;
 use std::collections::BTreeSet;
+use std::convert::Infallible;
 use std::net::Ipv4Addr;
+use std::time::Duration;
 use uuid::Uuid;
 
 use super::super::AppState;
 use crate::activation::{ActivationError, ActivationKind, ActivationRequest, LaunchPayload};
+use crate::audit::{action, target, AuditEvent};
 use crate::auth::AuthUser;
 use crate::db::{PolicyRepository, PersistentVolumeRepository, UserRepository, WorkspaceTemplate, WorkspaceTemplateRepository, WorkspaceInstance, WorkspaceInstanceRepository};
-use crate::docker::{ContainerConfig, RemoteType};
+use crate::docker::{is_container_not_found, ContainerConfig, ContainerLogsError, ContainerLogStream, RemoteType};
 use crate::effective_context::PreflightReject;
 use crate::host_port::ReservedPort;
 use crate::openapi::{InstanceEnvelope, InstanceListEnvelope};
@@ -32,6 +41,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/instances/{id}/pause", post(pause_instance))
         .route("/api/instances/{id}/unpause", post(unpause_instance))
         .route("/api/instances/{id}/heartbeat", post(heartbeat_instance))
+        .route("/api/instances/{id}/logs", get(instance_logs))
 }
 
 fn resolve_runtime(container_runtime: &str, settings_runtime: &str) -> String {
@@ -138,6 +148,286 @@ async fn can_manage_instance(
         .group_ids
         .iter()
         .any(|group_id| owner_group_ids.contains(group_id)))
+}
+
+/// Query params for the on-demand container-log stream.
+#[derive(Deserialize)]
+struct LogsParams {
+    /// Number of historical lines to send first. Defaults to 200.
+    tail: Option<i64>,
+    /// Whether to keep the stream open for new output. Defaults to true.
+    follow: Option<bool>,
+}
+
+/// One SSE `log` event carrying a single chunk of container output. The payload
+/// is JSON (`stream` + `text`) so the frontend can render stderr distinctly and
+/// never has to parse raw SSE data delimiters.
+fn sse_log_event(stream_name: &str, bytes: &[u8]) -> Event {
+    let payload = serde_json::json!({
+        "stream": stream_name,
+        "text": String::from_utf8_lossy(bytes),
+    });
+    Event::default().event("log").data(payload.to_string())
+}
+
+/// The terminal SSE event: `reason` is one of `stopped` | `paused` |
+/// `deleted` | `eof`. The frontend renders it as the "session ended" state and
+/// stops spinning.
+fn sse_end_event(reason: &str) -> Event {
+    let payload = serde_json::json!({ "reason": reason });
+    Event::default().event("end").data(payload.to_string())
+}
+
+/// The `LogsPhase` driver for the SSE stream.
+enum LogsPhase {
+    Streaming {
+        docker_stream: ContainerLogStream,
+        instance_id: Uuid,
+    },
+    Done,
+}
+
+/// How often the SSE stream re-checks the instance's status while following, so
+/// it can actively end with the right reason when the instance leaves
+/// `running` (stop / pause / auto-sleep / delete) instead of hanging on Docker's
+/// follow.
+const STATUS_POLL: Duration = Duration::from_secs(3);
+
+/// Build the `text/event-stream` body for an instance's container logs.
+///
+/// `static_reason` is `Some` for instances that are not followable (stopped /
+/// paused / error): the docker tail is emitted, then a terminal `end` event
+/// closes the stream. For followable instances (`running` / `starting`) the
+/// docker stream is followed (when `follow` is set) and a status poll ends it
+/// early with the observed reason once the instance leaves `running`.
+fn instance_logs_stream(
+    docker_stream: ContainerLogStream,
+    follow: bool,
+    instance_id: Uuid,
+    db: DatabaseConnection,
+    static_reason: Option<&'static str>,
+) -> impl Stream<Item = Result<Event, Infallible>> {
+    futures_util::stream::unfold(
+        LogsPhase::Streaming {
+            docker_stream,
+            instance_id,
+        },
+        move |phase| {
+            let db = db.clone();
+            async move {
+                let (mut docker_stream, instance_id) = match phase {
+                    LogsPhase::Done => return None,
+                    LogsPhase::Streaming {
+                        docker_stream,
+                        instance_id,
+                    } => (docker_stream, instance_id),
+                };
+
+                let poll_every = if follow { Some(STATUS_POLL) } else { None };
+
+                loop {
+                    let next = if let Some(poll_every) = poll_every {
+                        // Wait for docker output, or the poll cadence — whichever
+                        // comes first.
+                        match tokio::time::timeout(poll_every, docker_stream.next()).await {
+                            Ok(item) => item,
+                            Err(_elapsed) => {
+                                // Status re-check: end the follow when the
+                                // instance leaves `running`.
+                                match WorkspaceInstanceRepository::new(&db)
+                                    .find_by_id(instance_id)
+                                    .await
+                                {
+                                    Ok(Some(inst))
+                                        if matches!(inst.status.as_str(), "running" | "starting") =>
+                                    {
+                                        continue;
+                                    }
+                                    Ok(Some(inst)) => {
+                                        let reason = if inst.status == "paused" {
+                                            "paused"
+                                        } else {
+                                            "stopped"
+                                        };
+                                        return Some((
+                                            Ok(sse_end_event(reason)),
+                                            LogsPhase::Done,
+                                        ));
+                                    }
+                                    Ok(None) => {
+                                        return Some((
+                                            Ok(sse_end_event("deleted")),
+                                            LogsPhase::Done,
+                                        ));
+                                    }
+                                    Err(_) => {
+                                        return Some((Ok(sse_end_event("eof")), LogsPhase::Done));
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        docker_stream.next().await
+                    };
+
+                    match next {
+                        Some(Ok(output)) => {
+                            let (stream_name, bytes) = match &output {
+                                bollard::container::LogOutput::StdOut { message } => {
+                                    ("stdout", &message[..])
+                                }
+                                bollard::container::LogOutput::StdErr { message } => {
+                                    ("stderr", &message[..])
+                                }
+                                bollard::container::LogOutput::StdIn { message }
+                                | bollard::container::LogOutput::Console { message } => {
+                                    ("stdout", &message[..])
+                                }
+                            };
+                            return Some((
+                                Ok(sse_log_event(stream_name, bytes)),
+                                LogsPhase::Streaming {
+                                    docker_stream,
+                                    instance_id,
+                                },
+                            ));
+                        }
+                        Some(Err(e)) if is_container_not_found(&e) => {
+                            return Some((Ok(sse_end_event("deleted")), LogsPhase::Done));
+                        }
+                        Some(Err(_)) => {
+                            return Some((Ok(sse_end_event("eof")), LogsPhase::Done));
+                        }
+                        None => {
+                            // Docker closed the stream. For non-followable
+                            // instances the static reason (stopped / paused)
+                            // applies; for followable ones, re-check the status
+                            // so a stop that happened just as the stream ended
+                            // is reported with the real reason, not `eof`
+                            // (spec Decision 10: end the follow with the reason
+                            // when the instance leaves `running`).
+                            let reason = match static_reason {
+                                Some(reason) => reason,
+                                None => {
+                                    match WorkspaceInstanceRepository::new(&db)
+                                        .find_by_id(instance_id)
+                                        .await
+                                    {
+                                        Ok(Some(inst)) => match inst.status.as_str() {
+                                            "paused" => "paused",
+                                            "running" | "starting" => "eof",
+                                            _ => "stopped",
+                                        },
+                                        Ok(None) => "deleted",
+                                        Err(_) => "eof",
+                                    }
+                                }
+                            };
+                            return Some((Ok(sse_end_event(reason)), LogsPhase::Done));
+                        }
+                    }
+                }
+            }
+        },
+    )
+}
+
+/// On-demand container logs for an instance.
+///
+/// Authorization is the `mayControlInstance` scope (owner / admin /
+/// group-instance holder on a lower-tier same-group target). All pre-flight
+/// checks (auth → 401, instance existence → 404, authorization → 403) return a
+/// JSON error body before the response upgrades to `text/event-stream`; the
+/// stream then carries `log` events and a terminal `end` event.
+#[utoipa::path(
+    get,
+    path = "/api/instances/{id}/logs",
+    tag = "admin-gated",
+    params(
+        ("id" = Uuid, description = "instance uuid"),
+        ("tail" = i64, Query, description = "number of historical lines to send first (default 200, clamped to 1-5000)"),
+        ("follow" = bool, Query, description = "keep the stream open for new output (default true)"),
+    ),
+    responses(
+        (status = 200, description = "text/event-stream of container output; a terminal `end` event carries the stop reason (stopped | paused | deleted | eof)"),
+        (status = 401, description = "missing or invalid ow_token"),
+        (status = 403, description = "requires mayControlInstance (owner, admin, or lower-tier group-instance holder)"),
+        (status = 404, description = "instance not found"),
+        (status = 500, description = "internal server error"),
+    )
+)]
+async fn instance_logs(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    auth: AuthUser,
+    Query(params): Query<LogsParams>,
+) -> Result<Response, StatusCode> {
+    let tail = params.tail.unwrap_or(200).clamp(1, 5000);
+    let follow = params.follow.unwrap_or(true);
+
+    let instance = WorkspaceInstanceRepository::new(&state.db)
+        .find_by_id(id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    if !can_manage_instance(&state, &auth, &instance).await? {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let status = instance.status.as_str();
+    let followable = matches!(status, "running" | "starting");
+
+    let container_id = match instance.container_id.as_deref() {
+        Some(cid) => cid.to_string(),
+        None => {
+            // Never launched: there is nothing to stream, but the pre-flight
+            // checks have passed, so close the stream with `deleted`.
+            let stream =
+                futures_util::stream::iter(vec![Ok::<Event, Infallible>(sse_end_event("deleted"))]);
+            return Ok(Sse::new(stream).into_response());
+        }
+    };
+
+    let static_reason: Option<&'static str> = if followable {
+        None
+    } else {
+        Some(match status {
+            "paused" => "paused",
+            _ => "stopped",
+        })
+    };
+
+    let docker_follow = follow && static_reason.is_none();
+
+    let docker_stream = match state
+        .docker
+        .container_logs(&container_id, tail, docker_follow)
+        .await
+    {
+        Ok(stream) => stream,
+        Err(ContainerLogsError::ContainerNotFound(_)) => {
+            let stream =
+                futures_util::stream::iter(vec![Ok::<Event, Infallible>(sse_end_event("deleted"))]);
+            return Ok(Sse::new(stream).into_response());
+        }
+        Err(ContainerLogsError::Other(e)) => {
+            tracing::warn!("container_logs failed for instance {}: {}", id, e);
+            let stream =
+                futures_util::stream::iter(vec![Ok::<Event, Infallible>(sse_end_event("eof"))]);
+            return Ok(Sse::new(stream).into_response());
+        }
+    };
+
+    let stream = instance_logs_stream(
+        docker_stream,
+        docker_follow,
+        id,
+        state.db.clone(),
+        static_reason,
+    );
+
+    Ok(Sse::new(stream).into_response())
 }
 
 /// How a launch request wants the Instance's persistent storage handled.
@@ -683,6 +973,11 @@ async fn launch_instance(
             drop(reservation.take());
             instance_repo.update_status(instance.id, "starting").await.ok();
 
+            state.audit.emit(
+                AuditEvent::from_auth(&auth, action::INSTANCE_CREATE, target::INSTANCE)
+                    .with_target(Some(instance.id.to_string()), Some(instance.name.clone())),
+            );
+
             if let Err(e) = crate::route_writer::write_route(&remote_type, &instance.access_token, host_port, &instance.access_password) {
                 tracing::error!("Failed to write Traefik VNC route: {}", e);
             }
@@ -844,6 +1139,10 @@ async fn delete_instance(
 
     match instance_repo.delete(id).await {
         Ok(true) => {
+            state.audit.emit(
+                AuditEvent::from_auth(&auth, action::INSTANCE_DELETE, target::INSTANCE)
+                    .with_target(Some(instance.id.to_string()), Some(instance.name.clone())),
+            );
             // After the row is gone, flip the registry row to `orphaned` once
             // no other active instance still references the host path (spec
             // Decision 7). Best-effort: a sync failure keeps the row `active`
@@ -1096,6 +1395,11 @@ async fn start_instance(
     })?;
 
     tracing::info!("Instance '{}' started", instance.name);
+
+    state.audit.emit(
+        AuditEvent::from_auth(&auth, action::INSTANCE_START, target::INSTANCE)
+            .with_target(Some(instance.id.to_string()), Some(instance.name.clone())),
+    );
 
     let container_id_str = new_container_id.as_deref();
     Ok(Json(serde_json::json!({
@@ -1652,6 +1956,11 @@ async fn stop_instance(
 
     tracing::info!("Instance '{}' stopped", instance.name);
 
+    state.audit.emit(
+        AuditEvent::from_auth(&auth, action::INSTANCE_STOP, target::INSTANCE)
+            .with_target(Some(instance.id.to_string()), Some(instance.name.clone())),
+    );
+
     Ok(Json(serde_json::json!({ "status": "stopped" })))
 }
 
@@ -1720,6 +2029,11 @@ async fn pause_instance(
     instance_repo.update_last_seen_at(instance.id, None).await.ok();
 
     tracing::info!("Instance '{}' paused", instance.name);
+
+    state.audit.emit(
+        AuditEvent::from_auth(&auth, action::INSTANCE_PAUSE, target::INSTANCE)
+            .with_target(Some(instance.id.to_string()), Some(instance.name.clone())),
+    );
 
     Ok(Json(serde_json::json!({ "status": "paused" })))
 }
@@ -1801,6 +2115,11 @@ async fn unpause_instance(
     })?;
 
     tracing::info!("Instance '{}' unpaused", instance.name);
+
+    state.audit.emit(
+        AuditEvent::from_auth(&auth, action::INSTANCE_UNPAUSE, target::INSTANCE)
+            .with_target(Some(instance.id.to_string()), Some(instance.name.clone())),
+    );
 
     Ok(Json(serde_json::json!({ "status": "running" })))
 }

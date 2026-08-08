@@ -19,7 +19,7 @@ import schemathesis
 def admin_gated_boundary(context, response, case):
     """admin-gated endpoints must never answer 2xx to a non-admin session.
 
-    Pass 2 runs the whole 17-endpoint surface under the low-privilege
+    Pass 2 runs the whole 20-endpoint surface under the low-privilege
     fuzz-user's cookie. Any operation tagged `admin-gated` returning a 2xx
     status is a boundary violation; 403 (or 404) are the accepted outcomes.
     """

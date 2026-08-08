@@ -101,6 +101,7 @@ export interface EffectiveContext {
   can_manage_docker: boolean;
   can_manage_registry: boolean;
   can_view_monitoring: boolean;
+  can_view_audit_logs: boolean;
   effective_max_instances: number;
   allowed_template_ids: string[];
   group_ids: string[];
@@ -122,6 +123,7 @@ export interface Group {
   can_manage_docker: boolean;
   can_manage_registry: boolean;
   can_view_monitoring: boolean;
+  can_view_audit_logs: boolean;
   max_instances: number | null;
   template_ids: string[];
 }
@@ -198,4 +200,45 @@ export interface MonitorInstance {
 export interface MonitorSnapshot {
   host: MonitorHost;
   instances: MonitorInstance[];
+}
+
+export type AuditOutcome = 'success' | 'failure';
+
+/** One row of the audit trail (GET /api/audit, keyset paginated). */
+export interface AuditEntry {
+  id: string;
+  created_at: string;
+  actor_user_id: string | null;
+  actor_name: string;
+  action: string;
+  target_type: string;
+  target_id: string | null;
+  target_name: string | null;
+  outcome: AuditOutcome;
+  client_ip: string | null;
+  /** Event payload: a `field: { before, after }` diff for `*.update` events. */
+  detail: Record<string, unknown> | null;
+}
+
+export interface AuditPage {
+  entries: AuditEntry[];
+  next_cursor: string | null;
+}
+
+/** Client-side mirror of the audit query params (all optional, AND-combined). */
+export interface AuditQuery {
+  action?: string;
+  actor?: string;
+  target?: string;
+  outcome?: AuditOutcome;
+  after?: string;
+  before?: string;
+  cursor?: string;
+  limit?: number;
+}
+
+/** A rendered container-log line: which stream it came from plus its text. */
+export interface ContainerLogLine {
+  stream: 'stdout' | 'stderr';
+  text: string;
 }

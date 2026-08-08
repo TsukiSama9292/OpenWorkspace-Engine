@@ -167,22 +167,27 @@ axis that auto-switches resolution as you zoom.
 | Pure chart math | `apps/web/src/lib/chart/` module (time↔x, merging, nearest-point, zoom clamping, follow state) — DOM-free and unit-tested |
 | E2E | `e2e/tests/monitor.full.spec.ts` — live interactive host charts, drag-zoom + back-to-now, detail modal, paused badge, RBAC boundary |
 
+### ✅ Observability & Logs (audit trail + on-demand container logs)
+
+Stage 5's observability trio
+(`.scratch/observability-logs/`): a queryable audit trail of administrative
+and security events, an on-demand container-log viewer streamed live from
+Docker, and bounded log rotation for instance and control-plane containers.
+
+| Deliverable | Content |
+|---|---|
+| Audit trail | `audit_logs` table (migration `000024`) recording auth events, instance lifecycle, template / group / user / registry / settings edits, and authenticated 403s; async best-effort bounded channel → batching writer → graceful-shutdown flush; 90-day retention pruned daily from the health worker |
+| RBAC flag `can_view_audit_logs` | seventh flat group flag (Admin/Manager on by default, User off), gates the Logs tab + query endpoint, checkbox in the group editor |
+| Audit query endpoint + Logs panel | keyset-paginated (newest-first) filterable viewer with actor / action / target / outcome / IP / time, redacted before/after diffs on edit events (sensitive fields `[REDACTED]`, URL userinfo stripped), joins the 20-endpoint fuzz surface |
+| On-demand container logs | `GET /api/instances/{id}/logs` status-aware SSE (`mayControlInstance` scope): tail 200 + follow, `end` event with reason (stopped / paused / deleted / eof), prompt upgrade for quiet containers, active end on status change |
+| Instance log bounds | `json-file` `max-size=5m` `max-file=3` (~15 MB per instance) baked into the container config; control-plane logs rotated by compose (`max-size=10m` `max-file=3`) |
+| E2E | `e2e/tests/observability.full.spec.ts` — audit rows render + filter, real-instance logs tail/follow, RBAC boundary, SSE end states |
+
 ---
 
 ## In-progress / Planned Stages
 
-### 🔵 Stage 5: Observability & Operations (Next)
-
-> Current state: the Session desktop has basic status, but "operators cannot see
-> what is happening".
-
-| Item | Description | Priority |
-|---|---|---|
-| Audit logging | record login, instance start/stop/delete, permission changes, template edits, and other admin events; persisted to the DB and queryable in the UI | High |
-| Operations Logs page | fill in the existing Logs placeholder tab (currently empty) | Medium |
-| Per-group/user resource quotas | beyond instance count, add group-level CPU / memory / GPU quotas | Medium |
-
-### 📋 Stage 6: Reliability & Backup
+### 🔵 Stage 6: Reliability & Backup
 
 | Item | Description | Priority |
 |---|---|---|
@@ -190,6 +195,7 @@ axis that auto-switches resolution as you zoom.
 | Orphaned-folder cleanup | remove persistent folders that no longer exist in the DB (the existing "Thorough Cleanup" in the UI) | Medium |
 | Graceful shutdown/startup | restore instance state, rebuild routes, re-declare volumes after reboot | Medium |
 | Health self-checks | aggregate health endpoints for API/Traefik/DB for external monitoring (uptime checks) | Low |
+| Per-group/user resource quotas | beyond instance count, add group-level CPU / memory / GPU quotas | Medium |
 
 ### 📋 Stage 7: Identity & Security Hardening
 

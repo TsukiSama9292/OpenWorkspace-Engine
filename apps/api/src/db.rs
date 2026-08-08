@@ -1,4 +1,4 @@
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Insert, Order, PaginatorTrait, QueryFilter, QueryOrder, Set, TryIntoModel};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Insert, Order, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, TryIntoModel};
 use sea_orm::sea_query::{Expr, OnConflict};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -286,6 +286,9 @@ pub mod group {
         pub can_manage_docker: bool,
         pub can_manage_registry: bool,
         pub can_view_monitoring: bool,
+        /// Audit-log viewer gate (observability-logs spec): admin or a group
+        /// flag; Manager system group defaults on.
+        pub can_view_audit_logs: bool,
         /// `None` (NULL) means "unlimited" (the Admin group's ceiling).
         pub max_instances: Option<i32>,
         pub created_at: DateTimeUtc,
@@ -328,6 +331,33 @@ pub mod group_template {
         pub group_id: Uuid,
         #[sea_orm(primary_key)]
         pub template_id: Uuid,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub mod audit_log {
+    use sea_orm::entity::prelude::*;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
+    #[sea_orm(table_name = "audit_logs")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: Uuid,
+        pub created_at: DateTimeUtc,
+        pub actor_user_id: Option<Uuid>,
+        pub actor_name: String,
+        pub action: String,
+        pub target_type: Option<String>,
+        pub target_id: Option<String>,
+        pub target_name: Option<String>,
+        pub outcome: String,
+        pub client_ip: Option<String>,
+        pub detail: Option<Json>,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -777,6 +807,7 @@ pub struct GroupRecord {
     pub can_manage_docker: bool,
     pub can_manage_registry: bool,
     pub can_view_monitoring: bool,
+    pub can_view_audit_logs: bool,
     pub max_instances: Option<i32>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -805,6 +836,7 @@ impl<'a> GroupRepository<'a> {
             can_manage_docker: m.can_manage_docker,
             can_manage_registry: m.can_manage_registry,
             can_view_monitoring: m.can_view_monitoring,
+            can_view_audit_logs: m.can_view_audit_logs,
             max_instances: m.max_instances,
             created_at: m.created_at,
             updated_at: m.updated_at,
@@ -852,6 +884,7 @@ impl<'a> GroupRepository<'a> {
         can_manage_docker: bool,
         can_manage_registry: bool,
         can_view_monitoring: bool,
+        can_view_audit_logs: bool,
         max_instances: i32,
     ) -> Result<Uuid, sea_orm::DbErr> {
         let id = Uuid::new_v4();
@@ -866,6 +899,7 @@ impl<'a> GroupRepository<'a> {
             can_manage_docker: Set(can_manage_docker),
             can_manage_registry: Set(can_manage_registry),
             can_view_monitoring: Set(can_view_monitoring),
+            can_view_audit_logs: Set(can_view_audit_logs),
             max_instances: Set(Some(max_instances)),
             ..Default::default()
         };
@@ -884,6 +918,7 @@ impl<'a> GroupRepository<'a> {
         can_manage_docker: bool,
         can_manage_registry: bool,
         can_view_monitoring: bool,
+        can_view_audit_logs: bool,
         max_instances: Option<i32>,
     ) -> Result<bool, sea_orm::DbErr> {
         let result = group::Entity::update(group::ActiveModel {
@@ -896,6 +931,7 @@ impl<'a> GroupRepository<'a> {
             can_manage_docker: Set(can_manage_docker),
             can_manage_registry: Set(can_manage_registry),
             can_view_monitoring: Set(can_view_monitoring),
+            can_view_audit_logs: Set(can_view_audit_logs),
             max_instances: Set(max_instances),
             ..Default::default()
         })
@@ -1748,6 +1784,7 @@ impl<'a> PolicyRepository<'a> {
                 can_manage_docker: g.can_manage_docker,
                 can_manage_registry: g.can_manage_registry,
                 can_view_monitoring: g.can_view_monitoring,
+                can_view_audit_logs: g.can_view_audit_logs,
             })
             .collect();
 
@@ -1782,5 +1819,175 @@ impl<'a> PolicyRepository<'a> {
             .max()
             .unwrap_or(crate::effective_context::TIER_USER);
         Ok(Some(tier))
+    }
+}
+
+// ── Audit Log Repository ──────────────────────────────────────
+
+/// An audit-log row as read from `audit_logs`, ready for JSON serialization.
+#[derive(Debug, Clone)]
+pub struct AuditLogEntry {
+    pub id: Uuid,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub actor_user_id: Option<Uuid>,
+    pub actor_name: String,
+    pub action: String,
+    pub target_type: Option<String>,
+    pub target_id: Option<String>,
+    pub target_name: Option<String>,
+    pub outcome: String,
+    pub client_ip: Option<String>,
+    pub detail: Option<serde_json::Value>,
+}
+
+/// The keyset cursor for the audit query: the last row's
+/// `(created_at, id)`, so the next page continues strictly after it.
+#[derive(Debug, Clone, Copy)]
+pub struct AuditCursor {
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub id: Uuid,
+}
+
+/// Optional filters for the audit query (AND-combined).
+#[derive(Debug, Clone, Default)]
+pub struct AuditQueryFilters {
+    pub action: Option<String>,
+    pub actor_contains: Option<String>,
+    pub target_contains: Option<String>,
+    pub outcome: Option<String>,
+    pub created_after: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_before: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Persistence for the audit trail (spec Decision 7): batch inserts from the
+/// writer task, keyset-paginated queries for the viewer, and daily pruning.
+/// Follows the `WorkspaceInstanceRepository` style — sea-orm, method-per-query.
+pub struct AuditLogRepository<'a> {
+    pub db: &'a DatabaseConnection,
+}
+
+impl<'a> AuditLogRepository<'a> {
+    pub fn new(db: &'a DatabaseConnection) -> Self {
+        Self { db }
+    }
+
+    fn from_model(m: audit_log::Model) -> AuditLogEntry {
+        AuditLogEntry {
+            id: m.id,
+            created_at: m.created_at,
+            actor_user_id: m.actor_user_id,
+            actor_name: m.actor_name,
+            action: m.action,
+            target_type: m.target_type,
+            target_id: m.target_id,
+            target_name: m.target_name,
+            outcome: m.outcome,
+            client_ip: m.client_ip,
+            detail: m.detail,
+        }
+    }
+
+    /// Batch-insert events in order. The writer batches ~50 events per flush;
+    /// ordering within a batch is preserved by insertion order.
+    pub async fn insert_batch(
+        &self,
+        events: &[crate::audit::AuditEvent],
+    ) -> Result<(), sea_orm::DbErr> {
+        if events.is_empty() {
+            return Ok(());
+        }
+        let rows: Vec<audit_log::ActiveModel> = events
+            .iter()
+            .map(|e| audit_log::ActiveModel {
+                id: Set(Uuid::new_v4()),
+                created_at: Set(e.created_at),
+                actor_user_id: Set(e.actor_user_id),
+                actor_name: Set(e.actor_name.clone()),
+                action: Set(e.action.clone()),
+                target_type: Set(Some(e.target_type.clone())),
+                target_id: Set(e.target_id.clone()),
+                target_name: Set(e.target_name.clone()),
+                outcome: Set(e.outcome.clone()),
+                client_ip: Set(e.client_ip.clone()),
+                detail: Set(e.detail.clone()),
+            })
+            .collect();
+        Insert::many(rows).exec(self.db).await?;
+        Ok(())
+    }
+
+    /// Keyset query, newest first: `ORDER BY created_at DESC, id DESC`, cursor
+    /// `(created_at, id) < ($1, $2)` so equal timestamps within a batch never
+    /// split pages. Returns up to `limit` rows plus the next cursor (the last
+    /// returned row) when more rows remain.
+    pub async fn query(
+        &self,
+        cursor: Option<AuditCursor>,
+        filters: &AuditQueryFilters,
+        limit: u64,
+    ) -> Result<(Vec<AuditLogEntry>, Option<AuditCursor>), sea_orm::DbErr> {
+        let mut stmt = audit_log::Entity::find()
+            .order_by_desc(audit_log::Column::CreatedAt)
+            .order_by_desc(audit_log::Column::Id);
+
+        if let Some(c) = cursor {
+            stmt = stmt.filter(
+                sea_orm::Condition::any()
+                    .add(audit_log::Column::CreatedAt.lt(c.created_at))
+                    .add(
+                        sea_orm::Condition::all()
+                            .add(audit_log::Column::CreatedAt.eq(c.created_at))
+                            .add(audit_log::Column::Id.lt(c.id)),
+                    ),
+            );
+        }
+        if let Some(action) = &filters.action {
+            stmt = stmt.filter(audit_log::Column::Action.eq(action.as_str()));
+        }
+        if let Some(actor) = &filters.actor_contains {
+            stmt = stmt.filter(audit_log::Column::ActorName.contains(actor.as_str()));
+        }
+        if let Some(target) = &filters.target_contains {
+            stmt = stmt.filter(audit_log::Column::TargetName.contains(target.as_str()));
+        }
+        if let Some(outcome) = &filters.outcome {
+            stmt = stmt.filter(audit_log::Column::Outcome.eq(outcome.as_str()));
+        }
+        if let Some(after) = &filters.created_after {
+            stmt = stmt.filter(audit_log::Column::CreatedAt.gt(*after));
+        }
+        if let Some(before) = &filters.created_before {
+            stmt = stmt.filter(audit_log::Column::CreatedAt.lt(*before));
+        }
+
+        // Fetch one extra row to detect whether a next page exists.
+        let models = stmt.limit(limit + 1).all(self.db).await?;
+        let has_more = models.len() > limit as usize;
+        let page: Vec<audit_log::Model> = models.into_iter().take(limit as usize).collect();
+        let entries: Vec<AuditLogEntry> = page.into_iter().map(Self::from_model).collect();
+
+        let next_cursor = if has_more {
+            entries.last().map(|last| AuditCursor {
+                created_at: last.created_at,
+                id: last.id,
+            })
+        } else {
+            None
+        };
+
+        Ok((entries, next_cursor))
+    }
+
+    /// Delete every row created before `created_at_before`; returns the number
+    /// of rows deleted. Runs daily from the health-worker tick.
+    pub async fn prune_older_than(
+        &self,
+        created_at_before: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64, sea_orm::DbErr> {
+        let result = audit_log::Entity::delete_many()
+            .filter(audit_log::Column::CreatedAt.lt(created_at_before))
+            .exec(self.db)
+            .await?;
+        Ok(result.rows_affected)
     }
 }

@@ -7,6 +7,7 @@ use axum::{
 use serde::Deserialize;
 
 use super::AppState;
+use crate::audit::{action, diff_detail, target, AuditEvent};
 use crate::auth::AuthUser;
 use crate::openapi::SettingsEnvelope;
 use crate::system_settings::{SystemSettings, SystemSettingsRepository};
@@ -73,14 +74,32 @@ async fn update_settings(
 
     input.validate()?;
 
+    let repo = SystemSettingsRepository::new(&state.db);
+    let old = repo
+        .get_or_create()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
     let settings = SystemSettings {
         host_instance_limit: input.host_instance_limit,
     };
 
-    let updated = SystemSettingsRepository::new(&state.db)
+    let updated = repo
         .upsert(&settings)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if old.host_instance_limit != updated.host_instance_limit {
+        let changes = [(
+            "host_instance_limit".to_string(),
+            serde_json::json!(old.host_instance_limit),
+            serde_json::json!(updated.host_instance_limit),
+        )];
+        state.audit.emit(
+            AuditEvent::from_auth(&auth, action::SETTINGS_UPDATE, target::SETTINGS)
+                .with_detail(diff_detail(&changes)),
+        );
+    }
 
     Ok(Json(serde_json::json!({ "settings": updated })))
 }

@@ -1,12 +1,15 @@
 #![forbid(unsafe_code)]
 
+use openworkspace_api::audit::{audit_writer, AuditSender, AUDIT_CHANNEL_CAPACITY};
 use openworkspace_api::core::Settings;
 use openworkspace_api::db::{WorkspaceInstanceRepository, UserRepository};
 use openworkspace_api::docker::{DockerClient, DockerService};
-use openworkspace_api::routes::{api_routes, AppState};
+use openworkspace_api::routes::{api_routes, with_audit_middleware, AppState};
 use migration::{Migrator, MigratorTrait};
 use sea_orm::Database;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::signal::unix::{signal, SignalKind};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
@@ -77,12 +80,25 @@ async fn main() {
         .expect("Failed to connect to Docker");
     let docker: Arc<dyn DockerService> = Arc::new(docker_client);
 
+    // ── Audit channel: one writer task, best-effort batching ──
+    let (audit_tx, audit_rx) = tokio::sync::mpsc::channel(AUDIT_CHANNEL_CAPACITY);
+    let audit = AuditSender::new(audit_tx);
+    // The writer exits on this signal rather than on channel closure: the
+    // health worker holds its own `AuditSender` clone for its whole lifetime,
+    // so the channel never closes while the process lives.
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let audit_db = db.clone();
+    let audit_writer_handle = tokio::spawn(async move {
+        audit_writer(audit_rx, audit_db, shutdown_rx).await;
+    });
+
     let state = AppState {
         db,
         docker,
         vnc_cache: vnc_cache.clone(),
         settings: settings.clone(),
         metrics: Arc::new(openworkspace_api::metrics::MetricsStore::new()),
+        audit: audit.clone(),
     };
 
     // ── Spawn health worker ──
@@ -92,8 +108,10 @@ async fn main() {
         let worker_vnc_cache = state.vnc_cache.clone();
         let worker_gateway_ip = state.settings.host_gateway_ip.clone();
         let worker_metrics = state.metrics.clone();
+        let worker_audit = state.audit.clone();
+        let worker_retention_days = state.settings.audit_retention_days;
         tokio::spawn(async move {
-            openworkspace_api::health_worker::run(worker_db, worker_docker, worker_vnc_cache, worker_gateway_ip, worker_metrics).await;
+            openworkspace_api::health_worker::run(worker_db, worker_docker, worker_vnc_cache, worker_gateway_ip, worker_metrics, worker_audit, worker_retention_days).await;
         });
     }
 
@@ -102,7 +120,7 @@ async fn main() {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let app = api_routes()
+    let app = with_audit_middleware(api_routes(), &state)
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
@@ -114,6 +132,30 @@ async fn main() {
         .await
         .expect("Failed to bind listener");
     axum::serve(listener, app.into_make_service())
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .unwrap();
+
+    // Graceful shutdown complete: the app (and its AppState clone of the audit
+    // sender) is dropped, so in-flight requests have finished. Signal the
+    // writer to drain the channel's remainder and flush the tail of the audit
+    // stream to the DB before the process exits.
+    let _ = shutdown_tx.send(true);
+    drop(audit);
+    if tokio::time::timeout(Duration::from_secs(5), audit_writer_handle)
+        .await
+        .is_err()
+    {
+        tracing::warn!("audit writer did not flush within 5s on shutdown");
+    }
+}
+
+/// Wait for SIGTERM or SIGINT, then return so `with_graceful_shutdown` can
+/// drain in-flight requests. This is the API's first signal handler.
+async fn shutdown_signal() {
+    let mut terminate = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+    tokio::select! {
+        _ = terminate.recv() => tracing::info!("SIGTERM received, shutting down gracefully..."),
+        _ = tokio::signal::ctrl_c() => tracing::info!("SIGINT received, shutting down gracefully..."),
+    }
 }

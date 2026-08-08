@@ -8,7 +8,8 @@ use axum::{
 use serde::Deserialize;
 
 use super::super::AppState;
-use crate::auth::{clear_cookie, AuthUser};
+use crate::audit::{action, target, AuditEvent};
+use crate::auth::{AuthUser, clear_cookie};
 use crate::db::UserRepository;
 use crate::openapi::{ContextEnvelope, ValidateEnvelope};
 
@@ -64,7 +65,14 @@ pub(crate) async fn me(
     Ok(Json(serde_json::json!({ "context": context })))
 }
 
-async fn logout() -> impl IntoResponse {
+async fn logout(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> impl IntoResponse {
+    state.audit.emit(
+        AuditEvent::from_auth(&auth, action::LOGOUT, target::USER)
+            .with_target(Some(auth.user_id.to_string()), Some(auth.username.clone())),
+    );
     let mut headers = axum::http::HeaderMap::new();
     clear_cookie(&mut headers);
     (headers, Json(serde_json::json!({ "status": "ok" })))
@@ -111,6 +119,11 @@ async fn change_password(
         )
     })?;
     if !valid {
+        state.audit.emit(
+            AuditEvent::from_auth(&auth, action::USER_PASSWORD_CHANGE, target::USER)
+                .with_target(Some(auth.user_id.to_string()), Some(auth.username.clone()))
+                .with_outcome(crate::audit::outcome::FAILURE),
+        );
         return Err((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": "Current password is incorrect" })),
@@ -132,6 +145,11 @@ async fn change_password(
                 Json(serde_json::json!({ "error": "Internal server error" })),
             )
         })?;
+
+    state.audit.emit(
+        AuditEvent::from_auth(&auth, action::USER_PASSWORD_CHANGE, target::USER)
+            .with_target(Some(auth.user_id.to_string()), Some(auth.username.clone())),
+    );
 
     Ok(Json(serde_json::json!({ "status": "ok" })))
 }

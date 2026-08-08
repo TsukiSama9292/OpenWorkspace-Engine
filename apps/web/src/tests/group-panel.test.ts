@@ -26,6 +26,7 @@ function context(overrides: Partial<EffectiveContext> = {}): EffectiveContext {
     can_manage_docker: false,
     can_manage_registry: false,
     can_view_monitoring: false,
+    can_view_audit_logs: false,
     effective_max_instances: 4,
     allowed_template_ids: [],
     group_ids: [],
@@ -76,6 +77,7 @@ const group: Group = {
   can_manage_docker: true,
   can_manage_registry: true,
   can_view_monitoring: true,
+  can_view_audit_logs: true,
   max_instances: 2,
   template_ids: ['t1']
 };
@@ -163,6 +165,7 @@ describe('GroupPanel', () => {
         can_manage_docker: false,
         can_manage_registry: true,
         can_view_monitoring: false,
+        can_view_audit_logs: false,
         max_instances: 5,
         template_ids: ['t1', 't2']
       });

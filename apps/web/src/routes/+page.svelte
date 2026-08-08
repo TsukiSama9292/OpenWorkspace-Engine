@@ -14,6 +14,7 @@
     canManageUsers,
     canManageGroupInstances,
     canViewMonitoring,
+    canViewAuditLogs,
     effectiveMaxInstances
   } from '$lib/stores/auth';
   import { mayControlInstance, mayLaunchTemplate } from '$lib/permissions';
@@ -25,6 +26,8 @@
   import UserManagementPanel from '$lib/components/users/UserManagementPanel.svelte';
   import OrphanedVolumesPanel from '$lib/components/volumes/OrphanedVolumesPanel.svelte';
   import MonitorPanel from '$lib/components/monitor/MonitorPanel.svelte';
+  import LogsPanel from '$lib/components/logs/LogsPanel.svelte';
+  import ContainerLogPanel from '$lib/components/instances/ContainerLogPanel.svelte';
   import type { Template, Instance, PreflightRejection } from '$lib/types';
 
   let sidebarOpen = $state(false);
@@ -36,6 +39,7 @@
   let instances = $state<Instance[]>([]);
   let loading = $state(true);
   let rejectionNotice = $state<{ error: string; rejection: PreflightRejection } | null>(null);
+  let logsInstance = $state<Instance | null>(null);
 
   let launchModal = $state<{ open: boolean; config: Template | null }>({ open: false, config: null });
   let launchTarget = $state<'current' | 'tab'>('current');
@@ -384,7 +388,9 @@
             </svg>
             {#if sidebarOpen}<span class="nav-text">Settings</span>{/if}
           </button>
+        {/if}
 
+        {#if $canViewAuditLogs}
           <button
             class="nav-item"
             class:active={activeTab === 'logs'}
@@ -393,10 +399,7 @@
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /><path d="M8 13h8" /><path d="M8 17h8" /><path d="M8 9h2" />
             </svg>
-            {#if sidebarOpen}
-              <span class="nav-text">Logs</span>
-              <span class="nav-badge">TODO</span>
-            {/if}
+            {#if sidebarOpen}<span class="nav-text">Logs</span>{/if}
           </button>
         {/if}
       </div>
@@ -498,6 +501,10 @@
     </div>
   {/if}
 
+  {#if logsInstance}
+    <ContainerLogPanel instance={logsInstance} onclose={() => logsInstance = null} />
+  {/if}
+
   <RejectionNotice
     error={rejectionNotice?.error ?? ''}
     rejection={rejectionNotice?.rejection ?? null}
@@ -549,6 +556,7 @@
                       {:else}
                         <button class="launch-btn resume" onclick={() => onAction(inst, 'start')}>Start</button>
                       {/if}
+                      <button class="launch-btn logs" onclick={() => logsInstance = inst}>Logs</button>
                       <button class="launch-btn remove" onclick={() => onRemove(inst)}>Remove</button>
                     </div>
                   {/if}
@@ -654,6 +662,7 @@
                           {:else}
                             <button class="launch-btn resume sm" onclick={() => onAction(inst, 'start')}>Start</button>
                           {/if}
+                          <button class="launch-btn logs sm" onclick={() => logsInstance = inst}>Logs</button>
                           <button class="launch-btn remove sm" onclick={() => onRemove(inst)}>Remove</button>
                         </div>
                       {:else}
@@ -693,12 +702,8 @@
     {:else if activeTab === 'monitor' && $canViewMonitoring}
       <MonitorPanel ctx={$auth} />
 
-    {:else if activeTab === 'logs' && $isAdmin}
-      <section class="ws-section">
-        <h2 class="section-title">Logs</h2>
-        <p class="section-desc">Server logs.</p>
-        <p class="empty-text">Not implemented yet. (待辦)</p>
-      </section>
+    {:else if activeTab === 'logs' && $canViewAuditLogs}
+      <LogsPanel ctx={$auth} />
     {/if}
   </main>
 </div>
@@ -824,19 +829,6 @@
   .nav-text {
     font-size: 0.85rem;
     font-weight: 500;
-    white-space: nowrap;
-  }
-
-  .nav-badge {
-    font-size: 0.62rem;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    color: #a78bfa;
-    background: rgba(139, 92, 246, 0.12);
-    border: 1px solid rgba(139, 92, 246, 0.25);
-    border-radius: 4px;
-    padding: 1px 5px;
-    margin-left: auto;
     white-space: nowrap;
   }
 
@@ -1281,6 +1273,7 @@
   :global(.launch-btn.pause:hover) { border-color: #eab308; color: #facc15; }
   :global(.launch-btn.resume:hover) { border-color: #22c55e; color: #4ade80; }
   :global(.launch-btn.stop:hover) { border-color: #f97316; color: #fb923c; }
+  :global(.launch-btn.logs:hover) { border-color: #818cf8; color: #a5b4fc; }
   :global(.launch-btn.remove:hover) { border-color: #ef4444; color: #f87171; }
   :global(.launch-btn.edit:hover) { border-color: #22c55e; color: #4ade80; }
   :global(.launch-btn.sm) { font-size: 0.65rem; padding: 0.3rem 0.55rem; }

@@ -4,6 +4,32 @@ Chronological, user-visible changes. Append, don't rewrite history.
 
 ## [Unreleased]
 
+### Audit trail (Logs page) and on-demand instance logs
+
+Observability & Logs (`.scratch/observability-logs/`). A queryable audit trail
+of administrative and security events, plus an on-demand container-log viewer:
+
+- **Audit trail**: every meaningful action — sign-ins and failed sign-ins,
+  session lifecycle (create / start / stop / pause / resume / delete, including
+  auto-sleep), template / group / user edits, registry and settings changes,
+  and denied-access attempts by signed-in users — is recorded with the actor,
+  action, target, outcome, caller IP, and time. Entries are kept 90 days and
+  pruned automatically.
+- **Logs page** (new): a new page in the UI for groups granted the new
+  `can_view_audit_logs` flag (Admin and Manager on by default, User off). Filter
+  by event type, actor, target, outcome, or date range; edit events expand to
+  show exactly which fields changed and their before/after values, with
+  sensitive values (passwords, secrets, tokens, keys, credentials) always shown
+  as `[REDACTED]`.
+- **On-demand instance logs**: every session card now has a Logs button (owner,
+  admins, and group managers entitled to control the session) that opens the
+  session's console output — last 200 lines by default, with an option to
+  follow new output live. Stopped or paused sessions show the tail plus a
+  clear "session ended" reason, so a dead session stays debuggable.
+- **Log bounds**: instance container logs are capped (~15 MB per session),
+  and control-plane logs are rotated by the compose stack, so log files cannot
+  grow without limit.
+
 ### Instance containers now restart with `unless-stopped`
 
 Instance (and raw admin-panel) containers are created with the `unless-stopped`

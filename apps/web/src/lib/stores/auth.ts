@@ -8,7 +8,8 @@ type ContextFlag =
   | 'can_manage_group_instances'
   | 'can_manage_docker'
   | 'can_manage_registry'
-  | 'can_view_monitoring';
+  | 'can_view_monitoring'
+  | 'can_view_audit_logs';
 
 function adminOr(context: EffectiveContext | null, flag: ContextFlag): boolean {
   if (!context) return false;
@@ -54,5 +55,6 @@ export const canManageGroupInstances = derived(auth, ($auth) => adminOr($auth, '
 export const canManageDocker = derived(auth, ($auth) => adminOr($auth, 'can_manage_docker'));
 export const canManageRegistry = derived(auth, ($auth) => adminOr($auth, 'can_manage_registry'));
 export const canViewMonitoring = derived(auth, ($auth) => adminOr($auth, 'can_view_monitoring'));
+export const canViewAuditLogs = derived(auth, ($auth) => adminOr($auth, 'can_view_audit_logs'));
 export const effectiveMaxInstances = derived(auth, ($auth) => $auth?.effective_max_instances ?? 0);
 export const allowedTemplateIds = derived(auth, ($auth) => $auth?.allowed_template_ids ?? []);

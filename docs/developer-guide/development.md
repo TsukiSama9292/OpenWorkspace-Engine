@@ -192,7 +192,7 @@ pnpm run dev:nosudo        # pre-condition: the dev stack must be running
 pnpm run security:api      # regenerate spec → provision fuzz-user → Pass 1 (admin) → Pass 2 (fuzz-user)
 ```
 
-Fuzzes the 17 safe API endpoints against the running dev stack with Schemathesis in two passes (design in `.scratch/archive/security-fuzzing/spec.md`):
+Fuzzes the 20 security-fuzzable API endpoints against the running dev stack with Schemathesis in two passes (design in `.scratch/archive/security-fuzzing/spec.md`):
 
 - **Pass 1 (admin session)** — asserts schema-valid 200s (or declared 4xx) and never a 5xx under malformed/extreme input.
 - **Pass 2 (fuzz-user session)** — a self-provisioned low-privilege user; the custom `admin_gated_boundary` check fails any `admin-gated` operation returning 2xx (the RBAC boundary; 403/404 pass).
@@ -201,7 +201,7 @@ Mechanics:
 
 - Runs via the `ow-schemathesis` Docker image (built from `apps/api/scripts/schemathesis.Dockerfile`; the official `schemathesis:stable` bundles a broken `tracecov` plugin that crashes `run`) — no host Python / pipx.
 - The API is fuzzed directly at `http://localhost:3000` (the proxy's API router can't reach the health path).
-- The spec is regenerated from the running code each run (`cargo run --bin export_openapi`), asserted to cover exactly 17 paths, and the seed is fixed (default `20260101`, env-overridable) so failures are reproducible.
+- The spec is regenerated from the running code each run (`cargo run --bin export_openapi`), asserted to cover exactly 20 paths, and the seed is fixed (default `20260101`, env-overridable) so failures are reproducible.
 - Runtime hardening already landed from this work: the login request documents a malformed-input response, and Schemathesis's unexpected-method probing is disabled (`[phases.coverage] unexpected-methods = []` in `schemathesis.toml`) so the exported spec is the only fuzz surface.
 
 ## Zero-Warning Policy

@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-//! Build-time export of the OpenAPI spec for the 17 safe endpoints
+//! Build-time export of the OpenAPI spec for the 20 security-fuzzable endpoints
 //! (security-fuzzing spec, `.scratch/security-fuzzing/`). Writes pretty JSON
 //! to `security/openapi.json` (default) without starting the server — the spec
 //! is never served at runtime. The committed artifact is guarded by the

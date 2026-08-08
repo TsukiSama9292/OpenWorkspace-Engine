@@ -2015,3 +2015,162 @@ async fn test_runsc_dns_rewrite_in_instance() {
 
     scenario.expect("the OW_DNS resolv.conf rewrite should restore resolution under runsc");
 }
+
+#[tokio::test]
+async fn test_container_logs_streams_stdout_and_stderr() {
+    use openworkspace_api::docker::ContainerLogsError;
+
+    let client = setup().await;
+    let name = format!("ow_test_docker_logs_{}", std::process::id());
+
+    let config = ContainerConfig {
+        image: "busybox:1".to_string(),
+        cores: 0,
+        memory: 0,
+        gpu_count: 0,
+        remote_type: RemoteType::KasmVnc,
+        run_config: serde_json::json!({}),
+        exec_config: serde_json::json!({}),
+        volume_mappings: serde_json::json!({}),
+        persistent_volume_name: None,
+        command: Some(vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "echo ow-logs-stdout; echo ow-logs-stderr >&2; sleep 3600".to_string(),
+        ]),
+        runtime: None,
+        network_bandwidth_up_mbps: 0,
+        network_bandwidth_down_mbps: 0,
+        host_port: None,
+        host_gateway_ip: None,
+        docker_in_instance: false,
+        network_name: None,
+        instance_dns: None,
+    };
+
+    let id = client
+        .create_container_from_template(&name, 1, &config, "test_password", "")
+        .await
+        .unwrap();
+
+    // Give the shell time to emit both lines before we read.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    let stream = client
+        .container_logs(&id, 200, false)
+        .await
+        .expect("logs stream should start");
+    let items: Vec<_> = stream
+        .try_collect()
+        .await
+        .expect("log items should decode");
+    let text: String = items.iter().map(|i| format!("{}", i)).collect();
+    assert!(
+        text.contains("ow-logs-stdout"),
+        "stdout line missing from logs: {:?}",
+        text
+    );
+    assert!(
+        text.contains("ow-logs-stderr"),
+        "stderr line missing from logs: {:?}",
+        text
+    );
+
+    let _ = client.remove_container_by_id(&id).await;
+
+    // A removed container must be reported distinctly, not as a generic error.
+    let gone = client.container_logs(&id, 200, false).await;
+    assert!(
+        matches!(gone, Err(ContainerLogsError::ContainerNotFound(_))),
+        "expected ContainerNotFound, got {:?}",
+        gone.as_ref().err()
+    );
+}
+
+#[tokio::test]
+async fn test_container_logs_tail_zero_no_follow() {
+    let client = setup().await;
+    let name = format!("ow_test_docker_logs_tail0_{}", std::process::id());
+
+    let config = ContainerConfig {
+        image: "busybox:1".to_string(),
+        cores: 0,
+        memory: 0,
+        gpu_count: 0,
+        remote_type: RemoteType::KasmVnc,
+        run_config: serde_json::json!({}),
+        exec_config: serde_json::json!({}),
+        volume_mappings: serde_json::json!({}),
+        persistent_volume_name: None,
+        command: Some(vec!["sleep".to_string(), "3600".to_string()]),
+        runtime: None,
+        network_bandwidth_up_mbps: 0,
+        network_bandwidth_down_mbps: 0,
+        host_port: None,
+        host_gateway_ip: None,
+        docker_in_instance: false,
+        network_name: None,
+        instance_dns: None,
+    };
+
+    let id = client
+        .create_container_from_template(&name, 1, &config, "test_password", "")
+        .await
+        .unwrap();
+
+    // tail = 0 with a silent container: the stream must close cleanly (no
+    // history, and follow=false means docker closes once caught up).
+    let stream = client
+        .container_logs(&id, 0, false)
+        .await
+        .expect("logs stream should start");
+    let items: Vec<_> = stream.try_collect().await.expect("log items should decode");
+    assert!(items.is_empty(), "expected no log items, got {:?}", items.len());
+
+    let _ = client.remove_container_by_id(&id).await;
+}
+
+#[tokio::test]
+async fn test_instance_container_carries_log_config() {
+    let client = setup().await;
+    let name = format!("ow_test_docker_logconfig_{}", std::process::id());
+
+    let config = ContainerConfig {
+        image: "busybox:1".to_string(),
+        cores: 0,
+        memory: 0,
+        gpu_count: 0,
+        remote_type: RemoteType::KasmVnc,
+        run_config: serde_json::json!({}),
+        exec_config: serde_json::json!({}),
+        volume_mappings: serde_json::json!({}),
+        persistent_volume_name: None,
+        command: Some(vec!["sleep".to_string(), "3600".to_string()]),
+        runtime: None,
+        network_bandwidth_up_mbps: 0,
+        network_bandwidth_down_mbps: 0,
+        host_port: None,
+        host_gateway_ip: None,
+        docker_in_instance: false,
+        network_name: None,
+        instance_dns: None,
+    };
+
+    let id = client
+        .create_container_from_template(&name, 1, &config, "test_password", "")
+        .await
+        .unwrap();
+
+    let docker = bollard::Docker::connect_with_local_defaults().unwrap();
+    let inspect = docker.inspect_container(&id, None).await.unwrap();
+    let _ = client.remove_container_by_id(&id).await;
+
+    let log_config = inspect
+        .host_config
+        .and_then(|hc| hc.log_config)
+        .expect("created container should carry a log config");
+    assert_eq!(log_config.typ.as_deref(), Some("json-file"));
+    let opts = log_config.config.expect("log config map");
+    assert_eq!(opts.get("max-size").map(String::as_str), Some("5m"));
+    assert_eq!(opts.get("max-file").map(String::as_str), Some("3"));
+}

@@ -101,6 +101,13 @@ services:
     depends_on:
       postgresql:
         condition: service_healthy
+    # Control-plane log rotation (observability-logs spec): bounded json-file
+    # so the API's own logs never grow unbounded.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 networks:
   ow-network:

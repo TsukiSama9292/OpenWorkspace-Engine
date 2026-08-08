@@ -5,7 +5,8 @@ use chrono::Utc;
 use sea_orm::DatabaseConnection;
 use tokio::time::MissedTickBehavior;
 
-use crate::db::{WorkspaceInstanceRepository, WorkspaceTemplateRepository};
+use crate::audit::{action, target, due_for_prune, retention_cutoff, AuditEvent, AuditSender};
+use crate::db::{AuditLogRepository, WorkspaceInstanceRepository, WorkspaceTemplateRepository};
 use crate::docker::{DockerService, RemoteType};
 use crate::metrics::MetricsStore;
 use crate::monitor::{MetricsSampler, SAMPLE_EVERY_TICKS};
@@ -19,6 +20,8 @@ pub async fn run(
     vnc_cache: VncCache,
     host_gateway_ip: String,
     metrics: Arc<MetricsStore>,
+    audit: AuditSender,
+    audit_retention_days: i64,
 ) {
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
@@ -31,6 +34,7 @@ pub async fn run(
 
     let mut sampler = MetricsSampler::new();
     let mut tick: u32 = 0;
+    let mut last_prune_at: Option<chrono::DateTime<Utc>> = None;
 
     loop {
         interval.tick().await;
@@ -55,7 +59,7 @@ pub async fn run(
             Err(e) => tracing::error!("Health worker error: {}", e),
         }
 
-        match check_auto_sleep(&instance_repo, &template_repo, &*docker, &vnc_cache, Utc::now()).await {
+        match check_auto_sleep(&instance_repo, &template_repo, &*docker, &vnc_cache, Some(&audit), Utc::now()).await {
             Ok(count) => {
                 if count > 0 {
                     tracing::debug!("Auto-sleep worker acted on {} instances", count);
@@ -64,7 +68,7 @@ pub async fn run(
             Err(e) => tracing::error!("Auto-sleep worker error: {}", e),
         }
 
-        match check_keep_time(&instance_repo, &template_repo, &*docker, &vnc_cache, Utc::now()).await {
+        match check_keep_time(&instance_repo, &template_repo, &*docker, &vnc_cache, Some(&audit), Utc::now()).await {
             Ok(count) => {
                 if count > 0 {
                     tracing::debug!("Keep-time worker acted on {} instances", count);
@@ -72,6 +76,34 @@ pub async fn run(
             }
             Err(e) => tracing::error!("Keep-time worker error: {}", e),
         }
+
+        // Daily audit-log prune (observability-logs spec Decision 7): runs at
+        // most once per 24 h behind the pure `due_for_prune` gate. Best-effort
+        // like every health-worker task.
+        let now = Utc::now();
+        match maybe_prune_audit(&db, last_prune_at, now, audit_retention_days).await {
+            Ok(updated) => last_prune_at = updated,
+            Err(e) => tracing::error!("{}", e),
+        }
+    }
+}
+
+/// Run the audit prune when due (the pure `due_for_prune` gate). Returns the
+/// new `last_prune_at` — `now` after a successful run, unchanged when not due.
+/// Kept small and dependency-free so the wiring is testable.
+pub async fn maybe_prune_audit(
+    db: &DatabaseConnection,
+    last_prune_at: Option<chrono::DateTime<Utc>>,
+    now: chrono::DateTime<Utc>,
+    retention_days: i64,
+) -> Result<Option<chrono::DateTime<Utc>>, String> {
+    if !due_for_prune(last_prune_at, now) {
+        return Ok(last_prune_at);
+    }
+    let cutoff = retention_cutoff(now, retention_days);
+    match AuditLogRepository::new(db).prune_older_than(cutoff).await {
+        Ok(_) => Ok(Some(now)),
+        Err(e) => Err(format!("audit prune failed: {}", e)),
     }
 }
 
@@ -80,6 +112,7 @@ pub async fn check_auto_sleep(
     template_repo: &WorkspaceTemplateRepository<'_>,
     docker: &dyn DockerService,
     vnc_cache: &VncCache,
+    audit: Option<&AuditSender>,
     now: chrono::DateTime<Utc>,
 ) -> Result<usize, String> {
     let instances = instance_repo
@@ -129,7 +162,19 @@ pub async fn check_auto_sleep(
         };
 
         match result {
-            Ok(()) => triggered += 1,
+            Ok(()) => {
+                triggered += 1;
+                if let Some(audit) = audit {
+                    audit.emit(
+                        AuditEvent::system(action::INSTANCE_AUTO_SLEEP, target::INSTANCE)
+                            .with_target(Some(instance.id.to_string()), Some(instance.name.clone()))
+                            .with_detail(serde_json::json!({
+                                "reason": "auto-sleep",
+                                "action": template.timeout_action,
+                            })),
+                    );
+                }
+            }
             Err(e) => tracing::error!("Auto-sleep failed for instance '{}': {}", instance.name, e),
         }
     }
@@ -142,6 +187,7 @@ pub async fn check_keep_time(
     template_repo: &WorkspaceTemplateRepository<'_>,
     docker: &dyn DockerService,
     vnc_cache: &VncCache,
+    audit: Option<&AuditSender>,
     now: chrono::DateTime<Utc>,
 ) -> Result<usize, String> {
     let instances = instance_repo
@@ -246,7 +292,19 @@ pub async fn check_keep_time(
         };
 
         match result {
-            Ok(()) => triggered += 1,
+            Ok(()) => {
+                triggered += 1;
+                if let Some(audit) = audit {
+                    audit.emit(
+                        AuditEvent::system(action::INSTANCE_AUTO_SLEEP, target::INSTANCE)
+                            .with_target(Some(instance.id.to_string()), Some(instance.name.clone()))
+                            .with_detail(serde_json::json!({
+                                "reason": "keep-time",
+                                "action": template.keep_time_action,
+                            })),
+                    );
+                }
+            }
             Err(e) => tracing::error!("Keep-time failed for instance '{}': {}", instance.name, e),
         }
     }

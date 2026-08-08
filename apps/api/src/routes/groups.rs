@@ -8,6 +8,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use super::AppState;
+use crate::audit::{action, diff_detail, target, AuditEvent};
 use crate::auth::AuthUser;
 use crate::db::{validate_template_ids, GroupRecord, GroupRepository};
 use crate::openapi::GroupListEnvelope;
@@ -44,6 +45,8 @@ struct GroupInput {
     can_manage_registry: bool,
     #[serde(default)]
     can_view_monitoring: bool,
+    #[serde(default)]
+    can_view_audit_logs: bool,
     #[serde(default = "default_max_instances")]
     max_instances: i32,
     #[serde(default)]
@@ -63,6 +66,7 @@ fn group_to_json(group: &GroupRecord, template_ids: &[Uuid]) -> serde_json::Valu
         "can_manage_docker": group.can_manage_docker,
         "can_manage_registry": group.can_manage_registry,
         "can_view_monitoring": group.can_view_monitoring,
+        "can_view_audit_logs": group.can_view_audit_logs,
         "max_instances": group.max_instances,
         "template_ids": template_ids,
     })
@@ -176,6 +180,7 @@ async fn create_group(
             input.can_manage_docker,
             input.can_manage_registry,
             input.can_view_monitoring,
+            input.can_view_audit_logs,
             input.max_instances,
         )
         .await
@@ -190,6 +195,11 @@ async fn create_group(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    state.audit.emit(
+        AuditEvent::from_auth(&auth, action::GROUP_CREATE, target::GROUP)
+            .with_target(Some(group.id.to_string()), Some(group.name.clone())),
+    );
 
     Ok(Json(serde_json::json!({
         "group": group_to_json(&group, &template_ids)
@@ -233,10 +243,10 @@ async fn update_group(
     // System-group permission flags are fixed: Admin always all-on, User always
     // all-off. `max_instances` stays editable for all three. Custom groups
     // (kind NULL) take the payload verbatim.
-    let (can_create_template, can_manage_users, can_manage_group_instances, can_manage_docker, can_manage_registry, can_view_monitoring) =
+    let (can_create_template, can_manage_users, can_manage_group_instances, can_manage_docker, can_manage_registry, can_view_monitoring, can_view_audit_logs) =
         match existing.kind.as_deref() {
-            Some("admin") => (true, true, true, true, true, true),
-            Some("user") => (false, false, false, false, false, false),
+            Some("admin") => (true, true, true, true, true, true, true),
+            Some("user") => (false, false, false, false, false, false, false),
             _ => (
                 input.can_create_template,
                 input.can_manage_users,
@@ -244,6 +254,7 @@ async fn update_group(
                 input.can_manage_docker,
                 input.can_manage_registry,
                 input.can_view_monitoring,
+                input.can_view_audit_logs,
             ),
         };
 
@@ -258,6 +269,7 @@ async fn update_group(
             can_manage_docker,
             can_manage_registry,
             can_view_monitoring,
+            can_view_audit_logs,
             Some(input.max_instances),
         )
         .await
@@ -266,6 +278,11 @@ async fn update_group(
     if !updated {
         return Err(StatusCode::NOT_FOUND);
     }
+
+    let old_template_ids = repo
+        .list_template_ids(id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     repo.set_template_ids(id, &template_ids)
         .await
@@ -276,6 +293,55 @@ async fn update_group(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
+
+    // Redacted before/after diff of the edited policy fields.
+    let mut changes: Vec<(String, serde_json::Value, serde_json::Value)> = Vec::new();
+    if existing.name != group.name {
+        changes.push(("name".to_string(), serde_json::json!(&existing.name), serde_json::json!(&group.name)));
+    }
+    if existing.description != group.description {
+        changes.push(("description".to_string(), serde_json::json!(&existing.description), serde_json::json!(&group.description)));
+    }
+    if existing.can_create_template != group.can_create_template {
+        changes.push(("can_create_template".to_string(), serde_json::json!(existing.can_create_template), serde_json::json!(group.can_create_template)));
+    }
+    if existing.can_manage_users != group.can_manage_users {
+        changes.push(("can_manage_users".to_string(), serde_json::json!(existing.can_manage_users), serde_json::json!(group.can_manage_users)));
+    }
+    if existing.can_manage_group_instances != group.can_manage_group_instances {
+        changes.push(("can_manage_group_instances".to_string(), serde_json::json!(existing.can_manage_group_instances), serde_json::json!(group.can_manage_group_instances)));
+    }
+    if existing.can_manage_docker != group.can_manage_docker {
+        changes.push(("can_manage_docker".to_string(), serde_json::json!(existing.can_manage_docker), serde_json::json!(group.can_manage_docker)));
+    }
+    if existing.can_manage_registry != group.can_manage_registry {
+        changes.push(("can_manage_registry".to_string(), serde_json::json!(existing.can_manage_registry), serde_json::json!(group.can_manage_registry)));
+    }
+    if existing.can_view_monitoring != group.can_view_monitoring {
+        changes.push(("can_view_monitoring".to_string(), serde_json::json!(existing.can_view_monitoring), serde_json::json!(group.can_view_monitoring)));
+    }
+    if existing.can_view_audit_logs != group.can_view_audit_logs {
+        changes.push(("can_view_audit_logs".to_string(), serde_json::json!(existing.can_view_audit_logs), serde_json::json!(group.can_view_audit_logs)));
+    }
+    if existing.max_instances != group.max_instances {
+        changes.push(("max_instances".to_string(), serde_json::json!(existing.max_instances), serde_json::json!(group.max_instances)));
+    }
+    // The template whitelist is the core permission surface (template
+    // authorization is group-only), so a change to it must appear in the diff
+    // even though it lives in `group_templates`, not on the group row.
+    if old_template_ids != template_ids {
+        changes.push((
+            "template_ids".to_string(),
+            serde_json::json!(old_template_ids),
+            serde_json::json!(template_ids),
+        ));
+    }
+
+    state.audit.emit(
+        AuditEvent::from_auth(&auth, action::GROUP_UPDATE, target::GROUP)
+            .with_target(Some(group.id.to_string()), Some(group.name.clone()))
+            .with_detail(diff_detail(&changes)),
+    );
 
     Ok(Json(serde_json::json!({
         "group": group_to_json(&group, &template_ids)
@@ -311,6 +377,10 @@ async fn delete_group(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if deleted {
+        state.audit.emit(
+            AuditEvent::from_auth(&auth, action::GROUP_DELETE, target::GROUP)
+                .with_target(Some(existing.id.to_string()), Some(existing.name.clone())),
+        );
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(StatusCode::NOT_FOUND)

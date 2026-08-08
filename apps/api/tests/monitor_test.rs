@@ -89,6 +89,7 @@ impl MonitorContext {
             instance_net_base: "10.200.0.0/16".to_string(),
             instance_dns: "8.8.8.8,1.1.1.1".to_string(),
             port_lock_dir: String::new(),
+            audit_retention_days: 90,
         };
 
         openworkspace_api::db::UserRepository::new(&db)
@@ -100,12 +101,23 @@ impl MonitorContext {
         setup_mock(&mut mock_docker);
 
         let metrics = Arc::new(MetricsStore::new());
+
+        let (audit_tx, audit_rx) =
+            tokio::sync::mpsc::channel(openworkspace_api::audit::AUDIT_CHANNEL_CAPACITY);
+        let audit_db = db.clone();
+        let (_audit_shutdown_tx, audit_shutdown_rx) =
+            tokio::sync::watch::channel(false);
+        tokio::spawn(async move {
+            openworkspace_api::audit::audit_writer(audit_rx, audit_db, audit_shutdown_rx).await;
+        });
+
         let state = AppState {
             db: db.clone(),
             docker: Arc::new(mock_docker),
             vnc_cache: VncCache::new(),
             settings,
             metrics: Arc::clone(&metrics),
+            audit: openworkspace_api::audit::AuditSender::new(audit_tx),
         };
 
         let cors = tower_http::cors::CorsLayer::new()

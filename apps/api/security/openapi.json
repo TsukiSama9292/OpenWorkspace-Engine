@@ -1,6 +1,118 @@
 {
   "components": {
     "schemas": {
+      "AuditAction": {
+        "description": "The stable audit action vocabulary (spec Decision 3): every value the API\nmay emit, enumerated so consumers and fuzzers can validate against it.",
+        "enum": [
+          "auth.login",
+          "auth.logout",
+          "auth.login_failure",
+          "auth.forbidden",
+          "instance.create",
+          "instance.start",
+          "instance.stop",
+          "instance.delete",
+          "instance.restart",
+          "instance.auto_sleep",
+          "instance.pause",
+          "instance.unpause",
+          "template.create",
+          "template.update",
+          "template.delete",
+          "group.create",
+          "group.update",
+          "group.delete",
+          "group.membership_change",
+          "user.create",
+          "user.update",
+          "user.delete",
+          "user.password_change",
+          "settings.update",
+          "registry.update"
+        ],
+        "type": "string"
+      },
+      "AuditEntry": {
+        "description": "One audit-log entry as returned by the query endpoint.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/AuditAction"
+          },
+          "actor_name": {
+            "type": "string"
+          },
+          "actor_user_id": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "client_ip": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "detail": {},
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "target_id": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target_type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "created_at",
+          "actor_name",
+          "action",
+          "target_type",
+          "outcome"
+        ],
+        "type": "object"
+      },
+      "AuditLogEnvelope": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/AuditEntry"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "type": "object"
+      },
       "ContextEnvelope": {
         "properties": {
           "context": {
@@ -82,6 +194,10 @@
           "can_manage_users": {
             "type": "boolean"
           },
+          "can_view_audit_logs": {
+            "description": "Audit-log viewer gate: the Logs tab / audit query endpoint (admin or a\ngroup flag; Manager system group defaults on). Audit data is never\nleaked to tenants without the flag (spec Decision 2).",
+            "type": "boolean"
+          },
           "can_view_monitoring": {
             "description": "Monitor-dashboard gate: seeing the Monitor tab / snapshot endpoint\n(admin or a group flag; Manager system group defaults on).",
             "type": "boolean"
@@ -134,6 +250,7 @@
           "can_manage_docker",
           "can_manage_registry",
           "can_view_monitoring",
+          "can_view_audit_logs",
           "effective_max_instances",
           "allowed_template_ids",
           "group_ids"
@@ -169,6 +286,9 @@
             "type": "boolean"
           },
           "can_manage_users": {
+            "type": "boolean"
+          },
+          "can_view_audit_logs": {
             "type": "boolean"
           },
           "can_view_monitoring": {
@@ -217,6 +337,7 @@
           "can_manage_docker",
           "can_manage_registry",
           "can_view_monitoring",
+          "can_view_audit_logs",
           "template_ids"
         ],
         "type": "object"
@@ -773,7 +894,7 @@
     }
   },
   "info": {
-    "description": "OpenAPI spec for the 17 security-fuzzable endpoints plus the admin-gated Monitor snapshot (see .scratch/security-fuzzing, .scratch/monitor-dashboard). Admin-gated operations are tagged `admin-gated` for the low-privilege RBAC-boundary pass. The spec is export-only and never served.",
+    "description": "OpenAPI spec for the 20 security-fuzzable endpoints (see .scratch/security-fuzzing, .scratch/monitor-dashboard). Admin-gated operations are tagged `admin-gated` for the low-privilege RBAC-boundary pass. The spec is export-only and never served.",
     "license": {
       "name": ""
     },
@@ -801,6 +922,35 @@
           },
           "403": {
             "description": "requires admin"
+          },
+          "500": {
+            "description": "internal server error"
+          }
+        },
+        "tags": [
+          "admin-gated"
+        ]
+      }
+    },
+    "/api/audit": {
+      "get": {
+        "operationId": "query_audit",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditLogEnvelope"
+                }
+              }
+            },
+            "description": "audit entries (newest first) with a next-page cursor when more rows remain"
+          },
+          "401": {
+            "description": "missing or invalid ow_token"
+          },
+          "403": {
+            "description": "requires can_view_audit_logs or admin"
           },
           "500": {
             "description": "internal server error"
@@ -1033,6 +1183,64 @@
         },
         "tags": [
           "instances"
+        ]
+      }
+    },
+    "/api/instances/{id}/logs": {
+      "get": {
+        "description": "Authorization is the `mayControlInstance` scope (owner / admin /\ngroup-instance holder on a lower-tier same-group target). All pre-flight\nchecks (auth → 401, instance existence → 404, authorization → 403) return a\nJSON error body before the response upgrades to `text/event-stream`; the\nstream then carries `log` events and a terminal `end` event.",
+        "operationId": "instance_logs",
+        "parameters": [
+          {
+            "description": "instance uuid",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "number of historical lines to send first (default 200, clamped to 1-5000)",
+            "in": "query",
+            "name": "tail",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "keep the stream open for new output (default true)",
+            "in": "query",
+            "name": "follow",
+            "required": true,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "text/event-stream of container output; a terminal `end` event carries the stop reason (stopped | paused | deleted | eof)"
+          },
+          "401": {
+            "description": "missing or invalid ow_token"
+          },
+          "403": {
+            "description": "requires mayControlInstance (owner, admin, or lower-tier group-instance holder)"
+          },
+          "404": {
+            "description": "instance not found"
+          },
+          "500": {
+            "description": "internal server error"
+          }
+        },
+        "summary": "On-demand container logs for an instance.",
+        "tags": [
+          "admin-gated"
         ]
       }
     },
@@ -1337,7 +1545,7 @@
             "description": "service is healthy"
           }
         },
-        "summary": "Liveness probe. Part of the fuzz surface, so it is a named handler with an\nexported OpenAPI operation (the spec only covers the 17 safe endpoints).",
+        "summary": "Liveness probe. Part of the fuzz surface, so it is a named handler with an\nexported OpenAPI operation.",
         "tags": [
           "system"
         ]

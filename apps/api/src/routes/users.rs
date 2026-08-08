@@ -8,6 +8,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use super::AppState;
+use crate::audit::{action, diff_detail, target, AuditEvent};
 use crate::auth::AuthUser;
 use crate::db::{
     validate_group_ids, GroupRepository, PolicyRepository, UserRepository, UserWithPolicy,
@@ -208,7 +209,8 @@ async fn delete_user(
 
     let repo = UserRepository::new(&state.db);
 
-    repo.find_by_id(id)
+    let target = repo
+        .find_by_id(id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -238,6 +240,10 @@ async fn delete_user(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if deleted {
+        state.audit.emit(
+            AuditEvent::from_auth(&auth, action::USER_DELETE, target::USER)
+                .with_target(Some(target.id.to_string()), Some(target.username.clone())),
+        );
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(StatusCode::NOT_FOUND)
@@ -298,6 +304,12 @@ async fn create_user(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    state.audit.emit(
+        AuditEvent::from_auth(&auth, action::USER_CREATE, target::USER)
+            .with_target(Some(user.id.to_string()), Some(user.username.clone()))
+            .with_detail(serde_json::json!({ "group_ids": group_ids })),
+    );
+
     Ok(Json(serde_json::json!({
         "user": user_to_json(&user)
     })))
@@ -344,7 +356,8 @@ async fn update_user(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let repo = UserRepository::new(&state.db);
 
-    repo.find_by_id(id)
+    let target = repo
+        .find_by_id_with_policy(id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -401,9 +414,19 @@ async fn update_user(
     // tier guard above already rejected self-writes by non-admins.
     if let Some(group_ids) = input.group_ids.as_deref() {
         validate_assignable_groups(&state.db, &auth, group_ids).await?;
+        let old_group_ids = repo.list_group_ids(id).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         repo.set_group_memberships(id, group_ids)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        state.audit.emit(
+            AuditEvent::from_auth(&auth, action::GROUP_MEMBERSHIP_CHANGE, target::USER)
+                .with_target(Some(id.to_string()), Some(target.username.clone()))
+                .with_detail(diff_detail(&[(
+                    "group_ids".to_string(),
+                    serde_json::json!(old_group_ids),
+                    serde_json::json!(group_ids),
+                )])),
+        );
     }
     if let Some(direct) = input.direct_max_instances {
         if let Some(ceiling) = direct
@@ -426,6 +449,37 @@ async fn update_user(
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             .ok_or(StatusCode::NOT_FOUND)?;
+
+        // One event per logical change (audit spec Decision 3): a password
+        // reset, a membership rewrite, and/or a profile/policy edit.
+        if input.password.is_some() {
+            state.audit.emit(
+                AuditEvent::from_auth(&auth, action::USER_PASSWORD_CHANGE, target::USER)
+                    .with_target(Some(target.id.to_string()), Some(target.username.clone())),
+            );
+        }
+        if input.username.is_some() || input.direct_max_instances.is_some() {
+            let mut changes: Vec<(String, serde_json::Value, serde_json::Value)> = Vec::new();
+            if input.username.is_some() && input.username.as_deref() != Some(target.username.as_str()) {
+                changes.push((
+                    "username".to_string(),
+                    serde_json::json!(&target.username),
+                    serde_json::json!(input.username),
+                ));
+            }
+            if input.direct_max_instances.is_some() {
+                changes.push((
+                    "direct_max_instances".to_string(),
+                    serde_json::json!(target.direct_max_instances),
+                    serde_json::json!(input.direct_max_instances),
+                ));
+            }
+            state.audit.emit(
+                AuditEvent::from_auth(&auth, action::USER_UPDATE, target::USER)
+                    .with_target(Some(target.id.to_string()), Some(target.username.clone()))
+                    .with_detail(diff_detail(&changes)),
+            );
+        }
 
         Ok(Json(serde_json::json!({
             "user": user_to_json(&user)

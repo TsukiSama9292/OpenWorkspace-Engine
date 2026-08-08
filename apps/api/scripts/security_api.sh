@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# security:api — fuzz the 17 green endpoints of a RUNNING dev stack with
+# security:api — fuzz the 20 green endpoints of a RUNNING dev stack with
 # Schemathesis (02-be-schemathesis).
 #
 # Pass 1 (admin session): schema-valid 200s (or declared 4xx), never a 5xx,
@@ -67,9 +67,9 @@ fi
 # --- regenerate the exported spec from the running code -----------------------
 log "Regenerating the OpenAPI spec ($SPEC)..."
 ( cd "$API_DIR" && cargo run -q --bin export_openapi )
-jq -e '.paths | length == 17' "$SPEC" >/dev/null \
-    || die "regenerated spec is invalid or does not cover the 17 safe endpoints"
-log "Spec covers 17 paths (validated before fuzzing)"
+jq -e '.paths | length == 20' "$SPEC" >/dev/null \
+    || die "regenerated spec is invalid or does not cover the 20 safe endpoints"
+log "Spec covers 20 paths (validated before fuzzing)"
 
 # --- helpers ------------------------------------------------------------------
 login_cookie() {

@@ -16,6 +16,9 @@ pub struct Settings {
     /// `PORT_LOCK_DIR` env var. Empty = unset: resolution falls through to the
     /// per-UID runtime-dir / tmp chain.
     pub port_lock_dir: String,
+    /// Audit-log retention in days, from `AUDIT_RETENTION_DAYS` (default 90).
+    /// Pruned daily by the health worker behind the pure `due_for_prune` gate.
+    pub audit_retention_days: i64,
 }
 
 impl Settings {
@@ -76,6 +79,10 @@ impl Settings {
             instance_dns: get("OW_INSTANCE_DNS")
                 .unwrap_or_else(|| "8.8.8.8,1.1.1.1".to_string()),
             port_lock_dir: get("PORT_LOCK_DIR").unwrap_or_default(),
+            audit_retention_days: get("AUDIT_RETENTION_DAYS")
+                .unwrap_or_else(|| "90".to_string())
+                .parse()
+                .map_err(|e| format!("AUDIT_RETENTION_DAYS invalid: {}", e))?,
         })
     }
 
@@ -108,6 +115,7 @@ mod tests {
             instance_net_base: "10.200.0.0/16".to_string(),
             instance_dns: "8.8.8.8,1.1.1.1".to_string(),
             port_lock_dir: String::new(),
+            audit_retention_days: 90,
         };
         assert_eq!(settings.bind_address(), "0.0.0.0:3000");
     }
@@ -128,6 +136,7 @@ mod tests {
             instance_net_base: "10.200.0.0/16".to_string(),
             instance_dns: "8.8.8.8,1.1.1.1".to_string(),
             port_lock_dir: String::new(),
+            audit_retention_days: 90,
         };
         assert_eq!(settings.bind_address(), "127.0.0.1:8080");
     }
@@ -148,6 +157,7 @@ mod tests {
             instance_net_base: "10.200.0.0/16".to_string(),
             instance_dns: "8.8.8.8,1.1.1.1".to_string(),
             port_lock_dir: String::new(),
+            audit_retention_days: 90,
         };
         let debug = format!("{:?}", settings);
         assert!(debug.contains("Settings"));
@@ -170,6 +180,7 @@ mod tests {
             instance_net_base: "10.200.0.0/16".to_string(),
             instance_dns: "8.8.8.8,1.1.1.1".to_string(),
             port_lock_dir: String::new(),
+            audit_retention_days: 90,
         };
         let cloned = settings.clone();
         assert_eq!(settings.database_url, cloned.database_url);
@@ -230,6 +241,7 @@ mod tests {
         assert_eq!(settings.host_port_start, 10000);
         assert_eq!(settings.host_port_end, 20000);
         assert_eq!(settings.port_lock_dir, "");
+        assert_eq!(settings.audit_retention_days, 90);
     }
 
     #[test]
@@ -241,6 +253,38 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(settings.port_lock_dir, "/var/lib/ow-ports");
+    }
+
+    #[test]
+    fn test_audit_retention_days_default_is_90() {
+        let settings = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://localhost/test"),
+            ("JWT_SECRET", "test"),
+        ]))
+        .unwrap();
+        assert_eq!(settings.audit_retention_days, 90);
+    }
+
+    #[test]
+    fn test_audit_retention_days_custom_value() {
+        let settings = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://localhost/test"),
+            ("JWT_SECRET", "test"),
+            ("AUDIT_RETENTION_DAYS", "30"),
+        ]))
+        .unwrap();
+        assert_eq!(settings.audit_retention_days, 30);
+    }
+
+    #[test]
+    fn test_audit_retention_days_invalid() {
+        let result = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://localhost/test"),
+            ("JWT_SECRET", "test"),
+            ("AUDIT_RETENTION_DAYS", "not-a-number"),
+        ]));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("AUDIT_RETENTION_DAYS invalid"));
     }
 
     #[test]

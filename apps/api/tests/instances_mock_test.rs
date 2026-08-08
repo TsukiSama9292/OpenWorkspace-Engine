@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use common::ensure_pg;
 use mockall::predicate::eq;
-use openworkspace_api::docker::MockDockerService;
+use openworkspace_api::docker::{ContainerLogStream, ContainerLogsError, MockDockerService};
 use openworkspace_api::routes::{AppState, api_routes};
 use openworkspace_api::db::WorkspaceInstanceRepository;
 use openworkspace_api::vnc_cache::VncCache;
@@ -95,6 +95,7 @@ impl MockContext {
             instance_net_base: "10.200.0.0/16".to_string(),
             instance_dns: "8.8.8.8,1.1.1.1".to_string(),
             port_lock_dir: String::new(),
+            audit_retention_days: 90,
         };
 
         openworkspace_api::db::UserRepository::new(&db)
@@ -106,12 +107,22 @@ impl MockContext {
         setup_mock(&mut mock_docker);
         mock_instance_network(&mut mock_docker);
 
+        let (audit_tx, audit_rx) =
+            tokio::sync::mpsc::channel(openworkspace_api::audit::AUDIT_CHANNEL_CAPACITY);
+        let audit_db = db.clone();
+        let (_audit_shutdown_tx, audit_shutdown_rx) =
+            tokio::sync::watch::channel(false);
+        tokio::spawn(async move {
+            openworkspace_api::audit::audit_writer(audit_rx, audit_db, audit_shutdown_rx).await;
+        });
+
         let state = AppState {
             db: db.clone(),
             docker: Arc::new(mock_docker),
             vnc_cache: VncCache::new(),
             settings,
             metrics: Arc::new(openworkspace_api::metrics::MetricsStore::new()),
+            audit: openworkspace_api::audit::AuditSender::new(audit_tx),
         };
 
         let cors = tower_http::cors::CorsLayer::new()
@@ -3594,4 +3605,192 @@ async fn test_gate_admin_settings_requires_system_admin() {
     // Group flags alone do not unlock admin settings → 403.
     assert_eq!(ctx.get_auth("/api/admin/settings", &flagged_token).await.status(), 403);
     assert_eq!(ctx.put_auth("/api/admin/settings", &settings_body, &flagged_token).await.status(), 403);
+}
+
+// ── On-demand container logs: SSE endpoint ────────────────────────
+
+/// A canned, finite docker log stream: one stdout line and one stderr line.
+/// Finite even for follow=true so SSE tests terminate; the `end` handler
+/// translates the stream's natural end into an `end (eof)` event.
+fn canned_log_stream() -> ContainerLogStream {
+    use futures_util::StreamExt;
+    let items = vec![
+        Ok::<_, bollard::errors::Error>(bollard::container::LogOutput::StdOut {
+            message: b"hello stdout line\n".to_vec().into(),
+        }),
+        Ok(bollard::container::LogOutput::StdErr {
+            message: b"hello stderr line\n".to_vec().into(),
+        }),
+    ];
+    futures_util::stream::iter(items).boxed()
+}
+
+#[tokio::test]
+async fn test_instance_logs_streams_stdout_and_stderr_for_owner() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_container_logs()
+            .withf(|_, tail, follow| *tail == 200 && !follow)
+            .returning(|_, _, _| Box::pin(async { Ok(canned_log_stream()) }));
+    })
+    .await;
+
+    let token = ctx.login_admin().await;
+    let (_, instance_id) = create_config_and_instance(&ctx, &token, "logs-owner").await;
+    set_instance_status(&ctx.db, &instance_id, "running", Some("fake-container-id")).await;
+
+    let resp = ctx
+        .get_auth(&format!("/api/instances/{}/logs?tail=200&follow=false", instance_id), &token)
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert!(resp.headers().get("content-type").unwrap().to_str().unwrap().starts_with("text/event-stream"));
+    let body = resp.text().await.unwrap();
+    assert!(body.contains("event: log"), "expected log events, got: {}", body);
+    assert!(body.contains("hello stdout line"), "stdout line missing: {}", body);
+    assert!(body.contains("hello stderr line"), "stderr line missing: {}", body);
+    assert!(body.contains("event: end"), "expected end event: {}", body);
+    assert!(body.contains("\"reason\":\"eof\""), "expected eof reason: {}", body);
+}
+
+#[tokio::test]
+async fn test_instance_logs_stopped_instance_ends_with_stopped_reason() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        // Stopped instances are never followed: docker gets follow=false.
+        m.expect_container_logs()
+            .withf(|_, _, follow| !follow)
+            .returning(|_, _, _| Box::pin(async { Ok(canned_log_stream()) }));
+    })
+    .await;
+
+    let token = ctx.login_admin().await;
+    let (_, instance_id) = create_config_and_instance(&ctx, &token, "logs-stopped").await;
+    set_instance_status(&ctx.db, &instance_id, "stopped", Some("fake-container-id")).await;
+
+    let resp = ctx
+        .get_auth(&format!("/api/instances/{}/logs", instance_id), &token)
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert!(body.contains("hello stdout line"), "tail missing: {}", body);
+    assert!(body.contains("event: end"), "expected end event: {}", body);
+    assert!(body.contains("\"reason\":\"stopped\""), "expected stopped reason: {}", body);
+}
+
+#[tokio::test]
+async fn test_instance_logs_container_not_found_ends_deleted() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        m.expect_container_logs()
+            .returning(|_, _, _| Box::pin(async { Err(ContainerLogsError::ContainerNotFound("gone".to_string())) }));
+    })
+    .await;
+
+    let token = ctx.login_admin().await;
+    let (_, instance_id) = create_config_and_instance(&ctx, &token, "logs-gone").await;
+    set_instance_status(&ctx.db, &instance_id, "running", Some("fake-container-id")).await;
+
+    let resp = ctx
+        .get_auth(&format!("/api/instances/{}/logs", instance_id), &token)
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert!(body.contains("event: end"), "expected end event: {}", body);
+    assert!(body.contains("\"reason\":\"deleted\""), "expected deleted reason: {}", body);
+}
+
+#[tokio::test]
+async fn test_instance_logs_never_launched_ends_deleted() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    })
+    .await;
+
+    let token = ctx.login_admin().await;
+    let (_, instance_id) = create_config_and_instance(&ctx, &token, "logs-never").await;
+    // A never-launched record has no container_id and stays pending.
+    set_instance_status(&ctx.db, &instance_id, "stopped", None).await;
+
+    let resp = ctx
+        .get_auth(&format!("/api/instances/{}/logs", instance_id), &token)
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert!(body.contains("\"reason\":\"deleted\""), "expected deleted reason: {}", body);
+}
+
+#[tokio::test]
+async fn test_instance_logs_follow_true_uses_docker_follow() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        // Running instance with follow default (true): docker gets follow=true
+        // and tail=200. The finite canned stream ends immediately, so the SSE
+        // stream terminates with eof.
+        m.expect_container_logs()
+            .withf(|_, tail, follow| *tail == 200 && *follow)
+            .returning(|_, _, _| Box::pin(async { Ok(canned_log_stream()) }));
+    })
+    .await;
+
+    let token = ctx.login_admin().await;
+    let (_, instance_id) = create_config_and_instance(&ctx, &token, "logs-follow").await;
+    set_instance_status(&ctx.db, &instance_id, "running", Some("fake-container-id")).await;
+
+    let resp = ctx
+        .get_auth(&format!("/api/instances/{}/logs", instance_id), &token)
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert!(body.contains("event: log"), "expected log events: {}", body);
+    assert!(body.contains("\"reason\":\"eof\""), "expected eof reason: {}", body);
+}
+
+#[tokio::test]
+async fn test_instance_logs_unknown_instance_returns_404() {
+    let ctx = MockContext::new(|_| {}).await;
+    let token = ctx.login_admin().await;
+
+    let resp = ctx
+        .get_auth(&format!("/api/instances/{}/logs", uuid::Uuid::new_v4()), &token)
+        .await;
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn test_instance_logs_non_owner_returns_403() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    })
+    .await;
+
+    let admin_token = ctx.login_admin().await;
+    let (_, instance_id) = create_config_and_instance(&ctx, &admin_token, "logs-403").await;
+    set_instance_status(&ctx.db, &instance_id, "running", Some("fake-container-id")).await;
+
+    // A plain user without group-instance management cannot read admin's logs.
+    let user_id = create_quota_user(&ctx, &admin_token, "logs_plain", 1).await;
+    let _ = user_id;
+    let user_token = ctx.login_user("logs_plain", "password123").await;
+    let resp = ctx
+        .get_auth(&format!("/api/instances/{}/logs", instance_id), &user_token)
+        .await;
+    assert_eq!(resp.status(), 403);
+}
+
+#[tokio::test]
+async fn test_instance_logs_requires_auth_returns_401() {
+    let ctx = MockContext::new(|_| {}).await;
+    let resp = ctx
+        .client
+        .get(format!("{}/api/instances/{}/logs", ctx.base_url, uuid::Uuid::new_v4()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401);
 }

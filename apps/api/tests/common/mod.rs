@@ -8,7 +8,7 @@ use std::time::Duration;
 use openworkspace_api::core::Settings;
 use openworkspace_api::db::UserRepository;
 use openworkspace_api::docker::DockerClient;
-use openworkspace_api::routes::{AppState, api_routes};
+use openworkspace_api::routes::{AppState, api_routes, with_audit_middleware};
 use migration::{Migrator, MigratorTrait};
 use reqwest::Client;
 
@@ -95,6 +95,7 @@ impl TestContext {
             instance_net_base: "10.200.0.0/16".to_string(),
             instance_dns: "8.8.8.8,1.1.1.1".to_string(),
             port_lock_dir: String::new(),
+            audit_retention_days: 90,
         };
 
         UserRepository::new(&db)
@@ -107,12 +108,25 @@ impl TestContext {
             .expect("failed to create Docker client for test");
 
         let vnc_cache = openworkspace_api::vnc_cache::VncCache::new();
+
+        // Spawn a real audit writer so enqueued events are persisted and the
+        // audit query endpoint has rows to return.
+        let (audit_tx, audit_rx) =
+            tokio::sync::mpsc::channel(openworkspace_api::audit::AUDIT_CHANNEL_CAPACITY);
+        let audit_db = db.clone();
+        let (_audit_shutdown_tx, audit_shutdown_rx) =
+            tokio::sync::watch::channel(false);
+        tokio::spawn(async move {
+            openworkspace_api::audit::audit_writer(audit_rx, audit_db, audit_shutdown_rx).await;
+        });
+
         let state = AppState {
             db: db.clone(),
             docker: std::sync::Arc::new(docker),
             vnc_cache,
             settings: settings.clone(),
             metrics: std::sync::Arc::new(openworkspace_api::metrics::MetricsStore::new()),
+            audit: openworkspace_api::audit::AuditSender::new(audit_tx),
         };
 
         let cors = tower_http::cors::CorsLayer::new()
@@ -120,7 +134,9 @@ impl TestContext {
             .allow_methods(tower_http::cors::Any)
             .allow_headers(tower_http::cors::Any);
 
-        let app = api_routes().layer(cors).with_state(state);
+        let app = with_audit_middleware(api_routes(), &state)
+            .layer(cors)
+            .with_state(state);
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await

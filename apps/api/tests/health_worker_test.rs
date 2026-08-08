@@ -393,6 +393,7 @@ async fn test_auto_sleep_remove_over_limit() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
     assert_eq!(count, 1);
@@ -449,6 +450,7 @@ async fn test_auto_sleep_remove_flips_orphaned_volume() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     )
     .await
@@ -490,6 +492,7 @@ async fn test_auto_sleep_remove_ignores_docker_failure() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
     assert_eq!(count, 1);
@@ -516,6 +519,7 @@ async fn test_auto_sleep_stop_over_limit() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
     assert_eq!(count, 1);
@@ -545,6 +549,7 @@ async fn test_auto_sleep_pause_over_limit() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
     assert_eq!(count, 1);
@@ -574,6 +579,7 @@ async fn test_keep_time_active_connection_resets_timer() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
     assert_eq!(count, 0, "an attached session must not be reclaimed");
@@ -608,6 +614,7 @@ async fn test_keep_time_connection_check_failure_skips() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
     assert_eq!(count, 0, "connection check failures must fail open (no reclaim)");
@@ -634,6 +641,7 @@ async fn test_auto_sleep_not_reached_limit() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
     assert_eq!(count, 0);
@@ -659,6 +667,7 @@ async fn test_auto_sleep_skips_old_instance_without_started_at() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
     assert_eq!(count, 0);
@@ -684,6 +693,7 @@ async fn test_auto_sleep_skips_disabled_template() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
     assert_eq!(count, 0);
@@ -709,6 +719,7 @@ async fn test_auto_sleep_reads_template_config_each_scan() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
     assert_eq!(count, 0, "raised limit should not trigger");
@@ -726,6 +737,7 @@ async fn test_auto_sleep_reads_template_config_each_scan() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
     assert_eq!(count, 1, "lowered limit should trigger on next scan");
@@ -756,6 +768,7 @@ async fn test_auto_sleep_stop_clears_vnc_cache_and_route() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
 
@@ -784,6 +797,7 @@ async fn test_auto_sleep_pause_preserves_vnc_cache() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
 
@@ -816,6 +830,7 @@ async fn test_auto_sleep_no_double_trigger_on_rescan() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
     assert_eq!(first, 1);
@@ -825,6 +840,7 @@ async fn test_auto_sleep_no_double_trigger_on_rescan() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
     assert_eq!(second, 0, "already-triggered instance should not re-trigger");
@@ -857,6 +873,7 @@ async fn test_keep_time_pause_fires() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
     assert_eq!(count, 1);
@@ -890,6 +907,7 @@ async fn test_keep_time_stop_fires() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
     assert_eq!(count, 1);
@@ -927,6 +945,7 @@ async fn test_keep_time_remove_fires() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
     assert_eq!(count, 1);
@@ -954,6 +973,7 @@ async fn test_keep_time_not_yet_expired() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
     assert_eq!(count, 0);
@@ -979,6 +999,7 @@ async fn test_keep_time_skips_null_last_seen_at() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
     assert_eq!(count, 0);
@@ -1004,6 +1025,7 @@ async fn test_keep_time_skips_disabled_template() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
     assert_eq!(count, 0);
@@ -1057,6 +1079,7 @@ async fn test_keep_time_honors_midrun_template_change() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
     assert_eq!(count, 0, "raised keep_time should not trigger");
@@ -1097,6 +1120,7 @@ async fn test_keep_time_honors_midrun_template_change() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
     assert_eq!(count, 1, "lowered keep_time should trigger on next scan");
@@ -1128,6 +1152,7 @@ async fn test_keep_time_no_retrigger_after_pause() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
     assert_eq!(first, 1);
@@ -1137,6 +1162,7 @@ async fn test_keep_time_no_retrigger_after_pause() {
         &template_repo,
         &mock_docker,
         &vnc_cache,
+        None,
         now,
     ).await.unwrap();
     assert_eq!(second, 0, "already-triggered instance should not re-trigger");

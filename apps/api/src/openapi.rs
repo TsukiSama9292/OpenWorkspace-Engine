@@ -1,5 +1,5 @@
-//! OpenAPI generation for the 17 safe endpoints plus the admin-gated Monitor
-//! snapshot (`.scratch/security-fuzzing/`, `.scratch/monitor-dashboard/`). The
+//! OpenAPI generation for the 20 security-fuzzable endpoints
+//! (`.scratch/security-fuzzing/`, `.scratch/monitor-dashboard/`). The
 //! spec is export-only: `ApiDoc::openapi()`
 //! is built from the handler annotations and serialized by the
 //! `export_openapi` binary into the committed `security/openapi.json`. Nothing
@@ -19,7 +19,7 @@ use uuid::Uuid;
 use crate::effective_context::EffectiveContext;
 use crate::system_settings::SystemSettings;
 
-/// The complete exportable spec: all 17 safe operations. Component schemas are
+/// The complete exportable spec: all 20 operations. Component schemas are
 /// collected automatically from the operation annotations, so nothing is
 /// listed here that the paths do not already reference. Handlers are named by
 /// full module path so `path!` resolves each generated `__path_<fn>_impl`.
@@ -44,10 +44,12 @@ use crate::system_settings::SystemSettings;
         crate::routes::workspace::persistent_volumes::list_persistent_volumes,
         crate::routes::admin_settings::get_settings,
         crate::routes::monitor::snapshot,
+        crate::routes::audit::query_audit,
+        crate::routes::workspace::instances::instance_logs,
     ),
     info(
         title = "OpenWorkspace API — security fuzz surface",
-        description = "OpenAPI spec for the 17 security-fuzzable endpoints plus the admin-gated Monitor snapshot (see .scratch/security-fuzzing, .scratch/monitor-dashboard). Admin-gated operations are tagged `admin-gated` for the low-privilege RBAC-boundary pass. The spec is export-only and never served.",
+        description = "OpenAPI spec for the 20 security-fuzzable endpoints (see .scratch/security-fuzzing, .scratch/monitor-dashboard). Admin-gated operations are tagged `admin-gated` for the low-privilege RBAC-boundary pass. The spec is export-only and never served.",
         version = "1.0.0",
     )
 )]
@@ -78,6 +80,92 @@ pub struct ContextEnvelope {
 #[derive(utoipa::ToSchema)]
 pub struct SettingsEnvelope {
     pub settings: SystemSettings,
+}
+
+/// The stable audit action vocabulary (spec Decision 3): every value the API
+/// may emit, enumerated so consumers and fuzzers can validate against it.
+#[derive(utoipa::ToSchema)]
+pub enum AuditAction {
+    #[serde(rename = "auth.login")]
+    Login,
+    #[serde(rename = "auth.logout")]
+    Logout,
+    #[serde(rename = "auth.login_failure")]
+    LoginFailure,
+    #[serde(rename = "auth.forbidden")]
+    Forbidden,
+    #[serde(rename = "instance.create")]
+    InstanceCreate,
+    #[serde(rename = "instance.start")]
+    InstanceStart,
+    #[serde(rename = "instance.stop")]
+    InstanceStop,
+    #[serde(rename = "instance.delete")]
+    InstanceDelete,
+    #[serde(rename = "instance.restart")]
+    InstanceRestart,
+    #[serde(rename = "instance.auto_sleep")]
+    InstanceAutoSleep,
+    #[serde(rename = "instance.pause")]
+    InstancePause,
+    #[serde(rename = "instance.unpause")]
+    InstanceUnpause,
+    #[serde(rename = "template.create")]
+    TemplateCreate,
+    #[serde(rename = "template.update")]
+    TemplateUpdate,
+    #[serde(rename = "template.delete")]
+    TemplateDelete,
+    #[serde(rename = "group.create")]
+    GroupCreate,
+    #[serde(rename = "group.update")]
+    GroupUpdate,
+    #[serde(rename = "group.delete")]
+    GroupDelete,
+    #[serde(rename = "group.membership_change")]
+    GroupMembershipChange,
+    #[serde(rename = "user.create")]
+    UserCreate,
+    #[serde(rename = "user.update")]
+    UserUpdate,
+    #[serde(rename = "user.delete")]
+    UserDelete,
+    #[serde(rename = "user.password_change")]
+    UserPasswordChange,
+    #[serde(rename = "settings.update")]
+    SettingsUpdate,
+    #[serde(rename = "registry.update")]
+    RegistryUpdate,
+}
+
+/// The audit `detail` before/after diff: a flat map of changed field →
+/// `{ "before": …, "after": … }`. Sensitive field values are `"[REDACTED]"`.
+#[derive(utoipa::ToSchema)]
+pub struct AuditDiff {
+    pub before: serde_json::Value,
+    pub after: serde_json::Value,
+}
+
+/// One audit-log entry as returned by the query endpoint.
+#[derive(utoipa::ToSchema)]
+pub struct AuditEntry {
+    pub id: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub actor_user_id: Option<Uuid>,
+    pub actor_name: String,
+    pub action: AuditAction,
+    pub target_type: String,
+    pub target_id: Option<Uuid>,
+    pub target_name: Option<String>,
+    pub outcome: String,
+    pub client_ip: Option<String>,
+    pub detail: Option<serde_json::Value>,
+}
+
+#[derive(utoipa::ToSchema)]
+pub struct AuditLogEnvelope {
+    pub entries: Vec<AuditEntry>,
+    pub next_cursor: Option<String>,
 }
 
 #[derive(utoipa::ToSchema)]
@@ -201,6 +289,7 @@ pub struct GroupSchema {
     pub can_manage_docker: bool,
     pub can_manage_registry: bool,
     pub can_view_monitoring: bool,
+    pub can_view_audit_logs: bool,
     pub max_instances: Option<i32>,
     pub template_ids: Vec<Uuid>,
 }

@@ -8,6 +8,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use super::super::AppState;
+use crate::audit::{action, diff_detail, redact_url_userinfo, target, AuditEvent};
 use crate::auth::AuthUser;
 use crate::db::{GroupRepository, WorkspaceTemplate, WorkspaceTemplateRepository};
 use crate::effective_context::TemplateVisibility;
@@ -375,6 +376,12 @@ async fn create_template(
         }
     }
 
+    state.audit.emit(
+        AuditEvent::from_auth(&auth, action::TEMPLATE_CREATE, target::TEMPLATE)
+            .with_target(Some(template.id.to_string()), Some(template.name.clone()))
+            .with_detail(serde_json::json!({ "visibility": template.visibility })),
+    );
+
     Ok(Json(serde_json::json!({
         "template": template_to_json(&template, 0, &state.settings.container_runtime)
     })))
@@ -517,6 +524,82 @@ async fn update_template(
 
     let count = repo.count_instances(id).await.unwrap_or(0);
 
+    // Redacted before/after diff of the edited fields (audit spec Decision 4).
+    let mut changes: Vec<(String, serde_json::Value, serde_json::Value)> = Vec::new();
+    if existing.name != input.name {
+        changes.push(("name".to_string(), serde_json::json!(&existing.name), serde_json::json!(&input.name)));
+    }
+    if existing.image != input.image {
+        changes.push(("image".to_string(), serde_json::json!(&existing.image), serde_json::json!(&input.image)));
+    }
+    if existing.cores != input.cores {
+        changes.push(("cores".to_string(), serde_json::json!(existing.cores), serde_json::json!(input.cores)));
+    }
+    if existing.memory != input.memory {
+        changes.push(("memory".to_string(), serde_json::json!(existing.memory), serde_json::json!(input.memory)));
+    }
+    if existing.gpu_count != input.gpu_count {
+        changes.push(("gpu_count".to_string(), serde_json::json!(existing.gpu_count), serde_json::json!(input.gpu_count)));
+    }
+    if existing.remote_type != input.remote_type {
+        changes.push(("remote_type".to_string(), serde_json::json!(&existing.remote_type), serde_json::json!(&input.remote_type)));
+    }
+    if existing.description != input.description {
+        changes.push(("description".to_string(), serde_json::json!(&existing.description), serde_json::json!(&input.description)));
+    }
+    if existing.docker_registry != input.docker_registry {
+        changes.push((
+            "docker_registry".to_string(),
+            serde_json::json!(existing.docker_registry.as_deref().map(redact_url_userinfo)),
+            serde_json::json!(input.docker_registry.as_deref().map(redact_url_userinfo)),
+        ));
+    }
+    if existing.container_runtime != input.container_runtime {
+        changes.push(("container_runtime".to_string(), serde_json::json!(&existing.container_runtime), serde_json::json!(&input.container_runtime)));
+    }
+    if existing.run_config != input.run_config {
+        changes.push(("run_config".to_string(), serde_json::json!(&existing.run_config), serde_json::json!(&input.run_config)));
+    }
+    if existing.exec_config != input.exec_config {
+        changes.push(("exec_config".to_string(), serde_json::json!(&existing.exec_config), serde_json::json!(&input.exec_config)));
+    }
+    if existing.volume_mappings != input.volume_mappings {
+        changes.push(("volume_mappings".to_string(), serde_json::json!(&existing.volume_mappings), serde_json::json!(&input.volume_mappings)));
+    }
+    if existing.persistent_storage_path != input.persistent_storage_path {
+        changes.push(("persistent_storage_path".to_string(), serde_json::json!(&existing.persistent_storage_path), serde_json::json!(&input.persistent_storage_path)));
+    }
+    if existing.max_run_seconds != input.max_run_seconds {
+        changes.push(("max_run_seconds".to_string(), serde_json::json!(existing.max_run_seconds), serde_json::json!(input.max_run_seconds)));
+    }
+    if existing.timeout_action != input.timeout_action {
+        changes.push(("timeout_action".to_string(), serde_json::json!(&existing.timeout_action), serde_json::json!(&input.timeout_action)));
+    }
+    if existing.network_bandwidth_up_mbps != input.network_bandwidth_up_mbps {
+        changes.push(("network_bandwidth_up_mbps".to_string(), serde_json::json!(existing.network_bandwidth_up_mbps), serde_json::json!(input.network_bandwidth_up_mbps)));
+    }
+    if existing.network_bandwidth_down_mbps != input.network_bandwidth_down_mbps {
+        changes.push(("network_bandwidth_down_mbps".to_string(), serde_json::json!(existing.network_bandwidth_down_mbps), serde_json::json!(input.network_bandwidth_down_mbps)));
+    }
+    if existing.keep_time_seconds != input.keep_time_seconds {
+        changes.push(("keep_time_seconds".to_string(), serde_json::json!(existing.keep_time_seconds), serde_json::json!(input.keep_time_seconds)));
+    }
+    if existing.keep_time_action != input.keep_time_action {
+        changes.push(("keep_time_action".to_string(), serde_json::json!(&existing.keep_time_action), serde_json::json!(&input.keep_time_action)));
+    }
+    if existing.docker_in_instance != input.docker_in_instance {
+        changes.push(("docker_in_instance".to_string(), serde_json::json!(existing.docker_in_instance), serde_json::json!(input.docker_in_instance)));
+    }
+    if existing.visibility != input.visibility {
+        changes.push(("visibility".to_string(), serde_json::json!(&existing.visibility), serde_json::json!(&input.visibility)));
+    }
+
+    state.audit.emit(
+        AuditEvent::from_auth(&auth, action::TEMPLATE_UPDATE, target::TEMPLATE)
+            .with_target(Some(existing.id.to_string()), Some(existing.name.clone()))
+            .with_detail(diff_detail(&changes)),
+    );
+
     Ok(Json(serde_json::json!({ "template": template_to_json(&template, count, &state.settings.container_runtime) })))
 }
 
@@ -547,6 +630,10 @@ async fn delete_template(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if deleted {
+        state.audit.emit(
+            AuditEvent::from_auth(&auth, action::TEMPLATE_DELETE, target::TEMPLATE)
+                .with_target(Some(existing.id.to_string()), Some(existing.name.clone())),
+        );
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(StatusCode::NOT_FOUND)

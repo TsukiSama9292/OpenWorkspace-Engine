@@ -7,6 +7,7 @@ use axum::{
 use serde::Deserialize;
 
 use super::super::AppState;
+use crate::audit::{action, diff_detail, redact_url_userinfo, target, AuditEvent};
 use crate::auth::AuthUser;
 use crate::db::RegistryRepository;
 use crate::openapi::RegistryUrlEnvelope;
@@ -134,9 +135,35 @@ async fn set_registry_url(
 
     let repo = RegistryRepository::new(&state.db);
 
+    let old_url = match repo.get_url().await {
+        Ok(url) => url,
+        Err(e) => {
+            // Do not silently record `before: null` on a read failure — a null
+            // would read as "no previous URL" rather than "could not read".
+            tracing::warn!("failed to read previous registry URL for audit diff: {}", e);
+            None
+        }
+    };
     repo.set_url(&input.url)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mut changes = Vec::new();
+    if old_url.as_deref() != Some(input.url.as_str()) {
+        // Strip any embedded `user:pass@` userinfo so credentials never land in
+        // the audit diff (redaction by field-name would miss `registry_url`).
+        changes.push((
+            "registry_url".to_string(),
+            serde_json::json!(old_url.as_deref().map(redact_url_userinfo)),
+            serde_json::json!(redact_url_userinfo(&input.url)),
+        ));
+    }
+    if !changes.is_empty() {
+        state.audit.emit(
+            AuditEvent::from_auth(&auth, action::REGISTRY_UPDATE, target::REGISTRY)
+                .with_detail(diff_detail(&changes)),
+        );
+    }
 
     tracing::info!("Registry URL set to '{}'", input.url);
 
