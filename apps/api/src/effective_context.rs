@@ -151,7 +151,9 @@ pub fn calculate_effective_context(
         .max()
         .unwrap_or(TIER_USER);
 
-    let mut unlimited = false;
+    // No group memberships and no personal ceiling: no constraint at all →
+    // unlimited (matching the legacy `0` = unlimited semantics, now `-1`).
+    let mut unlimited = user.direct_max_instances.is_none() && groups.is_empty();
     let mut max_finite = 0;
     if let Some(direct) = user.direct_max_instances {
         if direct < 0 {
