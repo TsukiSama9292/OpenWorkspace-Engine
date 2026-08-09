@@ -93,11 +93,11 @@ impl WorkerTestContext {
                 &serde_json::json!({}),
                 &serde_json::json!({}),
                 None,
-                None,
+                -1,
                 "remove",
                 0,
                 0,
-                None,
+                -1,
                 "pause", false)
             .await
             .unwrap();
@@ -206,7 +206,7 @@ impl WorkerTestContext {
                 &serde_json::json!({}),
                 &serde_json::json!({}),
                 None,
-                None,
+                -1,
                 "remove",
                 0,
                 0,

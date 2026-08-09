@@ -769,11 +769,11 @@ async fn template_update_preserves_visibility() {
             &serde_json::json!({}),
             &serde_json::json!({}),
             None,
-            None,
+            -1,
             "remove",
             0,
             0,
-            None,
+            -1,
             "pause",
             false,
         )
@@ -953,7 +953,7 @@ async fn config_create_with_docker_in_instance() {
     let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
 
     let config = template_repo
-        .create("dini-true", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "runsc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", true)
+        .create("dini-true", None, admin.id, "img:1", 1, 1024, 0, None, "kasmvnc", "runsc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, -1, "remove", 0, 0, -1, "pause", true)
         .await
         .unwrap();
     assert!(config.docker_in_instance);
@@ -978,7 +978,7 @@ async fn config_update_docker_in_instance() {
     assert!(!config.docker_in_instance);
 
     let updated = template_repo
-        .update(config.id, "dini-up", None, "img:1", 1, 1024, 0, None, "kasmvnc", "runsc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, None, "remove", 0, 0, None, "pause", true)
+        .update(config.id, "dini-up", None, "img:1", 1, 1024, 0, None, "kasmvnc", "runsc", &serde_json::json!({}), &serde_json::json!({}), &serde_json::json!({}), None, -1, "remove", 0, 0, -1, "pause", true)
         .await
         .unwrap();
     assert!(updated);
