@@ -1352,6 +1352,9 @@
           "200": {
             "description": "text/event-stream of container output; a terminal `end` event carries the stop reason (stopped | paused | deleted | eof)"
           },
+          "400": {
+            "description": "malformed query string (tail not an integer, follow not true/false, or invalid uuid)"
+          },
           "401": {
             "description": "missing or invalid ow_token"
           },
