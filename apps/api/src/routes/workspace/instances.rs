@@ -113,6 +113,11 @@ fn instance_to_json(
         "keep_time_deadline": keep_time_deadline(inst, keep_time_seconds),
         "keep_time_seconds": keep_time_seconds,
         "keep_time_action": if keep_time_seconds.is_some() { keep_time_action } else { None },
+        "owner_group_id": inst.owner_group_id,
+        "billing_group_snapshot": inst.billing_group_snapshot,
+        "host_cpu_cores": inst.host_cpu_cores,
+        "host_memory_mb": inst.host_memory_mb,
+        "host_gpu_count": inst.host_gpu_count,
         "created_at": inst.created_at,
         "updated_at": inst.updated_at,
     })
@@ -450,6 +455,10 @@ struct LaunchInstanceRequest {
     template_id: Uuid,
     persistence: Option<PersistenceMode>,
     mount_persistent: Option<bool>,
+    /// The group the instance bills its resources against. `None` (default) is
+    /// self-billing (unlimited resources). When set, must be one of the
+    /// caller's own member groups.
+    owner_group_id: Option<Uuid>,
 }
 
 #[utoipa::path(
@@ -664,19 +673,58 @@ fn preflight_rejection_json(reject: &PreflightReject) -> serde_json::Value {
                 "requested": 1,
             },
         }),
+        PreflightReject::HostResourceExceeded {
+            resource,
+            current,
+            limit,
+        } => serde_json::json!({
+            "error": format!(
+                "Host {} cap reached (used: {}, cap: {})",
+                resource.as_str(),
+                current,
+                limit
+            ),
+            "rejection": {
+                "scope": format!("host_resource_{}", resource.as_str()),
+                "current": current,
+                "limit": limit,
+                "requested": 1,
+            },
+        }),
+        PreflightReject::PoolResourceExceeded {
+            resource,
+            current,
+            limit,
+            group_id,
+        } => serde_json::json!({
+            "error": format!(
+                "Group {} pool cap reached (used: {}, cap: {})",
+                resource.as_str(),
+                current,
+                limit
+            ),
+            "rejection": {
+                "scope": format!("group_pool_{}", resource.as_str()),
+                "current": current,
+                "limit": limit,
+                "requested": 1,
+                "group_id": group_id,
+            },
+        }),
     }
 }
 
 /// HTTP status for a pre-flight rejection: whitelist failures are `403`
-/// (permission), both ceilings are `409` (conflict).
+/// (permission); the ceilings and resource caps are all `409` (conflict).
 fn reject_status(reject: &PreflightReject) -> StatusCode {
     match reject {
         PreflightReject::TemplateNotAllowed { .. } | PreflightReject::TemplateHidden { .. } => {
             StatusCode::FORBIDDEN
         }
-        PreflightReject::InstanceCeilingExceeded { .. } | PreflightReject::HostCeilingExceeded { .. } => {
-            StatusCode::CONFLICT
-        }
+        PreflightReject::InstanceCeilingExceeded { .. }
+        | PreflightReject::HostCeilingExceeded { .. }
+        | PreflightReject::HostResourceExceeded { .. }
+        | PreflightReject::PoolResourceExceeded { .. } => StatusCode::CONFLICT,
     }
 }
 
@@ -759,6 +807,16 @@ async fn launch_instance(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": "Failed to launch instance"})),
         ))?;
+    // A billing group must be one of the user's own member groups — you can
+    // only bill your own groups' pools.
+    if let Some(group_id) = input.owner_group_id
+        && !context.group_ids.contains(&group_id)
+    {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Billing group is not one of your groups"})),
+        ));
+    }
     let activation_request = ActivationRequest {
         kind: ActivationKind::Launch(LaunchPayload {
             mount_persistent: mount,
@@ -766,6 +824,7 @@ async fn launch_instance(
         }),
         template: &template,
         user_id: auth.user_id,
+        owner_group_id: input.owner_group_id,
         context: &context,
     };
     let reservation = match crate::activation::activate(&state.db, &activation_request).await {
@@ -1253,6 +1312,10 @@ async fn start_instance(
         // The restarted instance consumes quota from its owner, not from the
         // acting user (an Admin/Manager may be managing someone else's).
         user_id: instance.owner_id,
+        // A restart re-bills against the same target the launch chose: the
+        // stored billing group, or self-billing when the instance launched with
+        // none.
+        owner_group_id: instance.owner_group_id,
         context: &owner_context,
     };
     if let Err(e) = crate::activation::activate(&state.db, &activation_request).await {

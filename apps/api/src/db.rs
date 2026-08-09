@@ -167,6 +167,15 @@ pub mod workspace_instance {
         pub host_port: Option<i32>,
         pub started_at: Option<DateTimeUtc>,
         pub last_seen_at: Option<DateTimeUtc>,
+        /// The group this instance bills its resources against; `NULL` means
+        /// self-billed (no resource accounting, the pre-quota behavior).
+        pub owner_group_id: Option<Uuid>,
+        /// The frozen pool caps in effect at launch (JSONB), for reporting.
+        pub billing_group_snapshot: Option<Json>,
+        /// Actual host resources the instance consumed while active.
+        pub host_cpu_cores: i32,
+        pub host_memory_mb: i64,
+        pub host_gpu_count: i32,
         pub created_at: DateTimeUtc,
         pub updated_at: DateTimeUtc,
     }
@@ -185,6 +194,12 @@ pub mod workspace_instance {
             to = "super::user::Column::Id"
         )]
         User,
+        #[sea_orm(
+            belongs_to = "super::group::Entity",
+            from = "Column::OwnerGroupId",
+            to = "super::group::Column::Id"
+        )]
+        Group,
     }
 
     impl Related<super::workspace_template::Entity> for Entity {
@@ -196,6 +211,12 @@ pub mod workspace_instance {
     impl Related<super::user::Entity> for Entity {
         fn to() -> RelationDef {
             Relation::User.def()
+        }
+    }
+
+    impl Related<super::group::Entity> for Entity {
+        fn to() -> RelationDef {
+            Relation::Group.def()
         }
     }
 
@@ -291,6 +312,15 @@ pub mod group {
         pub can_view_audit_logs: bool,
         /// `None` (NULL) means "unlimited" (the Admin group's ceiling).
         pub max_instances: Option<i32>,
+        /// How member instances bill resources: `shared` (the whole group's
+        /// active instances sum against the pool) or `dedicated` (each member's
+        /// own instances sum against the pool).
+        pub billing_model: String,
+        /// The group's resource pool (`0` = unlimited, matching the ceiling
+        /// convention): cpu cores, memory MB, gpu count.
+        pub pool_cpu_cores: i32,
+        pub pool_memory_mb: i64,
+        pub pool_gpu_count: i32,
         pub created_at: DateTimeUtc,
         pub updated_at: DateTimeUtc,
     }
@@ -445,6 +475,11 @@ pub struct WorkspaceInstance {
     pub host_port: Option<i32>,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub owner_group_id: Option<Uuid>,
+    pub billing_group_snapshot: Option<serde_json::Value>,
+    pub host_cpu_cores: i32,
+    pub host_memory_mb: i64,
+    pub host_gpu_count: i32,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -466,6 +501,11 @@ impl From<workspace_instance::Model> for WorkspaceInstance {
             host_port: m.host_port,
             started_at: m.started_at,
             last_seen_at: m.last_seen_at,
+            owner_group_id: m.owner_group_id,
+            billing_group_snapshot: m.billing_group_snapshot.map(|j| j.into()),
+            host_cpu_cores: m.host_cpu_cores,
+            host_memory_mb: m.host_memory_mb,
+            host_gpu_count: m.host_gpu_count,
             created_at: m.created_at,
             updated_at: m.updated_at,
         }
@@ -809,6 +849,10 @@ pub struct GroupRecord {
     pub can_view_monitoring: bool,
     pub can_view_audit_logs: bool,
     pub max_instances: Option<i32>,
+    pub billing_model: String,
+    pub pool_cpu_cores: i32,
+    pub pool_memory_mb: i64,
+    pub pool_gpu_count: i32,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -838,6 +882,10 @@ impl<'a> GroupRepository<'a> {
             can_view_monitoring: m.can_view_monitoring,
             can_view_audit_logs: m.can_view_audit_logs,
             max_instances: m.max_instances,
+            billing_model: m.billing_model,
+            pool_cpu_cores: m.pool_cpu_cores,
+            pool_memory_mb: m.pool_memory_mb,
+            pool_gpu_count: m.pool_gpu_count,
             created_at: m.created_at,
             updated_at: m.updated_at,
         }
@@ -886,6 +934,10 @@ impl<'a> GroupRepository<'a> {
         can_view_monitoring: bool,
         can_view_audit_logs: bool,
         max_instances: i32,
+        billing_model: &str,
+        pool_cpu_cores: i32,
+        pool_memory_mb: i64,
+        pool_gpu_count: i32,
     ) -> Result<Uuid, sea_orm::DbErr> {
         let id = Uuid::new_v4();
         let model = group::ActiveModel {
@@ -901,6 +953,10 @@ impl<'a> GroupRepository<'a> {
             can_view_monitoring: Set(can_view_monitoring),
             can_view_audit_logs: Set(can_view_audit_logs),
             max_instances: Set(Some(max_instances)),
+            billing_model: Set(billing_model.to_string()),
+            pool_cpu_cores: Set(pool_cpu_cores),
+            pool_memory_mb: Set(pool_memory_mb),
+            pool_gpu_count: Set(pool_gpu_count),
             ..Default::default()
         };
         model.insert(self.db).await?;
@@ -920,6 +976,10 @@ impl<'a> GroupRepository<'a> {
         can_view_monitoring: bool,
         can_view_audit_logs: bool,
         max_instances: Option<i32>,
+        billing_model: &str,
+        pool_cpu_cores: i32,
+        pool_memory_mb: i64,
+        pool_gpu_count: i32,
     ) -> Result<bool, sea_orm::DbErr> {
         let result = group::Entity::update(group::ActiveModel {
             id: Set(id),
@@ -933,6 +993,10 @@ impl<'a> GroupRepository<'a> {
             can_view_monitoring: Set(can_view_monitoring),
             can_view_audit_logs: Set(can_view_audit_logs),
             max_instances: Set(max_instances),
+            billing_model: Set(billing_model.to_string()),
+            pool_cpu_cores: Set(pool_cpu_cores),
+            pool_memory_mb: Set(pool_memory_mb),
+            pool_gpu_count: Set(pool_gpu_count),
             ..Default::default()
         })
         .filter(group::Column::Id.eq(id))
@@ -948,6 +1012,33 @@ impl<'a> GroupRepository<'a> {
     pub async fn delete(&self, id: Uuid) -> Result<bool, sea_orm::DbErr> {
         let result = group::Entity::delete_by_id(id).exec(self.db).await?;
         Ok(result.rows_affected > 0)
+    }
+
+    /// Lock the group row `FOR UPDATE` and return it, or `None` when the row is
+    /// missing. Used by the activation transaction to serialize resource billing
+    /// against a group's pool (spec Decision 1: exact accounting).
+    pub async fn lock_for_update<C: sea_orm::ConnectionTrait>(
+        db: &C,
+        group_id: Uuid,
+    ) -> Result<Option<GroupRecord>, sea_orm::DbErr> {
+        let model = group::Entity::find_by_id(group_id)
+            .lock_exclusive()
+            .one(db)
+            .await?;
+        Ok(model.map(Self::from_model))
+    }
+
+    /// Number of `workspace_instances` currently billing against the group
+    /// (`owner_group_id = group_id`). Used to guard group deletion: a group
+    /// that is still a billing target cannot be deleted.
+    pub async fn count_instances_billed_to(
+        &self,
+        group_id: Uuid,
+    ) -> Result<i64, sea_orm::DbErr> {
+        Ok(workspace_instance::Entity::find()
+            .filter(workspace_instance::Column::OwnerGroupId.eq(group_id))
+            .count(self.db)
+            .await? as i64)
     }
 
     /// The template ids whitelisted for the group.
@@ -1778,6 +1869,10 @@ impl<'a> PolicyRepository<'a> {
                 id: g.id,
                 kind: g.kind,
                 max_instances: g.max_instances,
+                billing_model: g.billing_model,
+                pool_cpu_cores: g.pool_cpu_cores as i64,
+                pool_memory_mb: g.pool_memory_mb,
+                pool_gpu_count: g.pool_gpu_count as i64,
                 can_create_template: g.can_create_template,
                 can_manage_users: g.can_manage_users,
                 can_manage_group_instances: g.can_manage_group_instances,

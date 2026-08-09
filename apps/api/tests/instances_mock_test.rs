@@ -3005,6 +3005,9 @@ async fn test_launch_rejected_by_host_ceiling_returns_409() {
     // Tighten the host ceiling to exactly one active instance.
     let set = ctx.put_auth("/api/admin/settings", &serde_json::json!({
         "host_instance_limit": 1,
+        "host_cpu_cores": 0,
+        "host_memory_mb": 0,
+        "host_gpu_count": 0,
     }), &admin_token).await;
     assert_eq!(set.status(), 200, "settings update failed: {:?}", set.text().await);
 
@@ -3596,6 +3599,9 @@ async fn test_gate_admin_settings_requires_system_admin() {
 
     let settings_body = serde_json::json!({
         "host_instance_limit": 0,
+        "host_cpu_cores": 0,
+        "host_memory_mb": 0,
+        "host_gpu_count": 0,
     });
 
     // Admin-group membership (the seeded admin) → 2xx.

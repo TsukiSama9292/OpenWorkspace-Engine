@@ -242,6 +242,11 @@ pub struct InstanceSchema {
     pub keep_time_deadline: Option<DateTime<Utc>>,
     pub keep_time_seconds: Option<i64>,
     pub keep_time_action: Option<String>,
+    pub owner_group_id: Option<Uuid>,
+    pub billing_group_snapshot: Option<serde_json::Value>,
+    pub host_cpu_cores: i32,
+    pub host_memory_mb: i64,
+    pub host_gpu_count: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -291,12 +296,49 @@ pub struct GroupSchema {
     pub can_view_monitoring: bool,
     pub can_view_audit_logs: bool,
     pub max_instances: Option<i32>,
+    pub billing_model: String,
+    pub pool_cpu_cores: i32,
+    pub pool_memory_mb: i64,
+    pub pool_gpu_count: i32,
     pub template_ids: Vec<Uuid>,
 }
 
 #[derive(utoipa::ToSchema)]
 pub struct GroupListEnvelope {
     pub groups: Vec<GroupSchema>,
+}
+
+/// The group resource-billing view: the pool, the aggregate usage billed
+/// against it, and a per-member usage breakdown.
+#[derive(utoipa::ToSchema)]
+pub struct GroupBillingEnvelope {
+    pub group: GroupBillingSchema,
+    pub used: ResourceUseSchema,
+    pub members: Vec<GroupBillingMemberSchema>,
+}
+
+#[derive(utoipa::ToSchema)]
+pub struct GroupBillingSchema {
+    pub id: Uuid,
+    pub name: String,
+    pub billing_model: String,
+    pub pool_cpu_cores: i32,
+    pub pool_memory_mb: i64,
+    pub pool_gpu_count: i32,
+}
+
+#[derive(utoipa::ToSchema)]
+pub struct ResourceUseSchema {
+    pub cpu_cores: i64,
+    pub memory_mb: i64,
+    pub gpu_count: i64,
+}
+
+#[derive(utoipa::ToSchema)]
+pub struct GroupBillingMemberSchema {
+    pub user_id: Uuid,
+    pub username: String,
+    pub used: ResourceUseSchema,
 }
 
 #[derive(utoipa::ToSchema)]

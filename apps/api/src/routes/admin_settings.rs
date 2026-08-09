@@ -22,13 +22,20 @@ pub fn routes() -> Router<AppState> {
 #[derive(Deserialize)]
 pub struct UpdateSettingsRequest {
     host_instance_limit: i32,
+    host_cpu_cores: i32,
+    host_memory_mb: i64,
+    host_gpu_count: i32,
 }
 
 impl UpdateSettingsRequest {
-    /// The knob must be a non-negative integer (`0` carries its documented
-    /// meaning: unlimited instance count).
+    /// Every knob must be non-negative (`0` carries its documented meaning:
+    /// unlimited / disabled).
     fn validate(&self) -> Result<(), StatusCode> {
-        if self.host_instance_limit >= 0 {
+        if self.host_instance_limit >= 0
+            && self.host_cpu_cores >= 0
+            && self.host_memory_mb >= 0
+            && self.host_gpu_count >= 0
+        {
             Ok(())
         } else {
             Err(StatusCode::BAD_REQUEST)
@@ -82,6 +89,9 @@ async fn update_settings(
 
     let settings = SystemSettings {
         host_instance_limit: input.host_instance_limit,
+        host_cpu_cores: input.host_cpu_cores,
+        host_memory_mb: input.host_memory_mb,
+        host_gpu_count: input.host_gpu_count,
     };
 
     let updated = repo
@@ -89,12 +99,36 @@ async fn update_settings(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    let mut changes = Vec::new();
     if old.host_instance_limit != updated.host_instance_limit {
-        let changes = [(
+        changes.push((
             "host_instance_limit".to_string(),
             serde_json::json!(old.host_instance_limit),
             serde_json::json!(updated.host_instance_limit),
-        )];
+        ));
+    }
+    if old.host_cpu_cores != updated.host_cpu_cores {
+        changes.push((
+            "host_cpu_cores".to_string(),
+            serde_json::json!(old.host_cpu_cores),
+            serde_json::json!(updated.host_cpu_cores),
+        ));
+    }
+    if old.host_memory_mb != updated.host_memory_mb {
+        changes.push((
+            "host_memory_mb".to_string(),
+            serde_json::json!(old.host_memory_mb),
+            serde_json::json!(updated.host_memory_mb),
+        ));
+    }
+    if old.host_gpu_count != updated.host_gpu_count {
+        changes.push((
+            "host_gpu_count".to_string(),
+            serde_json::json!(old.host_gpu_count),
+            serde_json::json!(updated.host_gpu_count),
+        ));
+    }
+    if !changes.is_empty() {
         state.audit.emit(
             AuditEvent::from_auth(&auth, action::SETTINGS_UPDATE, target::SETTINGS)
                 .with_detail(diff_detail(&changes)),

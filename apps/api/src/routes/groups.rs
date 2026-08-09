@@ -8,10 +8,11 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use super::AppState;
+use crate::activation::{sum_resources_for_group, sum_resources_for_user_in_group};
 use crate::audit::{action, diff_detail, target, AuditEvent};
 use crate::auth::AuthUser;
-use crate::db::{validate_template_ids, GroupRecord, GroupRepository};
-use crate::openapi::GroupListEnvelope;
+use crate::db::{validate_template_ids, GroupRecord, GroupRepository, UserRepository};
+use crate::openapi::{GroupBillingEnvelope, GroupListEnvelope};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -20,15 +21,21 @@ pub fn routes() -> Router<AppState> {
             "/api/groups/{id}",
             put(update_group).delete(delete_group),
         )
+        .route("/api/groups/{id}/billing", get(group_billing))
 }
 
 fn default_max_instances() -> i32 {
     2
 }
 
+fn default_billing_model() -> String {
+    "shared".to_string()
+}
+
 /// The pinned group-management contract (frontend `GroupInput`): every policy
-/// field plus the template whitelist. `max_instances` and the flags default to
-/// the schema defaults so a minimal create body still forms a valid group.
+/// field plus the template whitelist and the resource pool. `max_instances`,
+/// the flags, and the pool defaults match the schema defaults so a minimal
+/// create body still forms a valid group.
 #[derive(Deserialize)]
 struct GroupInput {
     name: String,
@@ -51,6 +58,15 @@ struct GroupInput {
     max_instances: i32,
     #[serde(default)]
     template_ids: Vec<Uuid>,
+    #[serde(default = "default_billing_model")]
+    billing_model: String,
+    /// `0` = unlimited.
+    #[serde(default)]
+    pool_cpu_cores: i32,
+    #[serde(default)]
+    pool_memory_mb: i64,
+    #[serde(default)]
+    pool_gpu_count: i32,
 }
 
 /// The pinned `Group` JSON shape.
@@ -68,6 +84,10 @@ fn group_to_json(group: &GroupRecord, template_ids: &[Uuid]) -> serde_json::Valu
         "can_view_monitoring": group.can_view_monitoring,
         "can_view_audit_logs": group.can_view_audit_logs,
         "max_instances": group.max_instances,
+        "billing_model": group.billing_model,
+        "pool_cpu_cores": group.pool_cpu_cores,
+        "pool_memory_mb": group.pool_memory_mb,
+        "pool_gpu_count": group.pool_gpu_count,
         "template_ids": template_ids,
     })
 }
@@ -77,6 +97,12 @@ fn validate_group_input(input: &GroupInput) -> Result<(), StatusCode> {
         return Err(StatusCode::BAD_REQUEST);
     }
     if input.max_instances < 0 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if input.billing_model != "shared" && input.billing_model != "dedicated" {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if input.pool_cpu_cores < 0 || input.pool_memory_mb < 0 || input.pool_gpu_count < 0 {
         return Err(StatusCode::BAD_REQUEST);
     }
     Ok(())
@@ -182,6 +208,10 @@ async fn create_group(
             input.can_view_monitoring,
             input.can_view_audit_logs,
             input.max_instances,
+            &input.billing_model,
+            input.pool_cpu_cores,
+            input.pool_memory_mb,
+            input.pool_gpu_count,
         )
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -271,6 +301,10 @@ async fn update_group(
             can_view_monitoring,
             can_view_audit_logs,
             Some(input.max_instances),
+            &input.billing_model,
+            input.pool_cpu_cores,
+            input.pool_memory_mb,
+            input.pool_gpu_count,
         )
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -326,6 +360,18 @@ async fn update_group(
     if existing.max_instances != group.max_instances {
         changes.push(("max_instances".to_string(), serde_json::json!(existing.max_instances), serde_json::json!(group.max_instances)));
     }
+    if existing.billing_model != group.billing_model {
+        changes.push(("billing_model".to_string(), serde_json::json!(&existing.billing_model), serde_json::json!(&group.billing_model)));
+    }
+    if existing.pool_cpu_cores != group.pool_cpu_cores {
+        changes.push(("pool_cpu_cores".to_string(), serde_json::json!(existing.pool_cpu_cores), serde_json::json!(group.pool_cpu_cores)));
+    }
+    if existing.pool_memory_mb != group.pool_memory_mb {
+        changes.push(("pool_memory_mb".to_string(), serde_json::json!(existing.pool_memory_mb), serde_json::json!(group.pool_memory_mb)));
+    }
+    if existing.pool_gpu_count != group.pool_gpu_count {
+        changes.push(("pool_gpu_count".to_string(), serde_json::json!(existing.pool_gpu_count), serde_json::json!(group.pool_gpu_count)));
+    }
     // The template whitelist is the core permission surface (template
     // authorization is group-only), so a change to it must appear in the diff
     // even though it lives in `group_templates`, not on the group row.
@@ -369,6 +415,14 @@ async fn delete_group(
         return Err(StatusCode::FORBIDDEN);
     }
 
+    // A group that is still a resource-billing target cannot be deleted: its
+    // pool is what members' active instances bill against, and dropping it
+    // would silently orphan that accounting. The DB FK is `ON DELETE SET NULL`
+    // (a hard fallback), but the route refuses first.
+    if repo.count_instances_billed_to(id).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)? > 0 {
+        return Err(StatusCode::CONFLICT);
+    }
+
     // `user_groups` / `group_templates` rows cascade at the database level
     // (FKs from migration 000018), so no join-row cleanup is needed here.
     let deleted = repo
@@ -385,4 +439,82 @@ async fn delete_group(
     } else {
         Err(StatusCode::NOT_FOUND)
     }
+}
+
+/// The resource-billing view for a group: the pool, the aggregate usage billed
+/// against it, and a per-member usage breakdown. Used by the admin / group
+/// manager to see who is consuming the pool.
+#[utoipa::path(
+    get,
+    path = "/api/groups/{id}/billing",
+    tag = "admin-gated",
+    params(
+        ("id" = Uuid, description = "group uuid"),
+    ),
+    responses(
+        (status = 200, description = "group pool usage", body = GroupBillingEnvelope),
+        (status = 401, description = "missing or invalid ow_token"),
+        (status = 403, description = "requires can_manage_users, can_manage_group_instances, or admin"),
+        (status = 404, description = "group not found"),
+        (status = 500, description = "internal server error"),
+    )
+)]
+pub(crate) async fn group_billing(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // The pool-usage view is the management surface: user managers (who shape
+    // groups) and group-instance managers (who watch a group's load) both get
+    // it; tenants only ever see their own aggregate on `/auth/me`.
+    if !auth.can_manage_users() && !auth.context.can_manage_group_instances {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let repo = GroupRepository::new(&state.db);
+    let group = repo
+        .find_by_id(id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let used = sum_resources_for_group(&state.db, id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let member_ids = UserRepository::new(&state.db)
+        .list_group_members(&[id])
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mut members = Vec::with_capacity(member_ids.len());
+    for user_id in member_ids {
+        let username = UserRepository::new(&state.db)
+            .find_by_id(user_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .map(|u| u.username)
+            .unwrap_or_default();
+        let member_used = sum_resources_for_user_in_group(&state.db, user_id, id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        members.push(serde_json::json!({
+            "user_id": user_id,
+            "username": username,
+            "used": member_used,
+        }));
+    }
+
+    Ok(Json(serde_json::json!({
+        "group": {
+            "id": group.id,
+            "name": group.name,
+            "billing_model": group.billing_model,
+            "pool_cpu_cores": group.pool_cpu_cores,
+            "pool_memory_mb": group.pool_memory_mb,
+            "pool_gpu_count": group.pool_gpu_count,
+        },
+        "used": used,
+        "members": members,
+    })))
 }

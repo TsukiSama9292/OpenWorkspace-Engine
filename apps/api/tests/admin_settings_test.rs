@@ -9,6 +9,15 @@ async fn create_user(ctx: &TestContext, username: &str) {
     assert_eq!(resp.status(), 200);
 }
 
+fn settings_body(host_instance_limit: i32) -> serde_json::Value {
+    serde_json::json!({
+        "host_instance_limit": host_instance_limit,
+        "host_cpu_cores": 0,
+        "host_memory_mb": 0,
+        "host_gpu_count": 0,
+    })
+}
+
 #[tokio::test]
 async fn test_get_settings_requires_auth() {
     let ctx = TestContext::new().await;
@@ -44,9 +53,7 @@ async fn test_put_settings_forbidden_for_user() {
     ctx.login_user("plain_user_put", "pass123").await;
 
     let resp = ctx
-        .put("/api/admin/settings", &serde_json::json!({
-            "host_instance_limit": 0,
-        }))
+        .put("/api/admin/settings", &settings_body(0))
         .await;
     assert_eq!(resp.status(), 403);
 }
@@ -61,6 +68,9 @@ async fn test_get_settings_admin_returns_migration_defaults() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let s = &body["settings"];
     assert_eq!(s["host_instance_limit"], 0);
+    assert_eq!(s["host_cpu_cores"], 0);
+    assert_eq!(s["host_memory_mb"], 0);
+    assert_eq!(s["host_gpu_count"], 0);
 }
 
 #[tokio::test]
@@ -71,12 +81,18 @@ async fn test_put_settings_admin_updates_and_persists() {
     let resp = ctx
         .put("/api/admin/settings", &serde_json::json!({
             "host_instance_limit": 10,
+            "host_cpu_cores": 16,
+            "host_memory_mb": 65536,
+            "host_gpu_count": 2,
         }))
         .await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     let s = &body["settings"];
     assert_eq!(s["host_instance_limit"], 10);
+    assert_eq!(s["host_cpu_cores"], 16);
+    assert_eq!(s["host_memory_mb"], 65536);
+    assert_eq!(s["host_gpu_count"], 2);
 
     // Values persisted: a fresh read returns the edited row.
     let resp = ctx.get("/api/admin/settings").await;
@@ -84,6 +100,9 @@ async fn test_put_settings_admin_updates_and_persists() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let s = &body["settings"];
     assert_eq!(s["host_instance_limit"], 10);
+    assert_eq!(s["host_cpu_cores"], 16);
+    assert_eq!(s["host_memory_mb"], 65536);
+    assert_eq!(s["host_gpu_count"], 2);
 }
 
 #[tokio::test]
@@ -92,7 +111,25 @@ async fn test_put_settings_rejects_negative_values() {
     ctx.login_admin().await;
 
     let cases = [
-        serde_json::json!({ "host_instance_limit": -2 }),
+        settings_body(-2),
+        serde_json::json!({
+            "host_instance_limit": 0,
+            "host_cpu_cores": -1,
+            "host_memory_mb": 0,
+            "host_gpu_count": 0,
+        }),
+        serde_json::json!({
+            "host_instance_limit": 0,
+            "host_cpu_cores": 0,
+            "host_memory_mb": -5,
+            "host_gpu_count": 0,
+        }),
+        serde_json::json!({
+            "host_instance_limit": 0,
+            "host_cpu_cores": 0,
+            "host_memory_mb": 0,
+            "host_gpu_count": -3,
+        }),
     ];
     for body in cases {
         let resp = ctx.put("/api/admin/settings", &body).await;
@@ -106,9 +143,7 @@ async fn test_put_settings_accepts_zero_values() {
     ctx.login_admin().await;
 
     let resp = ctx
-        .put("/api/admin/settings", &serde_json::json!({
-            "host_instance_limit": 0,
-        }))
+        .put("/api/admin/settings", &settings_body(0))
         .await;
     assert_eq!(resp.status(), 200);
 }

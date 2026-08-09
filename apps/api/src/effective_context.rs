@@ -63,6 +63,27 @@ pub struct EffectiveContext {
     /// and the group maxima, so a personal ceiling can only raise, never lower,
     /// what the groups grant.
     pub direct_max_instances: Option<i32>,
+    /// The resource pools and billing model of every group the user belongs to,
+    /// so the launch form can offer a billing target and show its pool. Read
+    /// directly from the group rows; informational only.
+    pub group_billing: Vec<GroupBilling>,
+    /// The aggregate resource pool across the user's member groups (`0` =
+    /// unlimited, and an unlimited pool wins over every finite one). Reporting
+    /// only — the launch check uses the pool of the *chosen* billing group.
+    pub resource_quotas: ResourceUse,
+}
+
+/// The resource pool a group offers its members, as serialized on
+/// `EffectiveContext.group_billing`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub struct GroupBilling {
+    pub group_id: Uuid,
+    /// `shared` | `dedicated`.
+    pub billing_model: String,
+    /// `0` means "unlimited".
+    pub pool_cpu_cores: i64,
+    pub pool_memory_mb: i64,
+    pub pool_gpu_count: i64,
 }
 
 /// The pure inputs for `calculate_effective_context`: the user's identity and
@@ -85,6 +106,15 @@ pub struct GroupPolicy {
     /// `None` (NULL) and `0` both mean "unlimited"; any positive value is a
     /// hard ceiling.
     pub max_instances: Option<i32>,
+    /// How member instances bill resources against the pool: `shared` (the
+    /// whole group's active instances sum together) or `dedicated` (each
+    /// member's own instances sum against the pool).
+    pub billing_model: String,
+    /// The group's resource pool; `0` means "unlimited" (matches the ceiling
+    /// convention).
+    pub pool_cpu_cores: i64,
+    pub pool_memory_mb: i64,
+    pub pool_gpu_count: i64,
     pub can_create_template: bool,
     pub can_manage_users: bool,
     pub can_manage_group_instances: bool,
@@ -152,6 +182,39 @@ pub fn calculate_effective_context(
 
     let group_ids: Vec<Uuid> = groups.iter().map(|g| g.id).collect();
 
+    // Per-group billing surfaces: the launch form offers one of the user's own
+    // groups as a billing target and shows its pool.
+    let group_billing: Vec<GroupBilling> = groups
+        .iter()
+        .map(|g| GroupBilling {
+            group_id: g.id,
+            billing_model: g.billing_model.clone(),
+            pool_cpu_cores: g.pool_cpu_cores,
+            pool_memory_mb: g.pool_memory_mb,
+            pool_gpu_count: g.pool_gpu_count,
+        })
+        .collect();
+
+    // Aggregate pool: any unlimited group pool makes the aggregate unlimited;
+    // otherwise the maximum finite pool wins (mirrors the ceiling resolution).
+    let mut pool_unlimited = [false, false, false];
+    let mut pool_max = [0i64, 0i64, 0i64];
+    for g in groups {
+        let pools = [g.pool_cpu_cores, g.pool_memory_mb, g.pool_gpu_count];
+        for (i, pool) in pools.into_iter().enumerate() {
+            if pool == 0 {
+                pool_unlimited[i] = true;
+            } else {
+                pool_max[i] = pool_max[i].max(pool);
+            }
+        }
+    }
+    let resource_quotas = ResourceUse {
+        cpu_cores: if pool_unlimited[0] { 0 } else { pool_max[0] },
+        memory_mb: if pool_unlimited[1] { 0 } else { pool_max[1] },
+        gpu_count: if pool_unlimited[2] { 0 } else { pool_max[2] },
+    };
+
     EffectiveContext {
         user_id: user.user_id,
         username: user.username.clone(),
@@ -170,6 +233,8 @@ pub fn calculate_effective_context(
         allowed_template_ids,
         group_ids,
         direct_max_instances: user.direct_max_instances,
+        group_billing,
+        resource_quotas,
     }
 }
 
@@ -185,6 +250,75 @@ pub enum PreflightReject {
     InstanceCeilingExceeded { current: i32, limit: i32 },
     /// The global active count is at the host ceiling (409, best-effort).
     HostCeilingExceeded { current: i32, limit: i32 },
+    /// The host-wide usage of a resource would exceed the host ceiling (409).
+    /// `0` caps are disabled and never reject.
+    HostResourceExceeded {
+        resource: ResourceKind,
+        current: i64,
+        limit: i64,
+    },
+    /// The billing target's pool cannot fit the requested instance (409). For
+    /// a group target, `group_id` is the charged group; `None` means a
+    /// self-billed launch (never rejected — the pool is unlimited).
+    PoolResourceExceeded {
+        resource: ResourceKind,
+        current: i64,
+        limit: i64,
+        group_id: Option<Uuid>,
+    },
+}
+
+/// Which resource failed a resource-cap check. `as_str` is the machine-readable
+/// value on the rejection body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceKind {
+    Cpu,
+    Memory,
+    Gpu,
+}
+
+impl ResourceKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ResourceKind::Cpu => "cpu",
+            ResourceKind::Memory => "memory",
+            ResourceKind::Gpu => "gpu",
+        }
+    }
+}
+
+/// A snapshot of resource usage and its caps at a point in time. `0` always
+/// means "unlimited" for caps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, utoipa::ToSchema)]
+pub struct ResourceUse {
+    pub cpu_cores: i64,
+    pub memory_mb: i64,
+    pub gpu_count: i64,
+}
+
+/// The resource context for a launch/restart pre-flight: the caps and current
+/// usage of both the host and the launch's billing target.
+#[derive(Debug, Clone)]
+pub struct QuotaContext {
+    /// The pool the charged target offers (`0` = unlimited).
+    pub pool: ResourceUse,
+    /// Resources already billed to the charged target.
+    pub billed: ResourceUse,
+    /// Host-wide capacity (`0` = disabled).
+    pub host_capacity: ResourceUse,
+    /// Host-wide usage across all active instances.
+    pub host_used: ResourceUse,
+    /// The group this launch bills against (`None` = self-billed).
+    pub target_group_id: Option<Uuid>,
+}
+
+/// Sum two `ResourceUse` values elementwise.
+pub fn add_use(a: &ResourceUse, b: &ResourceUse) -> ResourceUse {
+    ResourceUse {
+        cpu_cores: a.cpu_cores + b.cpu_cores,
+        memory_mb: a.memory_mb + b.memory_mb,
+        gpu_count: a.gpu_count + b.gpu_count,
+    }
 }
 
 /// A template's launch visibility — the per-template override that sits above
@@ -230,7 +364,7 @@ impl FromStr for TemplateVisibility {
     }
 }
 
-/// Run the three launch pre-flight checks as a pure decision function, with the
+/// Run the launch pre-flight checks as a pure decision function, with the
 /// template's visibility applied first (spec Decision 3):
 ///
 /// 1. `hidden` → `403` before the whitelist is consulted (no bypass, admins
@@ -242,6 +376,13 @@ impl FromStr for TemplateVisibility {
 /// 4. `host_instance_limit > 0` and `host_active_count + 1 > host_instance_limit`
 ///    → `409`. No tier is exempt: admin instances still count toward the host
 ///    limit, so the global check always runs.
+/// 5. For each resource, when the host ceiling is enabled (`> 0`):
+///    `host_used + requested > host_capacity` → `409`. Host resource caps are
+///    global and apply to every tier.
+/// 6. For each resource, when the billing target's pool is enabled (`> 0`):
+///    `billed + requested > pool` → `409`. The `pool`/`billed` come from the
+///    launch's billing target — the charged group, or an unlimited self-bill
+///    (`QuotaContext.pool` all zeros) that never rejects.
 pub fn pre_flight(
     context: &EffectiveContext,
     host_active_count: i32,
@@ -249,6 +390,8 @@ pub fn pre_flight(
     requested_template_id: Uuid,
     active_own_count: i32,
     template_visibility: TemplateVisibility,
+    requested_resources: &ResourceUse,
+    billing: &QuotaContext,
 ) -> Result<(), PreflightReject> {
     match template_visibility {
         TemplateVisibility::Hidden => {
@@ -280,6 +423,37 @@ pub fn pre_flight(
             current: host_active_count,
             limit: host_instance_limit,
         });
+    }
+
+    let host_checks = [
+        (ResourceKind::Cpu, billing.host_capacity.cpu_cores, billing.host_used.cpu_cores, requested_resources.cpu_cores),
+        (ResourceKind::Memory, billing.host_capacity.memory_mb, billing.host_used.memory_mb, requested_resources.memory_mb),
+        (ResourceKind::Gpu, billing.host_capacity.gpu_count, billing.host_used.gpu_count, requested_resources.gpu_count),
+    ];
+    for (resource, limit, current, requested) in host_checks {
+        if limit > 0 && current + requested > limit {
+            return Err(PreflightReject::HostResourceExceeded {
+                resource,
+                current,
+                limit,
+            });
+        }
+    }
+
+    let pool_checks = [
+        (ResourceKind::Cpu, billing.pool.cpu_cores, billing.billed.cpu_cores, requested_resources.cpu_cores),
+        (ResourceKind::Memory, billing.pool.memory_mb, billing.billed.memory_mb, requested_resources.memory_mb),
+        (ResourceKind::Gpu, billing.pool.gpu_count, billing.billed.gpu_count, requested_resources.gpu_count),
+    ];
+    for (resource, limit, current, requested) in pool_checks {
+        if limit > 0 && current + requested > limit {
+            return Err(PreflightReject::PoolResourceExceeded {
+                resource,
+                current,
+                limit,
+                group_id: billing.target_group_id,
+            });
+        }
     }
 
     Ok(())
@@ -327,6 +501,10 @@ mod tests {
             id,
             kind: kind.map(|k| k.to_string()),
             max_instances,
+            billing_model: "shared".to_string(),
+            pool_cpu_cores: 0,
+            pool_memory_mb: 0,
+            pool_gpu_count: 0,
             can_create_template: create,
             can_manage_users: manage_users,
             can_manage_group_instances: group_instances,
@@ -624,17 +802,37 @@ mod tests {
         )
     }
 
+    fn res(cpu: i64, mem: i64, gpu: i64) -> ResourceUse {
+        ResourceUse {
+            cpu_cores: cpu,
+            memory_mb: mem,
+            gpu_count: gpu,
+        }
+    }
+
+    /// An unlimited quota context: host caps disabled and a self-billed target
+    /// with an unlimited pool — never rejects on resources.
+    fn quota() -> QuotaContext {
+        QuotaContext {
+            pool: res(0, 0, 0),
+            billed: res(0, 0, 0),
+            host_capacity: res(0, 0, 0),
+            host_used: res(0, 0, 0),
+            target_group_id: None,
+        }
+    }
+
     #[test]
     fn pre_flight_allows_whitelisted_template_under_limits() {
         let ctx = allow_all();
-        assert!(pre_flight(&ctx, 0, 0, uuid(200), 2, TemplateVisibility::Private).is_ok());
+        assert!(pre_flight(&ctx, 0, 0, uuid(200), 2, TemplateVisibility::Private, &res(0, 0, 0), &quota()).is_ok());
     }
 
     #[test]
     fn pre_flight_rejects_unlisted_template_for_everyone() {
         let ctx = allow_all();
         assert_eq!(
-            pre_flight(&ctx, 0, 0, uuid(999), 0, TemplateVisibility::Private),
+            pre_flight(&ctx, 0, 0, uuid(999), 0, TemplateVisibility::Private, &res(0, 0, 0), &quota()),
             Err(PreflightReject::TemplateNotAllowed {
                 requested_template_id: uuid(999)
             })
@@ -652,7 +850,7 @@ mod tests {
             &[],
         );
         assert_eq!(
-            pre_flight(&admin, 0, 0, uuid(500), 0, TemplateVisibility::Private),
+            pre_flight(&admin, 0, 0, uuid(500), 0, TemplateVisibility::Private, &res(0, 0, 0), &quota()),
             Err(PreflightReject::TemplateNotAllowed {
                 requested_template_id: uuid(500)
             })
@@ -664,7 +862,7 @@ mod tests {
     fn pre_flight_rejects_over_ceiling() {
         let ctx = allow_all();
         assert_eq!(
-            pre_flight(&ctx, 0, 0, uuid(200), 4, TemplateVisibility::Private),
+            pre_flight(&ctx, 0, 0, uuid(200), 4, TemplateVisibility::Private, &res(0, 0, 0), &quota()),
             Err(PreflightReject::InstanceCeilingExceeded { current: 4, limit: 4 })
         );
     }
@@ -677,14 +875,14 @@ mod tests {
             &map(&[(uuid(10), &[uuid(200)])]),
             &[],
         );
-        assert!(pre_flight(&ctx, 0, 0, uuid(200), 999, TemplateVisibility::Private).is_ok());
+        assert!(pre_flight(&ctx, 0, 0, uuid(200), 999, TemplateVisibility::Private, &res(0, 0, 0), &quota()).is_ok());
     }
 
     #[test]
     fn pre_flight_rejects_host_ceiling_for_every_tier() {
         let ctx = allow_all();
         assert_eq!(
-            pre_flight(&ctx, 9, 9, uuid(200), 0, TemplateVisibility::Private),
+            pre_flight(&ctx, 9, 9, uuid(200), 0, TemplateVisibility::Private, &res(0, 0, 0), &quota()),
             Err(PreflightReject::HostCeilingExceeded { current: 9, limit: 9 })
         );
     }
@@ -692,7 +890,7 @@ mod tests {
     #[test]
     fn pre_flight_host_ceiling_zero_is_disabled() {
         let ctx = allow_all();
-        assert!(pre_flight(&ctx, 500, 0, uuid(200), 0, TemplateVisibility::Private).is_ok());
+        assert!(pre_flight(&ctx, 500, 0, uuid(200), 0, TemplateVisibility::Private, &res(0, 0, 0), &quota()).is_ok());
     }
 
     #[test]
@@ -706,7 +904,7 @@ mod tests {
             &[],
         );
         assert!(ctx.allowed_template_ids.is_empty());
-        assert!(pre_flight(&ctx, 0, 0, uuid(200), 0, TemplateVisibility::Public).is_ok());
+        assert!(pre_flight(&ctx, 0, 0, uuid(200), 0, TemplateVisibility::Public, &res(0, 0, 0), &quota()).is_ok());
     }
 
     #[test]
@@ -714,11 +912,11 @@ mod tests {
         // Public grants permission, not quota: ceilings still apply.
         let ctx = allow_all();
         assert_eq!(
-            pre_flight(&ctx, 0, 0, uuid(200), 4, TemplateVisibility::Public),
+            pre_flight(&ctx, 0, 0, uuid(200), 4, TemplateVisibility::Public, &res(0, 0, 0), &quota()),
             Err(PreflightReject::InstanceCeilingExceeded { current: 4, limit: 4 })
         );
         assert_eq!(
-            pre_flight(&ctx, 9, 9, uuid(200), 0, TemplateVisibility::Public),
+            pre_flight(&ctx, 9, 9, uuid(200), 0, TemplateVisibility::Public, &res(0, 0, 0), &quota()),
             Err(PreflightReject::HostCeilingExceeded { current: 9, limit: 9 })
         );
     }
@@ -728,7 +926,7 @@ mod tests {
         // Hidden is an absolute off-switch: the whitelist is never consulted.
         let ctx = allow_all();
         assert_eq!(
-            pre_flight(&ctx, 0, 0, uuid(200), 0, TemplateVisibility::Hidden),
+            pre_flight(&ctx, 0, 0, uuid(200), 0, TemplateVisibility::Hidden, &res(0, 0, 0), &quota()),
             Err(PreflightReject::TemplateHidden {
                 requested_template_id: uuid(200)
             })
@@ -746,10 +944,159 @@ mod tests {
         );
         assert!(admin.is_admin);
         assert_eq!(
-            pre_flight(&admin, 0, 0, uuid(500), 0, TemplateVisibility::Hidden),
+            pre_flight(&admin, 0, 0, uuid(500), 0, TemplateVisibility::Hidden, &res(0, 0, 0), &quota()),
             Err(PreflightReject::TemplateHidden {
                 requested_template_id: uuid(500)
             })
         );
+    }
+
+    // ── resource quota pre-flight ─────────────────────────────
+
+    #[test]
+    fn pre_flight_rejects_host_resource_cap() {
+        let ctx = allow_all();
+        let billing = QuotaContext {
+            host_capacity: res(8, 0, 0),
+            host_used: res(7, 0, 0),
+            ..quota()
+        };
+        assert_eq!(
+            pre_flight(&ctx, 0, 0, uuid(200), 0, TemplateVisibility::Private, &res(2, 0, 0), &billing),
+            Err(PreflightReject::HostResourceExceeded {
+                resource: ResourceKind::Cpu,
+                current: 7,
+                limit: 8,
+            })
+        );
+    }
+
+    #[test]
+    fn pre_flight_host_resource_cap_disabled_when_zero() {
+        let ctx = allow_all();
+        let billing = QuotaContext {
+            host_capacity: res(0, 0, 0),
+            host_used: res(900, 0, 0),
+            ..quota()
+        };
+        assert!(pre_flight(&ctx, 0, 0, uuid(200), 0, TemplateVisibility::Private, &res(2, 0, 0), &billing).is_ok());
+    }
+
+    #[test]
+    fn pre_flight_rejects_pool_resource_cap() {
+        let ctx = allow_all();
+        let billing = QuotaContext {
+            pool: res(4, 4096, 2),
+            billed: res(3, 2048, 1),
+            target_group_id: Some(uuid(10)),
+            ..quota()
+        };
+        assert_eq!(
+            pre_flight(&ctx, 0, 0, uuid(200), 0, TemplateVisibility::Private, &res(1, 2048, 1), &billing),
+            Err(PreflightReject::PoolResourceExceeded {
+                resource: ResourceKind::Cpu,
+                current: 3,
+                limit: 4,
+                group_id: Some(uuid(10)),
+            })
+        );
+        // Memory is the binding resource here: 2048 billed + 2048 requested > 4096 cap.
+        assert_eq!(
+            pre_flight(&ctx, 0, 0, uuid(200), 0, TemplateVisibility::Private, &res(0, 2049, 0), &billing),
+            Err(PreflightReject::PoolResourceExceeded {
+                resource: ResourceKind::Memory,
+                current: 2048,
+                limit: 4096,
+                group_id: Some(uuid(10)),
+            })
+        );
+    }
+
+    #[test]
+    fn pre_flight_pool_resource_exact_fit_allowed() {
+        let ctx = allow_all();
+        let billing = QuotaContext {
+            pool: res(4, 4096, 2),
+            billed: res(3, 2048, 1),
+            target_group_id: Some(uuid(10)),
+            ..quota()
+        };
+        assert!(pre_flight(&ctx, 0, 0, uuid(200), 0, TemplateVisibility::Private, &res(1, 2048, 1), &billing).is_ok());
+    }
+
+    #[test]
+    fn pre_flight_unlimited_pool_never_rejects() {
+        let ctx = allow_all();
+        let billing = QuotaContext {
+            pool: res(0, 0, 0),
+            billed: res(999, 999, 999),
+            target_group_id: Some(uuid(10)),
+            ..quota()
+        };
+        assert!(pre_flight(&ctx, 0, 0, uuid(200), 0, TemplateVisibility::Private, &res(500, 500, 500), &billing).is_ok());
+    }
+
+    #[test]
+    fn pre_flight_public_still_respects_resource_caps() {
+        let ctx = allow_all();
+        let billing = QuotaContext {
+            host_capacity: res(4, 0, 0),
+            host_used: res(4, 0, 0),
+            ..quota()
+        };
+        assert_eq!(
+            pre_flight(&ctx, 0, 0, uuid(200), 0, TemplateVisibility::Public, &res(1, 0, 0), &billing),
+            Err(PreflightReject::HostResourceExceeded {
+                resource: ResourceKind::Cpu,
+                current: 4,
+                limit: 4,
+            })
+        );
+    }
+
+    // ── aggregate resource quotas on the context ──────────────
+
+    #[test]
+    fn resource_quotas_is_max_finite_pool_across_groups() {
+        let alice = user(uuid(1), None);
+        let g1 = group(uuid(10), None, Some(2), false, false, false, false, false, false, false);
+        let g2 = group(uuid(11), None, Some(2), false, false, false, false, false, false, false);
+        let mut g1p = g1.clone();
+        g1p.pool_cpu_cores = 4;
+        g1p.pool_memory_mb = 2048;
+        let mut g2p = g2.clone();
+        g2p.pool_cpu_cores = 8;
+        g2p.pool_memory_mb = 4096;
+
+        let ctx = calculate_effective_context(&alice, &[g1p, g2p], &map(&[]), &[]);
+        assert_eq!(ctx.resource_quotas.cpu_cores, 8);
+        assert_eq!(ctx.resource_quotas.memory_mb, 4096);
+        assert_eq!(ctx.resource_quotas.gpu_count, 0, "no group sets a gpu pool");
+    }
+
+    #[test]
+    fn resource_quotas_unlimited_group_wins() {
+        let alice = user(uuid(1), None);
+        let mut g1 = group(uuid(10), None, Some(2), false, false, false, false, false, false, false);
+        g1.pool_cpu_cores = 4;
+        let mut g2 = group(uuid(11), None, Some(2), false, false, false, false, false, false, false);
+        g2.pool_cpu_cores = 0; // unlimited
+
+        let ctx = calculate_effective_context(&alice, &[g1, g2], &map(&[]), &[]);
+        assert_eq!(ctx.resource_quotas.cpu_cores, 0, "unlimited pool dominates");
+    }
+
+    #[test]
+    fn group_billing_surfaces_each_group_pool() {
+        let alice = user(uuid(1), None);
+        let mut g1 = group(uuid(10), None, Some(2), false, false, false, false, false, false, false);
+        g1.billing_model = "dedicated".to_string();
+        g1.pool_gpu_count = 1;
+
+        let ctx = calculate_effective_context(&alice, &[g1], &map(&[]), &[]);
+        assert_eq!(ctx.group_billing.len(), 1);
+        assert_eq!(ctx.group_billing[0].group_id, uuid(10));
+        assert_eq!(ctx.group_billing[0].billing_model, "dedicated");
+        assert_eq!(ctx.group_billing[0].pool_gpu_count, 1);
     }
 }
