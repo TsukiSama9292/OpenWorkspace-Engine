@@ -162,7 +162,8 @@ pub fn calculate_effective_context(
     }
     for group in groups {
         match group.max_instances {
-            None | Some(limit) if limit < 0 => unlimited = true,
+            None => unlimited = true,
+            Some(limit) if limit < 0 => unlimited = true,
             Some(ceiling) => max_finite = max_finite.max(ceiling),
         }
     }
