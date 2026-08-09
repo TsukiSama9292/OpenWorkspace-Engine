@@ -270,10 +270,12 @@ async fn flat_rbac_migration_creates_tables_and_seeds_system_groups() {
     .await;
     assert!(!default_flag, "a fresh custom group should have all flags FALSE");
     assert_eq!(group_kind(&db, "defaults").await, None, "custom groups have no kind");
+    // A fresh custom group's ceiling follows the schema default (`-1` =
+    // unlimited, spec Decision 1) — the column is `NOT NULL DEFAULT -1`.
     let default_ceiling: i32 =
         query_scalar(&db, "SELECT max_instances AS value FROM groups WHERE name = 'defaults'")
             .await;
-    assert_eq!(default_ceiling, 2);
+    assert_eq!(default_ceiling, -1);
 }
 
 #[tokio::test]
@@ -399,11 +401,13 @@ async fn flat_rbac_migration_moves_system_admins_and_backfills_admin_whitelist()
     assert_eq!(user_direct_max_instances(&db, mgr1_id).await, Some(5));
     assert_eq!(user_direct_max_instances(&db, plain_id).await, Some(3));
 
-    // The seeded system groups carry the spec'd kinds and ceilings.
+    // The seeded system groups carry the spec'd kinds and ceilings. This test
+    // stops at migration 000020, where the Admin group's ceiling is still the
+    // legacy `NULL` (unlimited); migration 000026 rewrites it to `-1`.
     assert_eq!(group_kind(&db, "Admin").await.as_deref(), Some("admin"));
     assert_eq!(group_kind(&db, "Manager").await.as_deref(), Some("manager"));
     assert_eq!(group_kind(&db, "User").await.as_deref(), Some("user"));
-    assert_eq!(group_max_instances(&db, "Admin").await, Some(-1));
+    assert_eq!(group_max_instances(&db, "Admin").await, None);
     assert_eq!(group_max_instances(&db, "Manager").await, Some(2));
     assert_eq!(group_max_instances(&db, "User").await, Some(1));
 }

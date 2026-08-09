@@ -117,14 +117,14 @@ impl MigrationTrait for Migration {
             .await?;
 
         // Personal instance ceiling: legacy `0` = unlimited → `-1`; stays
-        // nullable (`NULL` = inherit the group ceiling). `-1` becomes the
-        // default for fresh inserts.
+        // nullable with `NULL` as the default (`NULL` = inherit the group
+        // ceiling, spec Decision 2). Fresh inserts get `NULL`, never `-1`, so
+        // a new user inherits their groups' ceilings instead of being
+        // silently unlimited.
         conn.execute_unprepared(
             "UPDATE users SET direct_max_instances = -1 WHERE direct_max_instances = 0",
         )
         .await?;
-        conn.execute_unprepared("ALTER TABLE users ALTER COLUMN direct_max_instances SET DEFAULT -1")
-            .await?;
 
         Ok(())
     }
