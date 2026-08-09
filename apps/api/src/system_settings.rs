@@ -11,8 +11,8 @@ pub mod entity {
         #[sea_orm(primary_key, auto_increment = false)]
         pub id: i32,
         pub host_instance_limit: i32,
-        /// Host-wide resource ceilings (`0` = disabled/unlimited): cpu cores,
-        /// memory MB, gpu count.
+        /// Host-wide resource ceilings (`-1` = unlimited, `0` = blocked): cpu
+        /// cores, memory MB, gpu count.
         pub host_cpu_cores: i32,
         pub host_memory_mb: i64,
         pub host_gpu_count: i32,
@@ -25,7 +25,8 @@ pub mod entity {
 }
 
 /// The single global-policy knob set exposed by the admin settings API: the
-/// host instance ceiling (`0` = unlimited) plus the host-wide resource ceilings.
+/// host instance ceiling (`-1` = unlimited, `0` = blocked) plus the host-wide
+/// resource ceilings.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct SystemSettings {
     pub host_instance_limit: i32,
@@ -98,19 +99,19 @@ impl<'a> SystemSettingsRepository<'a> {
             .ok_or_else(|| sea_orm::DbErr::RecordNotFound("system_settings".into()))
     }
 
-    /// Return the singleton row, creating it with the default unlimited ceiling
-    /// when absent (the migration normally guarantees it exists). Used by the
-    /// admin settings read path and the launch pre-flight so the row always
-    /// exists for the global lock target.
+    /// Return the singleton row, creating it with the default unlimited
+    /// ceilings when absent (the migration normally guarantees it exists).
+    /// Used by the admin settings read path and the launch pre-flight so the
+    /// row always exists for the global lock target.
     pub async fn get_or_create(&self) -> Result<SystemSettings, sea_orm::DbErr> {
         if let Some(existing) = self.get().await? {
             return Ok(existing);
         }
         self.upsert(&SystemSettings {
-            host_instance_limit: 0,
-            host_cpu_cores: 0,
-            host_memory_mb: 0,
-            host_gpu_count: 0,
+            host_instance_limit: -1,
+            host_cpu_cores: -1,
+            host_memory_mb: -1,
+            host_gpu_count: -1,
         })
         .await
     }

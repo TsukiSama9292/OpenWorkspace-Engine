@@ -174,14 +174,13 @@ fn default_keep_time_action() -> String {
 }
 
 fn validate_auto_sleep(
-    max_run_seconds: Option<i64>,
+    max_run_seconds: i64,
     timeout_action: &str,
 ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    if let Some(seconds) = max_run_seconds
-        && seconds < 60 {
+    if max_run_seconds != -1 && max_run_seconds < 60 {
             return Err((
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "max_run_seconds must be at least 60"})),
+                Json(serde_json::json!({"error": "max_run_seconds must be -1 (disabled) or at least 60"})),
             ));
         }
     if !matches!(timeout_action, "remove" | "stop" | "pause") {
@@ -194,14 +193,13 @@ fn validate_auto_sleep(
 }
 
 fn validate_keep_time(
-    keep_time_seconds: Option<i64>,
+    keep_time_seconds: i64,
     keep_time_action: &str,
 ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    if let Some(seconds) = keep_time_seconds
-        && seconds < 60 {
+    if keep_time_seconds != -1 && keep_time_seconds < 60 {
             return Err((
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "keep_time_seconds must be at least 60"})),
+                Json(serde_json::json!({"error": "keep_time_seconds must be -1 (disabled) or at least 60"})),
             ));
         }
     if !matches!(keep_time_action, "remove" | "stop" | "pause") {
@@ -213,15 +211,31 @@ fn validate_keep_time(
     Ok(())
 }
 
+fn validate_resources(
+    cores: i32,
+    memory: i64,
+    gpu_count: i32,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if cores < -1 || memory < -1 || gpu_count < -1 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "cores, memory, and gpu_count must be >= -1 (-1 = unlimited)"
+            })),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_bandwidth(
     up_mbps: i32,
     down_mbps: i32,
 ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    if up_mbps < 0 || down_mbps < 0 {
+    if up_mbps < -1 || down_mbps < -1 {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
-                "error": "network_bandwidth_up_mbps and network_bandwidth_down_mbps must be >= 0 (0 = unlimited)"
+                "error": "network_bandwidth_up_mbps and network_bandwidth_down_mbps must be >= -1 (-1 = unlimited, 0 = blocked)"
             })),
         ));
     }
@@ -296,9 +310,13 @@ async fn create_template(
         input.volume_mappings
     };
 
-    validate_auto_sleep(input.max_run_seconds, &input.timeout_action)?;
-    validate_keep_time(input.keep_time_seconds, &input.keep_time_action)?;
+    let max_run_seconds = input.max_run_seconds.unwrap_or(-1);
+    let keep_time_seconds = input.keep_time_seconds.unwrap_or(-1);
+
+    validate_auto_sleep(max_run_seconds, &input.timeout_action)?;
+    validate_keep_time(keep_time_seconds, &input.keep_time_action)?;
     validate_bandwidth(input.network_bandwidth_up_mbps, input.network_bandwidth_down_mbps)?;
+    validate_resources(input.cores, input.memory, input.gpu_count)?;
 
     let template = repo
         .create(
@@ -316,11 +334,11 @@ async fn create_template(
             &exec_config,
             &volume_mappings,
             input.persistent_storage_path.as_deref(),
-            input.max_run_seconds,
+            max_run_seconds,
             &input.timeout_action,
             input.network_bandwidth_up_mbps,
             input.network_bandwidth_down_mbps,
-            input.keep_time_seconds,
+            keep_time_seconds,
             &input.keep_time_action,
             input.docker_in_instance,
         )
@@ -462,9 +480,13 @@ async fn update_template(
         ));
     }
 
-    validate_auto_sleep(input.max_run_seconds, &input.timeout_action)?;
-    validate_keep_time(input.keep_time_seconds, &input.keep_time_action)?;
+    let max_run_seconds = input.max_run_seconds.unwrap_or(-1);
+    let keep_time_seconds = input.keep_time_seconds.unwrap_or(-1);
+
+    validate_auto_sleep(max_run_seconds, &input.timeout_action)?;
+    validate_keep_time(keep_time_seconds, &input.keep_time_action)?;
     validate_bandwidth(input.network_bandwidth_up_mbps, input.network_bandwidth_down_mbps)?;
+    validate_resources(input.cores, input.memory, input.gpu_count)?;
 
     let updated = repo
         .update(
@@ -482,11 +504,11 @@ async fn update_template(
             &input.exec_config,
             &input.volume_mappings,
             input.persistent_storage_path.as_deref(),
-            input.max_run_seconds,
+            max_run_seconds,
             &input.timeout_action,
             input.network_bandwidth_up_mbps,
             input.network_bandwidth_down_mbps,
-            input.keep_time_seconds,
+            keep_time_seconds,
             &input.keep_time_action,
             input.docker_in_instance,
         )
@@ -577,8 +599,8 @@ async fn update_template(
     if existing.persistent_storage_path != input.persistent_storage_path {
         changes.push(("persistent_storage_path".to_string(), serde_json::json!(&existing.persistent_storage_path), serde_json::json!(&input.persistent_storage_path)));
     }
-    if existing.max_run_seconds != input.max_run_seconds {
-        changes.push(("max_run_seconds".to_string(), serde_json::json!(existing.max_run_seconds), serde_json::json!(input.max_run_seconds)));
+    if existing.max_run_seconds != max_run_seconds {
+        changes.push(("max_run_seconds".to_string(), serde_json::json!(existing.max_run_seconds), serde_json::json!(max_run_seconds)));
     }
     if existing.timeout_action != input.timeout_action {
         changes.push(("timeout_action".to_string(), serde_json::json!(&existing.timeout_action), serde_json::json!(&input.timeout_action)));
@@ -589,8 +611,8 @@ async fn update_template(
     if existing.network_bandwidth_down_mbps != input.network_bandwidth_down_mbps {
         changes.push(("network_bandwidth_down_mbps".to_string(), serde_json::json!(existing.network_bandwidth_down_mbps), serde_json::json!(input.network_bandwidth_down_mbps)));
     }
-    if existing.keep_time_seconds != input.keep_time_seconds {
-        changes.push(("keep_time_seconds".to_string(), serde_json::json!(existing.keep_time_seconds), serde_json::json!(input.keep_time_seconds)));
+    if existing.keep_time_seconds != keep_time_seconds {
+        changes.push(("keep_time_seconds".to_string(), serde_json::json!(existing.keep_time_seconds), serde_json::json!(keep_time_seconds)));
     }
     if existing.keep_time_action != input.keep_time_action {
         changes.push(("keep_time_action".to_string(), serde_json::json!(&existing.keep_time_action), serde_json::json!(&input.keep_time_action)));

@@ -70,7 +70,9 @@ where
     Ok(count as i32)
 }
 
-/// Sum the host resources of all active instances.
+/// Sum the host resources of all active instances. Negative snapshots (a
+/// template's `-1` unlimited request) contribute nothing — a `-1` sums as a
+/// negative would reduce usage (spec Decision 6).
 pub async fn sum_resources_global<C>(db: &C) -> Result<ResourceUse, sea_orm::DbErr>
 where
     C: ConnectionTrait,
@@ -85,9 +87,9 @@ where
             add_use(
                 &acc,
                 &ResourceUse {
-                    cpu_cores: r.host_cpu_cores as i64,
-                    memory_mb: r.host_memory_mb,
-                    gpu_count: r.host_gpu_count as i64,
+                    cpu_cores: r.host_cpu_cores.max(0) as i64,
+                    memory_mb: r.host_memory_mb.max(0),
+                    gpu_count: r.host_gpu_count.max(0) as i64,
                 },
             )
         }))
@@ -115,9 +117,9 @@ where
             add_use(
                 &acc,
                 &ResourceUse {
-                    cpu_cores: r.host_cpu_cores as i64,
-                    memory_mb: r.host_memory_mb,
-                    gpu_count: r.host_gpu_count as i64,
+                    cpu_cores: r.host_cpu_cores.max(0) as i64,
+                    memory_mb: r.host_memory_mb.max(0),
+                    gpu_count: r.host_gpu_count.max(0) as i64,
                 },
             )
         }))
@@ -144,9 +146,9 @@ where
             add_use(
                 &acc,
                 &ResourceUse {
-                    cpu_cores: r.host_cpu_cores as i64,
-                    memory_mb: r.host_memory_mb,
-                    gpu_count: r.host_gpu_count as i64,
+                    cpu_cores: r.host_cpu_cores.max(0) as i64,
+                    memory_mb: r.host_memory_mb.max(0),
+                    gpu_count: r.host_gpu_count.max(0) as i64,
                 },
             )
         }))
@@ -338,7 +340,16 @@ pub async fn activate(
         }
         None => {
             let billed = sum_resources_for_user_self_billed(&tx, request.user_id).await?;
-            (ResourceUse::default(), billed, None)
+            // A self-billed launch has no pool to spend: unlimited (`-1`).
+            (
+                ResourceUse {
+                    cpu_cores: -1,
+                    memory_mb: -1,
+                    gpu_count: -1,
+                },
+                billed,
+                None,
+            )
         }
     };
 

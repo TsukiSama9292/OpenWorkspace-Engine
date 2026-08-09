@@ -2022,7 +2022,7 @@ async fn test_keep_time_seconds_in_instance_json() {
     let resp = ctx.get_auth(&format!("/api/instances/{}", instance_id), &token).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["instance"]["keep_time_seconds"], serde_json::Value::Null, "keep_time_seconds should be null when the template has no keep-time");
+    assert_eq!(body["instance"]["keep_time_seconds"], -1, "keep_time_seconds should be -1 when the template has no keep-time");
     assert_eq!(body["instance"]["keep_time_action"], serde_json::Value::Null);
 }
 
@@ -3005,9 +3005,9 @@ async fn test_launch_rejected_by_host_ceiling_returns_409() {
     // Tighten the host ceiling to exactly one active instance.
     let set = ctx.put_auth("/api/admin/settings", &serde_json::json!({
         "host_instance_limit": 1,
-        "host_cpu_cores": 0,
-        "host_memory_mb": 0,
-        "host_gpu_count": 0,
+        "host_cpu_cores": -1,
+        "host_memory_mb": -1,
+        "host_gpu_count": -1,
     }), &admin_token).await;
     assert_eq!(set.status(), 200, "settings update failed: {:?}", set.text().await);
 
@@ -3616,7 +3616,7 @@ async fn test_gate_admin_settings_requires_system_admin() {
 // ── Ticket 07: group & host resource quota pools ────────────────
 
 /// Seed a custom group with a `shared` billing model and the given resource
-/// pool (`0` = unlimited, matching the ceiling convention). Returns its id.
+/// pool (`-1` = unlimited, matching the ceiling convention). Returns its id.
 async fn seed_pool_group(
     ctx: &MockContext,
     name: &str,
@@ -3662,7 +3662,7 @@ async fn test_launch_consumes_billing_group_pool() {
 
     let admin_token = ctx.login_admin().await;
     // A 2-core pool fits exactly one default template (2 cores).
-    let group_id = seed_pool_group(&ctx, "pool-grp", 2, 0, 0).await;
+    let group_id = seed_pool_group(&ctx, "pool-grp", 2, -1, -1).await;
     let template_id = create_template_only(&ctx, &admin_token, "pool-launch").await;
     let user_id = create_quota_user(&ctx, &admin_token, "pool_user", 5).await;
     add_group_member(&ctx, &user_id, &group_id).await;
@@ -3700,7 +3700,7 @@ async fn test_launch_billing_group_not_member_returns_403() {
     let ctx = MockContext::new(|_| {}).await;
     let admin_token = ctx.login_admin().await;
 
-    let group_id = seed_pool_group(&ctx, "foreign-pool", 2, 0, 0).await;
+    let group_id = seed_pool_group(&ctx, "foreign-pool", 2, -1, -1).await;
     let template_id = create_template_only(&ctx, &admin_token, "foreign-launch").await;
     let user_id = create_quota_user(&ctx, &admin_token, "foreign_user", 5).await;
     grant_template_whitelist(&ctx, &user_id, &template_id).await;
@@ -3723,7 +3723,7 @@ async fn test_group_delete_blocked_while_billed() {
     }).await;
     let admin_token = ctx.login_admin().await;
 
-    let group_id = seed_pool_group(&ctx, "del-pool", 0, 0, 0).await;
+    let group_id = seed_pool_group(&ctx, "del-pool", -1, -1, -1).await;
     let template_id = create_template_only(&ctx, &admin_token, "del-launch").await;
     let user_id = create_quota_user(&ctx, &admin_token, "del_user", 5).await;
     add_group_member(&ctx, &user_id, &group_id).await;
@@ -3751,7 +3751,7 @@ async fn test_restart_reruns_current_pool_check_after_shrink() {
     let admin_token = ctx.login_admin().await;
 
     // A 4-core pool fits two default templates (2 cores each).
-    let group_id = seed_pool_group(&ctx, "shrink-pool", 4, 0, 0).await;
+    let group_id = seed_pool_group(&ctx, "shrink-pool", 4, -1, -1).await;
     let template_id = create_template_only(&ctx, &admin_token, "shrink-launch").await;
     let (user_a, token_a) = create_user_and_token(&ctx, &admin_token, "shrink_a").await;
     let (user_b, token_b) = create_user_and_token(&ctx, &admin_token, "shrink_b").await;
@@ -3792,8 +3792,8 @@ async fn test_restart_reruns_current_pool_check_after_shrink() {
         "template_ids": [template_id],
         "billing_model": "shared",
         "pool_cpu_cores": 2,
-        "pool_memory_mb": 0,
-        "pool_gpu_count": 0,
+        "pool_memory_mb": -1,
+        "pool_gpu_count": -1,
     }), &admin_token).await;
     assert_eq!(shrink.status(), 200, "body: {:?}", shrink.text().await);
 
@@ -3817,7 +3817,7 @@ async fn test_group_billing_endpoint_reports_usage() {
     }).await;
     let admin_token = ctx.login_admin().await;
 
-    let group_id = seed_pool_group(&ctx, "billing-grp", 8, 0, 0).await;
+    let group_id = seed_pool_group(&ctx, "billing-grp", 8, -1, -1).await;
     let template_id = create_template_only(&ctx, &admin_token, "billing-launch").await;
     let user_id = create_quota_user(&ctx, &admin_token, "billing_user", 5).await;
     add_group_member(&ctx, &user_id, &group_id).await;
@@ -3856,10 +3856,10 @@ async fn test_host_resource_cap_blocks_second_launch() {
 
     // Host cap: exactly one default template (2 cores) host-wide.
     let set = ctx.put_auth("/api/admin/settings", &serde_json::json!({
-        "host_instance_limit": 0,
+        "host_instance_limit": -1,
         "host_cpu_cores": 2,
-        "host_memory_mb": 0,
-        "host_gpu_count": 0,
+        "host_memory_mb": -1,
+        "host_gpu_count": -1,
     }), &admin_token).await;
     assert_eq!(set.status(), 200, "body: {:?}", set.text().await);
 

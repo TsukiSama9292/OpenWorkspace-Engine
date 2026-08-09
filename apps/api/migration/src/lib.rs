@@ -26,6 +26,7 @@ mod m20260803_000022_add_can_view_monitoring;
 mod m20260807_000023_rename_runtime_value_to_runc;
 mod m20260808_000024_add_audit_logs;
 mod m20260809_000025_add_resource_quotas;
+mod m20260809_000026_minus_one_sentinel;
 
 pub struct Migrator;
 
@@ -58,6 +59,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260807_000023_rename_runtime_value_to_runc::Migration),
             Box::new(m20260808_000024_add_audit_logs::Migration),
             Box::new(m20260809_000025_add_resource_quotas::Migration),
+            Box::new(m20260809_000026_minus_one_sentinel::Migration),
         ]
     }
 }

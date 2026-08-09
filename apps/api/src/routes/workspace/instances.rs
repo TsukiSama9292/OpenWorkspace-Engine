@@ -52,24 +52,24 @@ fn resolve_runtime(container_runtime: &str, settings_runtime: &str) -> String {
     }
 }
 
-fn auto_sleep_deadline(inst: &WorkspaceInstance, max_run_seconds: Option<i64>) -> Option<DateTime<Utc>> {
+fn auto_sleep_deadline(inst: &WorkspaceInstance, max_run_seconds: i64) -> Option<DateTime<Utc>> {
     if inst.status != "running" {
         return None;
     }
-    match (inst.started_at, max_run_seconds) {
-        (Some(started_at), Some(max_run_seconds)) => {
+    match inst.started_at {
+        Some(started_at) if max_run_seconds > 0 => {
             Some(started_at + chrono::Duration::seconds(max_run_seconds))
         }
         _ => None,
     }
 }
 
-fn keep_time_deadline(inst: &WorkspaceInstance, keep_time_seconds: Option<i64>) -> Option<DateTime<Utc>> {
+fn keep_time_deadline(inst: &WorkspaceInstance, keep_time_seconds: i64) -> Option<DateTime<Utc>> {
     if inst.status != "running" {
         return None;
     }
-    match (inst.last_seen_at, keep_time_seconds) {
-        (Some(last_seen_at), Some(keep_time_seconds)) => {
+    match inst.last_seen_at {
+        Some(last_seen_at) if keep_time_seconds > 0 => {
             Some(last_seen_at + chrono::Duration::seconds(keep_time_seconds))
         }
         _ => None,
@@ -83,9 +83,9 @@ fn instance_to_json(
     owner_username: Option<&str>,
     owner_group_ids: &[Uuid],
     owner_tier: i32,
-    max_run_seconds: Option<i64>,
+    max_run_seconds: i64,
     timeout_action: Option<&str>,
-    keep_time_seconds: Option<i64>,
+    keep_time_seconds: i64,
     keep_time_action: Option<&str>,
 ) -> serde_json::Value {
     serde_json::json!({
@@ -112,7 +112,7 @@ fn instance_to_json(
         "timeout_action": timeout_action,
         "keep_time_deadline": keep_time_deadline(inst, keep_time_seconds),
         "keep_time_seconds": keep_time_seconds,
-        "keep_time_action": if keep_time_seconds.is_some() { keep_time_action } else { None },
+        "keep_time_action": if keep_time_seconds > 0 { keep_time_action } else { None },
         "owner_group_id": inst.owner_group_id,
         "billing_group_snapshot": inst.billing_group_snapshot,
         "host_cpu_cores": inst.host_cpu_cores,
@@ -571,9 +571,9 @@ pub(crate) async fn list_instances(
         .map(|inst| {
             let template_name = template_names.get(&inst.template_id).map(|s| s.as_str());
             let remote_type = template_remote_types.get(&inst.template_id).map(|s| s.as_str());
-            let max_run_seconds = template_max_run_seconds.get(&inst.template_id).copied().flatten();
+            let max_run_seconds = template_max_run_seconds.get(&inst.template_id).copied().unwrap_or(-1);
             let timeout_action = template_timeout_actions.get(&inst.template_id).map(|s| s.as_str());
-            let keep_time_seconds = template_keep_time_seconds.get(&inst.template_id).copied().flatten();
+            let keep_time_seconds = template_keep_time_seconds.get(&inst.template_id).copied().unwrap_or(-1);
             let keep_time_action = template_keep_time_actions.get(&inst.template_id).map(|s| s.as_str());
             let owner_username = owner_usernames.get(&inst.owner_id).map(|s| s.as_str());
             let owner_groups = owner_group_ids.get(&inst.owner_id).map(Vec::as_slice).unwrap_or(&[]);
@@ -1124,9 +1124,9 @@ pub(crate) async fn get_instance(
 
     let template_name = template.as_ref().map(|t| t.name.clone());
     let remote_type = template.as_ref().map(|t| t.remote_type.clone());
-    let max_run_seconds = template.as_ref().and_then(|t| t.max_run_seconds);
+    let max_run_seconds = template.as_ref().map(|t| t.max_run_seconds).unwrap_or(-1);
     let timeout_action = template.as_ref().map(|t| t.timeout_action.clone());
-    let keep_time_seconds = template.as_ref().and_then(|t| t.keep_time_seconds);
+    let keep_time_seconds = template.as_ref().map(|t| t.keep_time_seconds).unwrap_or(-1);
     let keep_time_action = template.as_ref().map(|t| t.keep_time_action.clone());
 
     let owner = user_repo.find_by_id(instance.owner_id).await.ok().flatten();

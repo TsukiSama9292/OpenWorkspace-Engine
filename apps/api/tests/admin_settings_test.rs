@@ -67,10 +67,10 @@ async fn test_get_settings_admin_returns_migration_defaults() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     let s = &body["settings"];
-    assert_eq!(s["host_instance_limit"], 0);
-    assert_eq!(s["host_cpu_cores"], 0);
-    assert_eq!(s["host_memory_mb"], 0);
-    assert_eq!(s["host_gpu_count"], 0);
+    assert_eq!(s["host_instance_limit"], -1);
+    assert_eq!(s["host_cpu_cores"], -1);
+    assert_eq!(s["host_memory_mb"], -1);
+    assert_eq!(s["host_gpu_count"], -1);
 }
 
 #[tokio::test]
@@ -114,7 +114,7 @@ async fn test_put_settings_rejects_negative_values() {
         settings_body(-2),
         serde_json::json!({
             "host_instance_limit": 0,
-            "host_cpu_cores": -1,
+            "host_cpu_cores": -2,
             "host_memory_mb": 0,
             "host_gpu_count": 0,
         }),

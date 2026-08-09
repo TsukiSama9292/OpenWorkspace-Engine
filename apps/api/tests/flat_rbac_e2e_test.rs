@@ -448,7 +448,7 @@ async fn test_flat_rbac_2_tiers_end_to_end() {
     let groups = body["groups"].as_array().unwrap();
     let admin_json = groups.iter().find(|g| g["kind"] == "admin").unwrap();
     assert_eq!(admin_json["name"], "Admin");
-    assert!(admin_json["max_instances"].is_null(), "Admin starts unlimited");
+    assert_eq!(admin_json["max_instances"], -1, "Admin starts unlimited");
     for flag in [
         "can_create_template",
         "can_manage_users",
@@ -483,7 +483,7 @@ async fn test_flat_rbac_2_tiers_end_to_end() {
         .as_array()
         .unwrap()
         .contains(&serde_json::json!(admin_group)));
-    assert_eq!(context["effective_max_instances"], 0);
+    assert_eq!(context["effective_max_instances"], -1);
 
     // System groups are undeletable and unrenameable.
     assert_eq!(ctx.delete(&format!("/api/groups/{}", admin_group)).await.status(), 403);
@@ -531,7 +531,7 @@ async fn test_flat_rbac_2_tiers_end_to_end() {
             "can_manage_group_instances": true,
             "can_manage_docker": true,
             "can_manage_registry": true,
-            "max_instances": 0,
+            "max_instances": -1,
             "template_ids": [tpl1],
         }))
         .await;
@@ -563,8 +563,8 @@ async fn test_flat_rbac_2_tiers_end_to_end() {
     assert_eq!(effective_ceiling(&ctx, "rbac2_carol").await, 3, "personal ceiling raises");
     assign_user_policy(&ctx, &carol_id, std::slice::from_ref(&user_group), Some(1)).await;
     assert_eq!(effective_ceiling(&ctx, "rbac2_carol").await, 1, "ties with the group cap");
-    assign_user_policy(&ctx, &carol_id, std::slice::from_ref(&user_group), Some(0)).await;
-    assert_eq!(effective_ceiling(&ctx, "rbac2_carol").await, 0, "0 = unlimited wins");
+    assign_user_policy(&ctx, &carol_id, std::slice::from_ref(&user_group), Some(-1)).await;
+    assert_eq!(effective_ceiling(&ctx, "rbac2_carol").await, -1, "-1 = unlimited wins");
 
     // A group ceiling raises above a lower personal ceiling (never lowers).
     let devs = create_group(&ctx, "rbac2_devs", 5, &[]).await;

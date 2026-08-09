@@ -134,7 +134,7 @@ impl WorkerTestContext {
     async fn create_template_with_auto_sleep(
         &self,
         name: &str,
-        max_run_seconds: Option<i64>,
+        max_run_seconds: i64,
         timeout_action: &str,
     ) -> uuid::Uuid {
         let repo = WorkspaceTemplateRepository::new(&self.db);
@@ -186,7 +186,7 @@ impl WorkerTestContext {
     async fn create_template_with_keep_time(
         &self,
         name: &str,
-        keep_time_seconds: Option<i64>,
+        keep_time_seconds: i64,
         keep_time_action: &str,
     ) -> uuid::Uuid {
         let repo = WorkspaceTemplateRepository::new(&self.db);
@@ -373,7 +373,7 @@ async fn test_probe_timeout_sets_error() {
 async fn test_auto_sleep_remove_over_limit() {
     let ctx = WorkerTestContext::new().await;
     let now = chrono::Utc::now();
-    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-remove", Some(3600), "remove").await;
+    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-remove", 3600, "remove").await;
     let instance_id = ctx.create_running_instance(template_id, Some(now - chrono::Duration::seconds(3601))).await;
 
     let mut mock_docker = MockDockerService::new();
@@ -407,7 +407,7 @@ async fn test_auto_sleep_remove_flips_orphaned_volume() {
     let ctx = WorkerTestContext::new().await;
     let now = chrono::Utc::now();
     let template_id = ctx
-        .create_template_with_auto_sleep("auto-sleep-remove-vol", Some(3600), "remove")
+        .create_template_with_auto_sleep("auto-sleep-remove-vol", 3600, "remove")
         .await;
 
     // A persistent instance: mount_persistent with a resolved host path plus a
@@ -474,7 +474,7 @@ async fn test_auto_sleep_remove_flips_orphaned_volume() {
 async fn test_auto_sleep_remove_ignores_docker_failure() {
     let ctx = WorkerTestContext::new().await;
     let now = chrono::Utc::now();
-    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-remove-err", Some(3600), "remove").await;
+    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-remove-err", 3600, "remove").await;
     let instance_id = ctx.create_running_instance(template_id, Some(now - chrono::Duration::seconds(3601))).await;
 
     let mut mock_docker = MockDockerService::new();
@@ -503,7 +503,7 @@ async fn test_auto_sleep_remove_ignores_docker_failure() {
 async fn test_auto_sleep_stop_over_limit() {
     let ctx = WorkerTestContext::new().await;
     let now = chrono::Utc::now();
-    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-stop", Some(3600), "stop").await;
+    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-stop", 3600, "stop").await;
     let instance_id = ctx.create_running_instance(template_id, Some(now - chrono::Duration::seconds(3601))).await;
 
     let mut mock_docker = MockDockerService::new();
@@ -533,7 +533,7 @@ async fn test_auto_sleep_stop_over_limit() {
 async fn test_auto_sleep_pause_over_limit() {
     let ctx = WorkerTestContext::new().await;
     let now = chrono::Utc::now();
-    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-pause", Some(3600), "pause").await;
+    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-pause", 3600, "pause").await;
     let instance_id = ctx.create_running_instance(template_id, Some(now - chrono::Duration::seconds(3601))).await;
 
     let mut mock_docker = MockDockerService::new();
@@ -563,7 +563,7 @@ async fn test_auto_sleep_pause_over_limit() {
 async fn test_keep_time_active_connection_resets_timer() {
     let ctx = WorkerTestContext::new().await;
     let now = chrono::Utc::now();
-    let template_id = ctx.create_template_with_keep_time("keep-time-connected", Some(3600), "pause").await;
+    let template_id = ctx.create_template_with_keep_time("keep-time-connected", 3600, "pause").await;
     let instance_id = ctx.create_running_instance_with_last_seen_at(template_id, Some(now - chrono::Duration::seconds(7200))).await;
 
     let mut mock_docker = MockDockerService::new();
@@ -598,7 +598,7 @@ async fn test_keep_time_active_connection_resets_timer() {
 async fn test_keep_time_connection_check_failure_skips() {
     let ctx = WorkerTestContext::new().await;
     let now = chrono::Utc::now();
-    let template_id = ctx.create_template_with_keep_time("keep-time-check-fail", Some(3600), "remove").await;
+    let template_id = ctx.create_template_with_keep_time("keep-time-check-fail", 3600, "remove").await;
     let instance_id = ctx.create_running_instance_with_last_seen_at(template_id, Some(now - chrono::Duration::seconds(7200))).await;
 
     let mut mock_docker = MockDockerService::new();
@@ -628,7 +628,7 @@ async fn test_keep_time_connection_check_failure_skips() {
 async fn test_auto_sleep_not_reached_limit() {
     let ctx = WorkerTestContext::new().await;
     let now = chrono::Utc::now();
-    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-not-yet", Some(3600), "remove").await;
+    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-not-yet", 3600, "remove").await;
     let instance_id = ctx.create_running_instance(template_id, Some(now - chrono::Duration::seconds(3599))).await;
 
     let mock_docker = MockDockerService::new();
@@ -654,7 +654,7 @@ async fn test_auto_sleep_not_reached_limit() {
 async fn test_auto_sleep_skips_old_instance_without_started_at() {
     let ctx = WorkerTestContext::new().await;
     let now = chrono::Utc::now();
-    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-old", Some(3600), "remove").await;
+    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-old", 3600, "remove").await;
     let instance_id = ctx.create_running_instance(template_id, None).await;
 
     let mock_docker = MockDockerService::new();
@@ -680,7 +680,7 @@ async fn test_auto_sleep_skips_old_instance_without_started_at() {
 async fn test_auto_sleep_skips_disabled_template() {
     let ctx = WorkerTestContext::new().await;
     let now = chrono::Utc::now();
-    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-disabled", None, "remove").await;
+    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-disabled", -1, "remove").await;
     let instance_id = ctx.create_running_instance(template_id, Some(now - chrono::Duration::seconds(7200))).await;
 
     let mock_docker = MockDockerService::new();
@@ -706,7 +706,7 @@ async fn test_auto_sleep_skips_disabled_template() {
 async fn test_auto_sleep_reads_template_config_each_scan() {
     let ctx = WorkerTestContext::new().await;
     let now = chrono::Utc::now();
-    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-recheck", Some(7200), "stop").await;
+    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-recheck", 7200, "stop").await;
     let instance_id = ctx.create_running_instance(template_id, Some(now - chrono::Duration::seconds(4000))).await;
 
     let instance_repo = WorkspaceInstanceRepository::new(&ctx.db);
@@ -750,7 +750,7 @@ async fn test_auto_sleep_reads_template_config_each_scan() {
 async fn test_auto_sleep_stop_clears_vnc_cache_and_route() {
     let ctx = WorkerTestContext::new().await;
     let now = chrono::Utc::now();
-    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-stop-cache", Some(3600), "stop").await;
+    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-stop-cache", 3600, "stop").await;
     let instance_id = ctx.create_running_instance(template_id, Some(now - chrono::Duration::seconds(3601))).await;
 
     let mut mock_docker = MockDockerService::new();
@@ -779,7 +779,7 @@ async fn test_auto_sleep_stop_clears_vnc_cache_and_route() {
 async fn test_auto_sleep_pause_preserves_vnc_cache() {
     let ctx = WorkerTestContext::new().await;
     let now = chrono::Utc::now();
-    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-pause-cache", Some(3600), "pause").await;
+    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-pause-cache", 3600, "pause").await;
     let instance_id = ctx.create_running_instance(template_id, Some(now - chrono::Duration::seconds(3601))).await;
 
     let mut mock_docker = MockDockerService::new();
@@ -813,7 +813,7 @@ async fn test_auto_sleep_pause_preserves_vnc_cache() {
 async fn test_auto_sleep_no_double_trigger_on_rescan() {
     let ctx = WorkerTestContext::new().await;
     let now = chrono::Utc::now();
-    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-rescan", Some(3600), "stop").await;
+    let template_id = ctx.create_template_with_auto_sleep("auto-sleep-rescan", 3600, "stop").await;
     let instance_id = ctx.create_running_instance(template_id, Some(now - chrono::Duration::seconds(3601))).await;
 
     let mut mock_docker = MockDockerService::new();
@@ -855,7 +855,7 @@ async fn test_auto_sleep_no_double_trigger_on_rescan() {
 async fn test_keep_time_pause_fires() {
     let ctx = WorkerTestContext::new().await;
     let now = chrono::Utc::now();
-    let template_id = ctx.create_template_with_keep_time("keep-time-pause", Some(3600), "pause").await;
+    let template_id = ctx.create_template_with_keep_time("keep-time-pause", 3600, "pause").await;
     let instance_id = ctx.create_running_instance_with_last_seen_at(template_id, Some(now - chrono::Duration::seconds(7200))).await;
 
     let mut mock_docker = MockDockerService::new();
@@ -887,7 +887,7 @@ async fn test_keep_time_pause_fires() {
 async fn test_keep_time_stop_fires() {
     let ctx = WorkerTestContext::new().await;
     let now = chrono::Utc::now();
-    let template_id = ctx.create_template_with_keep_time("keep-time-stop", Some(3600), "stop").await;
+    let template_id = ctx.create_template_with_keep_time("keep-time-stop", 3600, "stop").await;
     let instance_id = ctx.create_running_instance_with_last_seen_at(template_id, Some(now - chrono::Duration::seconds(7200))).await;
 
     let mut mock_docker = MockDockerService::new();
@@ -923,7 +923,7 @@ async fn test_keep_time_stop_fires() {
 async fn test_keep_time_remove_fires() {
     let ctx = WorkerTestContext::new().await;
     let now = chrono::Utc::now();
-    let template_id = ctx.create_template_with_keep_time("keep-time-remove", Some(3600), "remove").await;
+    let template_id = ctx.create_template_with_keep_time("keep-time-remove", 3600, "remove").await;
     let instance_id = ctx.create_running_instance_with_last_seen_at(template_id, Some(now - chrono::Duration::seconds(7200))).await;
 
     let mut mock_docker = MockDockerService::new();
@@ -958,7 +958,7 @@ async fn test_keep_time_remove_fires() {
 async fn test_keep_time_not_yet_expired() {
     let ctx = WorkerTestContext::new().await;
     let now = chrono::Utc::now();
-    let template_id = ctx.create_template_with_keep_time("keep-time-recent", Some(3600), "remove").await;
+    let template_id = ctx.create_template_with_keep_time("keep-time-recent", 3600, "remove").await;
     let instance_id = ctx.create_running_instance_with_last_seen_at(template_id, Some(now)).await;
 
     let mut mock_docker = MockDockerService::new();
@@ -986,7 +986,7 @@ async fn test_keep_time_not_yet_expired() {
 async fn test_keep_time_skips_null_last_seen_at() {
     let ctx = WorkerTestContext::new().await;
     let now = chrono::Utc::now();
-    let template_id = ctx.create_template_with_keep_time("keep-time-null-seen", Some(3600), "remove").await;
+    let template_id = ctx.create_template_with_keep_time("keep-time-null-seen", 3600, "remove").await;
     let instance_id = ctx.create_running_instance_with_last_seen_at(template_id, None).await;
 
     let mock_docker = MockDockerService::new();
@@ -1012,7 +1012,7 @@ async fn test_keep_time_skips_null_last_seen_at() {
 async fn test_keep_time_skips_disabled_template() {
     let ctx = WorkerTestContext::new().await;
     let now = chrono::Utc::now();
-    let template_id = ctx.create_template_with_keep_time("keep-time-disabled", None, "remove").await;
+    let template_id = ctx.create_template_with_keep_time("keep-time-disabled", -1, "remove").await;
     let instance_id = ctx.create_running_instance_with_last_seen_at(template_id, Some(now - chrono::Duration::seconds(7200))).await;
 
     let mock_docker = MockDockerService::new();
@@ -1038,7 +1038,7 @@ async fn test_keep_time_skips_disabled_template() {
 async fn test_keep_time_honors_midrun_template_change() {
     let ctx = WorkerTestContext::new().await;
     let now = chrono::Utc::now();
-    let template_id = ctx.create_template_with_keep_time("keep-time-recheck", Some(60), "stop").await;
+    let template_id = ctx.create_template_with_keep_time("keep-time-recheck", 60, "stop").await;
     let instance_id = ctx.create_running_instance_with_last_seen_at(template_id, Some(now - chrono::Duration::seconds(120))).await;
 
     let instance_repo = WorkspaceInstanceRepository::new(&ctx.db);
@@ -1065,7 +1065,7 @@ async fn test_keep_time_honors_midrun_template_change() {
             &template.timeout_action,
             template.network_bandwidth_up_mbps,
             template.network_bandwidth_down_mbps,
-            Some(3600),
+            3600,
             "stop", false)
         .await
         .unwrap();
@@ -1105,7 +1105,7 @@ async fn test_keep_time_honors_midrun_template_change() {
             &template.timeout_action,
             template.network_bandwidth_up_mbps,
             template.network_bandwidth_down_mbps,
-            Some(60),
+            60,
             "stop", false)
         .await
         .unwrap();
@@ -1133,7 +1133,7 @@ async fn test_keep_time_honors_midrun_template_change() {
 async fn test_keep_time_no_retrigger_after_pause() {
     let ctx = WorkerTestContext::new().await;
     let now = chrono::Utc::now();
-    let template_id = ctx.create_template_with_keep_time("keep-time-rescan", Some(3600), "pause").await;
+    let template_id = ctx.create_template_with_keep_time("keep-time-rescan", 3600, "pause").await;
     let instance_id = ctx.create_running_instance_with_last_seen_at(template_id, Some(now - chrono::Duration::seconds(7200))).await;
 
     let mut mock_docker = MockDockerService::new();

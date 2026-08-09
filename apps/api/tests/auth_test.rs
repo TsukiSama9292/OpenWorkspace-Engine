@@ -49,7 +49,7 @@ async fn test_login_context_envelope_fields() {
     assert_eq!(context["tier"], 2);
     assert_eq!(context["can_create_template"], true);
     assert_eq!(context["can_manage_users"], true);
-    assert_eq!(context["effective_max_instances"], 0);
+    assert_eq!(context["effective_max_instances"], -1);
     assert_eq!(context["allowed_template_ids"].as_array().unwrap().len(), 0);
     assert_eq!(context["group_ids"].as_array().unwrap().len(), 1, "admin holds the Admin group");
 }

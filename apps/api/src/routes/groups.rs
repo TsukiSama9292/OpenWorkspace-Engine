@@ -28,6 +28,18 @@ fn default_max_instances() -> i32 {
     2
 }
 
+fn default_unlimited_cpu() -> i32 {
+    -1
+}
+
+fn default_unlimited_memory() -> i64 {
+    -1
+}
+
+fn default_unlimited_gpu() -> i32 {
+    -1
+}
+
 fn default_billing_model() -> String {
     "shared".to_string()
 }
@@ -60,12 +72,12 @@ struct GroupInput {
     template_ids: Vec<Uuid>,
     #[serde(default = "default_billing_model")]
     billing_model: String,
-    /// `0` = unlimited.
-    #[serde(default)]
+    /// `-1` = unlimited, `0` = blocked.
+    #[serde(default = "default_unlimited_cpu")]
     pool_cpu_cores: i32,
-    #[serde(default)]
+    #[serde(default = "default_unlimited_memory")]
     pool_memory_mb: i64,
-    #[serde(default)]
+    #[serde(default = "default_unlimited_gpu")]
     pool_gpu_count: i32,
 }
 
@@ -96,13 +108,13 @@ fn validate_group_input(input: &GroupInput) -> Result<(), StatusCode> {
     if input.name.trim().is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
-    if input.max_instances < 0 {
+    if input.max_instances < -1 {
         return Err(StatusCode::BAD_REQUEST);
     }
     if input.billing_model != "shared" && input.billing_model != "dedicated" {
         return Err(StatusCode::BAD_REQUEST);
     }
-    if input.pool_cpu_cores < 0 || input.pool_memory_mb < 0 || input.pool_gpu_count < 0 {
+    if input.pool_cpu_cores < -1 || input.pool_memory_mb < -1 || input.pool_gpu_count < -1 {
         return Err(StatusCode::BAD_REQUEST);
     }
     Ok(())

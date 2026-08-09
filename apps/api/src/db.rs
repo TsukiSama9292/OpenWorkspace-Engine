@@ -106,11 +106,11 @@ pub mod workspace_template {
         pub remote_type: String,
         pub container_runtime: String,
         pub persistent_storage_path: Option<String>,
-        pub max_run_seconds: Option<i64>,
+        pub max_run_seconds: i64,
         pub timeout_action: String,
         pub network_bandwidth_up_mbps: i32,
         pub network_bandwidth_down_mbps: i32,
-        pub keep_time_seconds: Option<i64>,
+        pub keep_time_seconds: i64,
         pub keep_time_action: String,
         pub docker_in_instance: bool,
         pub visibility: String,
@@ -310,14 +310,15 @@ pub mod group {
         /// Audit-log viewer gate (observability-logs spec): admin or a group
         /// flag; Manager system group defaults on.
         pub can_view_audit_logs: bool,
-        /// `None` (NULL) means "unlimited" (the Admin group's ceiling).
+        /// `None` (NULL) and `-1` both mean "unlimited" (the Admin group's
+        /// ceiling); `0` blocks.
         pub max_instances: Option<i32>,
         /// How member instances bill resources: `shared` (the whole group's
         /// active instances sum against the pool) or `dedicated` (each member's
         /// own instances sum against the pool).
         pub billing_model: String,
-        /// The group's resource pool (`0` = unlimited, matching the ceiling
-        /// convention): cpu cores, memory MB, gpu count.
+        /// The group's resource pool (`-1` = unlimited, `0` = blocked, matching
+        /// the ceiling convention): cpu cores, memory MB, gpu count.
         pub pool_cpu_cores: i32,
         pub pool_memory_mb: i64,
         pub pool_gpu_count: i32,
@@ -415,11 +416,11 @@ pub struct WorkspaceTemplate {
     pub exec_config: serde_json::Value,
     pub volume_mappings: serde_json::Value,
     pub persistent_storage_path: Option<String>,
-    pub max_run_seconds: Option<i64>,
+    pub max_run_seconds: i64,
     pub timeout_action: String,
     pub network_bandwidth_up_mbps: i32,
     pub network_bandwidth_down_mbps: i32,
-    pub keep_time_seconds: Option<i64>,
+    pub keep_time_seconds: i64,
     pub keep_time_action: String,
     pub docker_in_instance: bool,
     pub visibility: TemplateVisibility,
@@ -1131,11 +1132,11 @@ impl<'a> WorkspaceTemplateRepository<'a> {
         exec_config: &serde_json::Value,
         volume_mappings: &serde_json::Value,
         persistent_storage_path: Option<&str>,
-        max_run_seconds: Option<i64>,
+        max_run_seconds: i64,
         timeout_action: &str,
         network_bandwidth_up_mbps: i32,
         network_bandwidth_down_mbps: i32,
-        keep_time_seconds: Option<i64>,
+        keep_time_seconds: i64,
         keep_time_action: &str,
         docker_in_instance: bool,
     ) -> Result<WorkspaceTemplate, sea_orm::DbErr> {
@@ -1215,11 +1216,11 @@ impl<'a> WorkspaceTemplateRepository<'a> {
         exec_config: &serde_json::Value,
         volume_mappings: &serde_json::Value,
         persistent_storage_path: Option<&str>,
-        max_run_seconds: Option<i64>,
+        max_run_seconds: i64,
         timeout_action: &str,
         network_bandwidth_up_mbps: i32,
         network_bandwidth_down_mbps: i32,
-        keep_time_seconds: Option<i64>,
+        keep_time_seconds: i64,
         keep_time_action: &str,
         docker_in_instance: bool,
     ) -> Result<bool, sea_orm::DbErr> {

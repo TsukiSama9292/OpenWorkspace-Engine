@@ -430,7 +430,7 @@ async fn update_user(
     }
     if let Some(direct) = input.direct_max_instances {
         if let Some(ceiling) = direct
-            && ceiling < 0 {
+            && ceiling < -1 {
                 return Err(StatusCode::BAD_REQUEST);
             }
         repo.set_direct_max_instances(id, direct)

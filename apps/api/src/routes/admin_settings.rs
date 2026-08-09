@@ -28,13 +28,13 @@ pub struct UpdateSettingsRequest {
 }
 
 impl UpdateSettingsRequest {
-    /// Every knob must be non-negative (`0` carries its documented meaning:
-    /// unlimited / disabled).
+    /// Every knob must be `>= -1` (`-1` carries its documented meaning:
+    /// unlimited / disabled; `0` is a real zero).
     fn validate(&self) -> Result<(), StatusCode> {
-        if self.host_instance_limit >= 0
-            && self.host_cpu_cores >= 0
-            && self.host_memory_mb >= 0
-            && self.host_gpu_count >= 0
+        if self.host_instance_limit >= -1
+            && self.host_cpu_cores >= -1
+            && self.host_memory_mb >= -1
+            && self.host_gpu_count >= -1
         {
             Ok(())
         } else {

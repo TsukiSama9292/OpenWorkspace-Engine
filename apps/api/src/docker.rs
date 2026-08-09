@@ -415,10 +415,10 @@ pub trait DockerService: Send + Sync {
         container_id: &str,
     ) -> Result<(), bollard::errors::Error>;
 
-    /// Apply per-instance network bandwidth limits (Mbps, `0` = unlimited).
-    /// Egress on the container's `eth0` is shaped for upload; egress on the
-    /// host-side veth (the container's ingress) is shaped for download.
-    /// A fully unlimited request is a no-op.
+    /// Apply per-instance network bandwidth limits (Mbps, `-1`/`0` = no cap,
+    /// `> 0` = shape). Egress on the container's `eth0` is shaped for upload;
+    /// egress on the host-side veth (the container's ingress) is shaped for
+    /// download. A fully unlimited request is a no-op.
     async fn apply_bandwidth_limit(
         &self,
         container_id: &str,

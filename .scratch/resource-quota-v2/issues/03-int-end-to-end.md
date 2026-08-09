@@ -6,12 +6,21 @@
 together against a running dev stack with real Docker containers — the quota
 feature's happy path and its rejections, end to end: launching into a billing
 group, hitting each quota layer and reading the rendered rejection, managing
-quotas in the UI, and restart behaviour once a quota is exhausted.
+quotas in the UI, the `-1` unlimited convention round-tripping through
+template / group / settings forms, and restart behaviour once a quota is
+exhausted.
 
 **Blocked by:** 02 — Frontend: quota UI (billing-group picker, layered Groups
-tab, `0`/`-1` forms)
+tab, `-1` convention forms)
 
 **Status:** ready-for-agent
+
+## Status — 2026-08-09
+
+Not started. No E2E work has been done and no dev stack has been booted this
+session; backend (01) is mid-flight and frontend (02) is untouched. The full
+Playwright suite will run against the running dev stack only once both tickets
+land (per the AGENTS.md `test:e2e:full` flow).
 
 ## Acceptance criteria
 
@@ -35,6 +44,11 @@ tab, `0`/`-1` forms)
 - [ ] Host caps configured in Admin Settings reject an over-cap launch with a
       host-scope `409` while an unlimited (`-1`) template request into a finite
       host cap is refused.
+- [ ] The `-1` convention round-trips through the UI: creating a template with
+      `-1` cores/bandwidth (the unlimited toggle) persists and launches; an
+      admin setting `-1` on a host cap / `host_instance_limit` and a group
+      setting `-1` on its pool are saved and read back as unlimited; a `0`
+      pool blocks launches through the pool editor.
 - [ ] Suite runs against the booted dev stack (`pnpm run dev:nosudo`, launched
       via the documented `setsid` flow), tears down cleanly, and leaves no
       stray containers or routes.
