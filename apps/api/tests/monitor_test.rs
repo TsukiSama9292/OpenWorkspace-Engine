@@ -282,6 +282,11 @@ impl MonitorContext {
             host_port: Set(Some(15000)),
             started_at: Set(Some(now)),
             last_seen_at: Set(None),
+            owner_group_id: Set(None),
+            billing_group_snapshot: Set(None),
+            host_cpu_cores: Set(2),
+            host_memory_mb: Set(4096),
+            host_gpu_count: Set(0),
             created_at: Set(now),
             updated_at: Set(now),
         }

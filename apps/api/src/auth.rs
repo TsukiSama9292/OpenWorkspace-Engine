@@ -206,6 +206,8 @@ mod tests {
                 allowed_template_ids: vec![],
                 group_ids: vec![],
                 direct_max_instances: None,
+                group_billing: vec![],
+                resource_quotas: crate::effective_context::ResourceUse::default(),
             },
             client_ip: Some("203.0.113.9".to_string()),
         }

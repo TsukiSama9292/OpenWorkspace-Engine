@@ -502,7 +502,7 @@ impl From<workspace_instance::Model> for WorkspaceInstance {
             started_at: m.started_at,
             last_seen_at: m.last_seen_at,
             owner_group_id: m.owner_group_id,
-            billing_group_snapshot: m.billing_group_snapshot.map(|j| j.into()),
+            billing_group_snapshot: m.billing_group_snapshot,
             host_cpu_cores: m.host_cpu_cores,
             host_memory_mb: m.host_memory_mb,
             host_gpu_count: m.host_gpu_count,

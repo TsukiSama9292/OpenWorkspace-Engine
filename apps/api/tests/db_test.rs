@@ -1535,6 +1535,11 @@ fn instance_model_from_converts_all_fields() {
         resolved_volume_host_path: Some("/host/path".to_string()),
         started_at: Some(now),
         last_seen_at: Some(now),
+        owner_group_id: None,
+        billing_group_snapshot: None,
+        host_cpu_cores: 2,
+        host_memory_mb: 4096,
+        host_gpu_count: 0,
         created_at: now,
         updated_at: now,
     };
@@ -1552,6 +1557,11 @@ fn instance_model_from_converts_all_fields() {
     assert_eq!(inst.resolved_volume_host_path, Some("/host/path".to_string()));
     assert_eq!(inst.started_at, Some(now));
     assert_eq!(inst.last_seen_at, Some(now));
+    assert_eq!(inst.owner_group_id, None);
+    assert_eq!(inst.billing_group_snapshot, None);
+    assert_eq!(inst.host_cpu_cores, 2);
+    assert_eq!(inst.host_memory_mb, 4096);
+    assert_eq!(inst.host_gpu_count, 0);
 }
 
 #[test]
@@ -1571,6 +1581,11 @@ fn instance_model_from_none_optionals() {
         resolved_volume_host_path: None,
         started_at: None,
         last_seen_at: None,
+        owner_group_id: None,
+        billing_group_snapshot: None,
+        host_cpu_cores: 0,
+        host_memory_mb: 0,
+        host_gpu_count: 0,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };
@@ -1580,6 +1595,8 @@ fn instance_model_from_none_optionals() {
     assert!(inst.resolved_volume_host_path.is_none());
     assert!(inst.started_at.is_none());
     assert!(inst.last_seen_at.is_none());
+    assert!(inst.owner_group_id.is_none());
+    assert!(inst.billing_group_snapshot.is_none());
     assert!(!inst.mount_persistent);
 }
 

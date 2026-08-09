@@ -32,7 +32,7 @@ use sea_orm::{
 use uuid::Uuid;
 
 use crate::db::{
-    user, workspace_instance, GroupRecord, WorkspaceInstance, WorkspaceTemplate, ACTIVE_STATUSES,
+    user, workspace_instance, WorkspaceInstance, WorkspaceTemplate, ACTIVE_STATUSES,
 };
 use crate::effective_context::{
     pre_flight, add_use, EffectiveContext, PreflightReject, QuotaContext, ResourceUse,
