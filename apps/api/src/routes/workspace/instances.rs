@@ -355,6 +355,7 @@ fn instance_logs_stream(
     ),
     responses(
         (status = 200, description = "text/event-stream of container output; a terminal `end` event carries the stop reason (stopped | paused | deleted | eof)"),
+        (status = 400, description = "malformed query string (tail not an integer, follow not true/false, or invalid uuid)"),
         (status = 401, description = "missing or invalid ow_token"),
         (status = 403, description = "requires mayControlInstance (owner, admin, or lower-tier group-instance holder)"),
         (status = 404, description = "instance not found"),
