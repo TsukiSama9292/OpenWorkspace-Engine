@@ -28,7 +28,7 @@ impl MigrationTrait for Migration {
             ALTER TABLE groups
                 ADD COLUMN billing_model VARCHAR(16) NOT NULL DEFAULT 'shared',
                 ADD COLUMN pool_cpu_cores INT NOT NULL DEFAULT 0,
-                ADD COLUMN pool_memory_mb INT NOT NULL DEFAULT 0,
+                ADD COLUMN pool_memory_mb BIGINT NOT NULL DEFAULT 0,
                 ADD COLUMN pool_gpu_count INT NOT NULL DEFAULT 0
             "#,
         )
