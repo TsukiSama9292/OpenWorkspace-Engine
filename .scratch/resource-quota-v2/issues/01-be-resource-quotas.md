@@ -24,9 +24,16 @@ not lock anyone out.
 
 **Blocked by:** None — can start immediately
 
-**Status:** ready-for-agent
+**Status:** completed (backend ticket delivered — migration, runtime flip,
+validation, and tests all green: `check.sh` silent, `run_tests.sh` 715/715)
 
 ## Implementation audit — 2026-08-09 (working tree on `feature/resource-quotas`)
+
+> **Status update (2026-08-09, after full-suite green):** all "Remaining /
+> needs change" items below are **done** and committed on
+> `feature/resource-quotas`; `bash scripts/check.sh` is silent (zero warnings,
+> both feature sets) and `bash scripts/run_tests.sh` is **green: 715/715
+> passed**. The full gate also uncovered and fixed three real bugs (below).
 
 ### Done (uncommitted working tree)
 
@@ -37,7 +44,7 @@ not lock anyone out.
   `NOT NULL DEFAULT -1`; `groups.max_instances` `NULL|0 → -1` + `NOT NULL DEFAULT -1`;
   `groups.pool_*` `0 → -1` + `DEFAULT -1`; `system_settings.host_instance_limit` `0 → -1` +
   `DEFAULT -1`; `system_settings.host_*` caps `0 → -1` + `DEFAULT -1`;
-  `users.direct_max_instances` `0 → -1` (stays nullable, `DEFAULT -1`). `down()` reverts defaults.
+  `users.direct_max_instances` `0 → -1` (stays nullable). `down()` reverts defaults.
 - `src/db.rs`: template entity/repo `max_run_seconds`/`keep_time_seconds` `Option<i64> → i64`;
   group pool doc → `-1`; create/update signatures take `i64`.
 - `src/system_settings.rs`: host-cap docs `-1` = unlimited / `0` = blocked.
@@ -84,6 +91,35 @@ not lock anyone out.
   untouched) — verify it builds against the `i64` repo signature.
 - Gates not yet run after the latest edits: `cargo check --tests`, `scripts/check.sh`,
   `scripts/run_tests.sh`.
+
+### Full-gate findings (all fixed + committed on `feature/resource-quotas`)
+
+- `tests/flat_rbac_e2e_test.rs` (486 / 534 / 566–567) and `tests/instances_mock_test.rs`
+  (`seed_pool_group` doc + call sites `(2,-1,-1)` etc., shrink PUT, host-ceiling PUT,
+  host-cap PUT `host_instance_limit`/memory/gpu → `-1`, keep cpu `2`) — **done**.
+- `tests/health_worker_test.rs` (81/142/194) + `tests/db_test.rs` (757/956/981): `.create` /
+  `.update` passed `None` into the new `i64` positions → **`-1`**.
+- `src/effective_context.rs:164-166`: the ceiling `match` was non-exhaustive
+  (`None | Some(limit) if limit < 0` — E0408/E0004) → split into
+  `None` / `Some(<0)` / `Some(finite)` arms.
+- **Behavior bug:** no groups + no direct ceiling resolved to `0` (blocked) instead of `-1`
+  (unlimited). Fixed `calculate_effective_context`:
+  `unlimited = user.direct_max_instances.is_none() && groups.is_empty()`;
+  covered by `no_groups_no_direct_is_unlimited_but_default_deny`.
+- **Behavior bug:** migration 000026 set `users.direct_max_instances DEFAULT -1`, so every
+  fresh user was silently unlimited instead of `NULL` = inherit group ceiling (spec Decision 2).
+  Removed the `SET DEFAULT -1` (kept the `0 → -1` row rewrite; `down()` already set
+  `DEFAULT NULL`, confirming the intent). Fixed `tests/db_test.rs` assertions accordingly.
+- **Outdated test:** `test_create_template_rejects_negative_network_bandwidth` treated `-1`
+  as invalid; under the convention `-1` = unlimited is valid, only `< -1` is rejected.
+  Split into `accepts_unlimited_bandwidth` (200) + `rejects_negative_network_bandwidth`
+  (`-5` → 400).
+- **Outdated assertion:** `tests/db_test.rs` ~276 fresh custom group ceiling now defaults to
+  `-1` (not `2`); ~406 Admin is still `None` in the stop-at-000020 test (migration 000026
+  rewrites it to `-1` only in the full chain).
+- **OpenAPI spec:** regenerated (`apps/api/security/openapi.json`) for the `-1` sentinel doc
+  changes; `committed_spec_is_in_sync` green.
+- Gates: `bash scripts/check.sh` **silent**; `bash scripts/run_tests.sh` **715/715 passed**.
 
 ## Acceptance criteria
 
