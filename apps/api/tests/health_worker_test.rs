@@ -158,7 +158,7 @@ impl WorkerTestContext {
                 timeout_action,
                 0,
                 0,
-                None,
+                -1,
                 "pause", false)
             .await
             .unwrap();
