@@ -3837,7 +3837,7 @@ async fn test_group_billing_endpoint_reports_usage() {
     assert_eq!(body["group"]["billing_model"], "shared");
     assert_eq!(body["group"]["pool_cpu_cores"], 8);
     assert_eq!(body["used"]["cpu_cores"], 2);
-    assert_eq!(body["used"]["memory_mb"], 4294967296);
+    assert_eq!(body["used"]["memory_mb"], 4294967296i64);
     assert_eq!(body["used"]["gpu_count"], 0);
     let members = body["members"].as_array().unwrap();
     assert_eq!(members.len(), 1);
