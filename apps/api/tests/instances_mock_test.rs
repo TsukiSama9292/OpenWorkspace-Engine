@@ -3613,6 +3613,277 @@ async fn test_gate_admin_settings_requires_system_admin() {
     assert_eq!(ctx.put_auth("/api/admin/settings", &settings_body, &flagged_token).await.status(), 403);
 }
 
+// ── Ticket 07: group & host resource quota pools ────────────────
+
+/// Seed a custom group with a `shared` billing model and the given resource
+/// pool (`0` = unlimited, matching the ceiling convention). Returns its id.
+async fn seed_pool_group(
+    ctx: &MockContext,
+    name: &str,
+    pool_cpu_cores: i32,
+    pool_memory_mb: i64,
+    pool_gpu_count: i32,
+) -> String {
+    use openworkspace_api::db::group;
+    use sea_orm::{ActiveModelTrait, Set};
+    let id = uuid::Uuid::new_v4();
+    group::ActiveModel {
+        id: Set(id),
+        name: Set(name.to_string()),
+        description: Set(None),
+        kind: Set(None),
+        can_create_template: Set(false),
+        can_manage_users: Set(false),
+        can_manage_group_instances: Set(false),
+        can_manage_docker: Set(false),
+        can_manage_registry: Set(false),
+        can_view_monitoring: Set(false),
+        can_view_audit_logs: Set(false),
+        max_instances: Set(Some(4)),
+        billing_model: Set("shared".to_string()),
+        pool_cpu_cores: Set(pool_cpu_cores),
+        pool_memory_mb: Set(pool_memory_mb),
+        pool_gpu_count: Set(pool_gpu_count),
+        ..Default::default()
+    }
+    .insert(&ctx.db)
+    .await
+    .unwrap();
+    id.to_string()
+}
+
+#[tokio::test]
+async fn test_launch_consumes_billing_group_pool() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .times(1)
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    }).await;
+
+    let admin_token = ctx.login_admin().await;
+    // A 2-core pool fits exactly one default template (2 cores).
+    let group_id = seed_pool_group(&ctx, "pool-grp", 2, 0, 0).await;
+    let template_id = create_template_only(&ctx, &admin_token, "pool-launch").await;
+    let user_id = create_quota_user(&ctx, &admin_token, "pool_user", 5).await;
+    add_group_member(&ctx, &user_id, &group_id).await;
+    grant_group_template(&ctx, &group_id, &template_id).await;
+    let user_token = ctx.login_user("pool_user", "password123").await;
+
+    // The first launch bills against the group pool and records the attribution.
+    let first = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "owner_group_id": group_id,
+    }), &user_token).await;
+    assert_eq!(first.status(), 200, "body: {:?}", first.text().await);
+    let body: serde_json::Value = first.json().await.unwrap();
+    assert_eq!(body["instance"]["owner_group_id"], serde_json::json!(group_id));
+    assert_eq!(body["instance"]["host_cpu_cores"], 2);
+    assert_eq!(body["instance"]["billing_group_snapshot"]["pool_cpu_cores"], 2);
+    assert_eq!(body["instance"]["billing_group_snapshot"]["billing_model"], "shared");
+
+    // A second identical launch no longer fits the 2-core pool → 409.
+    let second = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "owner_group_id": group_id,
+    }), &user_token).await;
+    assert_eq!(second.status(), 409);
+    let body: serde_json::Value = second.json().await.unwrap();
+    assert_eq!(body["rejection"]["scope"], "group_pool_cpu");
+    assert_eq!(body["rejection"]["current"], 2);
+    assert_eq!(body["rejection"]["limit"], 2);
+    assert_eq!(body["rejection"]["requested"], 1);
+    assert_eq!(body["rejection"]["group_id"], serde_json::json!(group_id));
+}
+
+#[tokio::test]
+async fn test_launch_billing_group_not_member_returns_403() {
+    let ctx = MockContext::new(|_| {}).await;
+    let admin_token = ctx.login_admin().await;
+
+    let group_id = seed_pool_group(&ctx, "foreign-pool", 2, 0, 0).await;
+    let template_id = create_template_only(&ctx, &admin_token, "foreign-launch").await;
+    let user_id = create_quota_user(&ctx, &admin_token, "foreign_user", 5).await;
+    grant_template_whitelist(&ctx, &user_id, &template_id).await;
+    let user_token = ctx.login_user("foreign_user", "password123").await;
+
+    // The user is not a member of the group → 403 before any Docker call.
+    let resp = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "owner_group_id": group_id,
+    }), &user_token).await;
+    assert_eq!(resp.status(), 403);
+}
+
+#[tokio::test]
+async fn test_group_delete_blocked_while_billed() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .times(1)
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    }).await;
+    let admin_token = ctx.login_admin().await;
+
+    let group_id = seed_pool_group(&ctx, "del-pool", 0, 0, 0).await;
+    let template_id = create_template_only(&ctx, &admin_token, "del-launch").await;
+    let user_id = create_quota_user(&ctx, &admin_token, "del_user", 5).await;
+    add_group_member(&ctx, &user_id, &group_id).await;
+    grant_group_template(&ctx, &group_id, &template_id).await;
+    let user_token = ctx.login_user("del_user", "password123").await;
+
+    let launch = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "owner_group_id": group_id,
+    }), &user_token).await;
+    assert_eq!(launch.status(), 200, "body: {:?}", launch.text().await);
+
+    // The group is still a billing target → deletion refused with 409.
+    let del = ctx.delete_auth(&format!("/api/groups/{}", group_id), &admin_token).await;
+    assert_eq!(del.status(), 409, "body: {:?}", del.text().await);
+}
+
+#[tokio::test]
+async fn test_restart_reruns_current_pool_check_after_shrink() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .times(2)
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    }).await;
+    let admin_token = ctx.login_admin().await;
+
+    // A 4-core pool fits two default templates (2 cores each).
+    let group_id = seed_pool_group(&ctx, "shrink-pool", 4, 0, 0).await;
+    let template_id = create_template_only(&ctx, &admin_token, "shrink-launch").await;
+    let (user_a, token_a) = create_user_and_token(&ctx, &admin_token, "shrink_a").await;
+    let (user_b, token_b) = create_user_and_token(&ctx, &admin_token, "shrink_b").await;
+    add_group_member(&ctx, &user_a, &group_id).await;
+    add_group_member(&ctx, &user_b, &group_id).await;
+    grant_group_template(&ctx, &group_id, &template_id).await;
+    seed_direct_max_instances(&ctx, &user_a, 5).await;
+    seed_direct_max_instances(&ctx, &user_b, 5).await;
+
+    let a = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "owner_group_id": group_id,
+    }), &token_a).await;
+    assert_eq!(a.status(), 200, "body: {:?}", a.text().await);
+    let a_id = a.json::<serde_json::Value>().await.unwrap()["instance"]["id"]
+        .as_str().unwrap().to_string();
+    let b = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "owner_group_id": group_id,
+    }), &token_b).await;
+    assert_eq!(b.status(), 200, "body: {:?}", b.text().await);
+
+    // A stops → the pool frees its share (stopped instances do not bill).
+    set_instance_status(&ctx.db, &a_id, "stopped", Some("fake-container-id")).await;
+
+    // Admin shrinks the pool to fit a single instance.
+    let shrink = ctx.put_auth(&format!("/api/groups/{}", group_id), &serde_json::json!({
+        "name": "shrink-pool",
+        "description": null,
+        "can_create_template": false,
+        "can_manage_users": false,
+        "can_manage_group_instances": false,
+        "can_manage_docker": false,
+        "can_manage_registry": false,
+        "can_view_monitoring": false,
+        "can_view_audit_logs": false,
+        "max_instances": 4,
+        "template_ids": [template_id],
+        "billing_model": "shared",
+        "pool_cpu_cores": 2,
+        "pool_memory_mb": 0,
+        "pool_gpu_count": 0,
+    }), &admin_token).await;
+    assert_eq!(shrink.status(), 200, "body: {:?}", shrink.text().await);
+
+    // A's restart re-runs the pre-flight against the *current* pool: B's live
+    // usage fills the shrunk pool, so A is refused (not 500, and not a success
+    // riding the stale pre-shrink snapshot).
+    let restart = ctx.post_auth(&format!("/api/instances/{}/start", a_id), &serde_json::json!({}), &token_a).await;
+    assert_eq!(restart.status(), 409);
+    let body: serde_json::Value = restart.json().await.unwrap();
+    assert_eq!(body["rejection"]["scope"], "group_pool_cpu");
+    assert_eq!(body["rejection"]["current"], 2);
+    assert_eq!(body["rejection"]["limit"], 2);
+}
+
+#[tokio::test]
+async fn test_group_billing_endpoint_reports_usage() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .times(1)
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    }).await;
+    let admin_token = ctx.login_admin().await;
+
+    let group_id = seed_pool_group(&ctx, "billing-grp", 8, 0, 0).await;
+    let template_id = create_template_only(&ctx, &admin_token, "billing-launch").await;
+    let user_id = create_quota_user(&ctx, &admin_token, "billing_user", 5).await;
+    add_group_member(&ctx, &user_id, &group_id).await;
+    grant_group_template(&ctx, &group_id, &template_id).await;
+    let user_token = ctx.login_user("billing_user", "password123").await;
+
+    let launch = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "owner_group_id": group_id,
+    }), &user_token).await;
+    assert_eq!(launch.status(), 200, "body: {:?}", launch.text().await);
+
+    // Admin reads the pool-usage view: pool, aggregate usage, per-member split.
+    let bill = ctx.get_auth(&format!("/api/groups/{}/billing", group_id), &admin_token).await;
+    assert_eq!(bill.status(), 200, "body: {:?}", bill.text().await);
+    let body: serde_json::Value = bill.json().await.unwrap();
+    assert_eq!(body["group"]["billing_model"], "shared");
+    assert_eq!(body["group"]["pool_cpu_cores"], 8);
+    assert_eq!(body["used"]["cpu_cores"], 2);
+    assert_eq!(body["used"]["memory_mb"], 4294967296);
+    assert_eq!(body["used"]["gpu_count"], 0);
+    let members = body["members"].as_array().unwrap();
+    assert_eq!(members.len(), 1);
+    assert_eq!(members[0]["username"], "billing_user");
+    assert_eq!(members[0]["used"]["cpu_cores"], 2);
+}
+
+#[tokio::test]
+async fn test_host_resource_cap_blocks_second_launch() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .times(1)
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    }).await;
+    let admin_token = ctx.login_admin().await;
+
+    // Host cap: exactly one default template (2 cores) host-wide.
+    let set = ctx.put_auth("/api/admin/settings", &serde_json::json!({
+        "host_instance_limit": 0,
+        "host_cpu_cores": 2,
+        "host_memory_mb": 0,
+        "host_gpu_count": 0,
+    }), &admin_token).await;
+    assert_eq!(set.status(), 200, "body: {:?}", set.text().await);
+
+    let template_id = create_template_only(&ctx, &admin_token, "host-cap").await;
+    let user_id = create_quota_user(&ctx, &admin_token, "hostcap_user", 5).await;
+    grant_template_whitelist(&ctx, &user_id, &template_id).await;
+    let user_token = ctx.login_user("hostcap_user", "password123").await;
+
+    let first = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+    }), &user_token).await;
+    assert_eq!(first.status(), 200, "body: {:?}", first.text().await);
+
+    let second = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+    }), &user_token).await;
+    assert_eq!(second.status(), 409);
+    let body: serde_json::Value = second.json().await.unwrap();
+    assert_eq!(body["rejection"]["scope"], "host_resource_cpu");
+    assert_eq!(body["rejection"]["current"], 2);
+    assert_eq!(body["rejection"]["limit"], 2);
+    assert_eq!(body["rejection"]["requested"], 1);
+}
+
 // ── On-demand container logs: SSE endpoint ────────────────────────
 
 /// A canned, finite docker log stream: one stdout line and one stderr line.
