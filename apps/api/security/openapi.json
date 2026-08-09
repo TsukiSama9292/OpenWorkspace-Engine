@@ -211,7 +211,7 @@
             ]
           },
           "effective_max_instances": {
-            "description": "`0` means \"no ceiling\" (matches the `host_instance_limit = 0`\nconvention). Non-zero values are exact per-user limits. Resolved as the\n*maximum* of the personal ceiling and every group ceiling, where 0/NULL\n= unlimited is the highest (spec Decision 4).",
+            "description": "`-1` means \"no ceiling\" (matches the `host_instance_limit = -1`\nconvention); `0` blocks every launch; positive values are exact per-user\nlimits. Resolved as the *maximum* of the personal ceiling and every\ngroup ceiling, where `-1`/NULL = unlimited is the highest (spec\nDecision 4).",
             "format": "int32",
             "type": "integer"
           },
@@ -235,7 +235,7 @@
           },
           "resource_quotas": {
             "$ref": "#/components/schemas/ResourceUse",
-            "description": "The aggregate resource pool across the user's member groups (`0` =\nunlimited, and an unlimited pool wins over every finite one). Reporting\nonly — the launch check uses the pool of the *chosen* billing group."
+            "description": "The aggregate resource pool across the user's member groups (`-1` =\nunlimited, and an unlimited pool wins over every finite one). Reporting\nonly — the launch check uses the pool of the *chosen* billing group."
           },
           "tier": {
             "description": "The maximum tier across the user's group memberships (0/1/2).",
@@ -282,7 +282,7 @@
             "type": "string"
           },
           "pool_cpu_cores": {
-            "description": "`0` means \"unlimited\".",
+            "description": "`-1` means \"unlimited\".",
             "format": "int64",
             "type": "integer"
           },
@@ -512,10 +512,7 @@
           },
           "keep_time_seconds": {
             "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
+            "type": "integer"
           },
           "mount_persistent": {
             "type": "boolean"
@@ -608,6 +605,7 @@
           "access_token",
           "access_password",
           "mount_persistent",
+          "keep_time_seconds",
           "host_cpu_cores",
           "host_memory_mb",
           "host_gpu_count",
@@ -658,7 +656,7 @@
         "type": "object"
       },
       "ResourceUse": {
-        "description": "A snapshot of resource usage and its caps at a point in time. `0` always\nmeans \"unlimited\" for caps.",
+        "description": "A snapshot of resource usage and its caps at a point in time. `-1` always\nmeans \"unlimited\" for caps; `0` is a real zero (a blocked cap for quota\nfields, a zero-cost request for template resources).",
         "properties": {
           "cpu_cores": {
             "format": "int64",
@@ -692,7 +690,7 @@
         "type": "object"
       },
       "SystemSettings": {
-        "description": "The single global-policy knob set exposed by the admin settings API: the\nhost instance ceiling (`0` = unlimited) plus the host-wide resource ceilings.",
+        "description": "The single global-policy knob set exposed by the admin settings API: the\nhost instance ceiling (`-1` = unlimited, `0` = blocked) plus the host-wide\nresource ceilings.",
         "properties": {
           "host_cpu_cores": {
             "format": "int32",
@@ -793,17 +791,11 @@
           },
           "keep_time_seconds": {
             "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
+            "type": "integer"
           },
           "max_run_seconds": {
             "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
+            "type": "integer"
           },
           "memory": {
             "format": "int64",
@@ -859,7 +851,9 @@
           "run_config",
           "exec_config",
           "volume_mappings",
+          "max_run_seconds",
           "timeout_action",
+          "keep_time_seconds",
           "keep_time_action",
           "network_bandwidth_up_mbps",
           "network_bandwidth_down_mbps",
