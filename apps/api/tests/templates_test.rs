@@ -240,16 +240,31 @@ async fn test_create_template_default_network_bandwidth() {
 }
 
 #[tokio::test]
-async fn test_create_template_rejects_negative_network_bandwidth() {
+async fn test_create_template_accepts_unlimited_bandwidth() {
+    // `-1` = unlimited is the valid sentinel under the new convention (spec
+    // Decision 1); only values below `-1` are rejected.
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
     let resp = ctx.post("/api/templates", &serde_json::json!({
-        "name": "bad-up-config",
+        "name": "unlimited-up-config",
         "image": "busybox:1",
         "network_bandwidth_up_mbps": -1
     })).await;
-    assert_eq!(resp.status(), 400);
+    assert_eq!(resp.status(), 200);
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "unlimited-down-config",
+        "image": "busybox:1",
+        "network_bandwidth_down_mbps": -1
+    })).await;
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn test_create_template_rejects_negative_network_bandwidth() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
 
     let resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "bad-down-config",
