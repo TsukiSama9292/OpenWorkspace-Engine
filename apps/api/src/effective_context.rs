@@ -992,7 +992,7 @@ mod tests {
             ..quota()
         };
         assert_eq!(
-            pre_flight(&ctx, 0, 0, uuid(200), 0, TemplateVisibility::Private, &res(1, 2048, 1), &billing),
+            pre_flight(&ctx, 0, 0, uuid(200), 0, TemplateVisibility::Private, &res(2, 2048, 1), &billing),
             Err(PreflightReject::PoolResourceExceeded {
                 resource: ResourceKind::Cpu,
                 current: 3,
@@ -1000,7 +1000,7 @@ mod tests {
                 group_id: Some(uuid(10)),
             })
         );
-        // Memory is the binding resource here: 2048 billed + 2048 requested > 4096 cap.
+        // Memory is the binding resource here: 2048 billed + 2049 requested > 4096 cap.
         assert_eq!(
             pre_flight(&ctx, 0, 0, uuid(200), 0, TemplateVisibility::Private, &res(0, 2049, 0), &billing),
             Err(PreflightReject::PoolResourceExceeded {
