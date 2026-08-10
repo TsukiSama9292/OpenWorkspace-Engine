@@ -829,16 +829,41 @@ async fn launch_instance(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": "Failed to launch instance"})),
         ))?;
-    // A billing group must be one of the user's own member groups — you can
-    // only bill your own groups' pools.
-    if let Some(group_id) = input.owner_group_id
-        && !context.group_ids.contains(&group_id)
-    {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Billing group is not one of your groups"})),
-        ));
-    }
+    // Resolve the billing group (spec User Story 5/6/7 and Decision on the
+    // launch request): a named group must be one of the caller's own member
+    // groups (403 otherwise); an omitted group auto-attributes when the caller
+    // is in exactly one group, asks for an explicit choice with `400` when
+    // they are in several, and is rejected `403` when they are in none.
+    let billing_group_id = match input.owner_group_id {
+        Some(group_id) => {
+            if !context.group_ids.contains(&group_id) {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({"error": "Billing group is not one of your groups"})),
+                ));
+            }
+            Some(group_id)
+        }
+        None => match context.group_ids.as_slice() {
+            [] => {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({
+                        "error": "You belong to no billing group"
+                    })),
+                ));
+            }
+            [only] => Some(*only),
+            _ => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": "You belong to several groups; choose a billing group"
+                    })),
+                ));
+            }
+        },
+    };
     let activation_request = ActivationRequest {
         kind: ActivationKind::Launch(LaunchPayload {
             mount_persistent: mount,
@@ -846,7 +871,7 @@ async fn launch_instance(
         }),
         template: &template,
         user_id: auth.user_id,
-        owner_group_id: input.owner_group_id,
+        owner_group_id: billing_group_id,
         context: &context,
     };
     let reservation = match crate::activation::activate(&state.db, &activation_request).await {
@@ -1290,6 +1315,59 @@ async fn start_instance(
             StatusCode::CONFLICT,
             Json(serde_json::json!({"error": "Instance is already running"})),
         ));
+    }
+
+    // Re-attribution of a `NULL`-attributed instance (spec Decision 5): an
+    // instance whose billing group was cleared (group deleted after its
+    // instances stopped, or a legacy backfill) is re-attributed to the owner's
+    // highest-tier membership *before* the pre-flight, so the restart bills
+    // against a real group. With no membership the restart is rejected — the
+    // instance has no billing target at all.
+    if instance.owner_group_id.is_none() {
+        let resolved = UserRepository::new(&state.db)
+            .highest_tier_membership(instance.owner_id)
+            .await
+            .map_err(|e| {
+                tracing::error!(
+                    "Failed to resolve billing group for instance {}: {}",
+                    instance.id,
+                    e
+                );
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Internal error"})),
+                )
+            })?;
+        match resolved {
+            Some(group_id) => {
+                WorkspaceInstanceRepository::new(&state.db)
+                    .set_owner_group_id(instance.id, Some(group_id))
+                    .await
+                    .map_err(|e| {
+                        tracing::error!(
+                            "Failed to persist billing group for instance {}: {}",
+                            instance.id,
+                            e
+                        );
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({"error": "Internal error"})),
+                        )
+                    })?;
+                instance.owner_group_id = Some(group_id);
+                tracing::info!(
+                    "Re-attributed instance {} to billing group {}",
+                    instance.id,
+                    group_id
+                );
+            }
+            None => {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({"error": "You belong to no billing group"})),
+                ));
+            }
+        }
     }
 
     // Re-run the quota pre-flight: a restart re-consumes the quota the

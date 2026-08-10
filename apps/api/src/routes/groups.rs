@@ -11,7 +11,11 @@ use super::AppState;
 use crate::activation::{sum_resources_for_group, sum_resources_for_user_in_group};
 use crate::audit::{action, diff_detail, target, AuditEvent};
 use crate::auth::AuthUser;
-use crate::db::{validate_template_ids, GroupRecord, GroupRepository, UserRepository};
+use crate::db::{
+    validate_template_ids, GroupRecord, GroupRepository, PolicyRepository, UserRepository,
+    UserWithPolicy, WorkspaceInstanceRepository,
+};
+use crate::effective_context::{group_kind_tier, ResourceUse};
 use crate::openapi::{GroupBillingEnvelope, GroupListEnvelope};
 
 pub fn routes() -> Router<AppState> {
@@ -20,6 +24,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/api/groups/{id}",
             put(update_group).delete(delete_group),
+        )
+        .route(
+            "/api/groups/{id}/members/{user_id}/quota",
+            put(update_member_quota),
         )
         .route("/api/groups/{id}/billing", get(group_billing))
 }
@@ -82,7 +90,11 @@ struct GroupInput {
 }
 
 /// The pinned `Group` JSON shape.
-fn group_to_json(group: &GroupRecord, template_ids: &[Uuid]) -> serde_json::Value {
+fn group_to_json(
+    group: &GroupRecord,
+    template_ids: &[Uuid],
+    members: &[serde_json::Value],
+) -> serde_json::Value {
     serde_json::json!({
         "id": group.id,
         "name": group.name,
@@ -101,6 +113,7 @@ fn group_to_json(group: &GroupRecord, template_ids: &[Uuid]) -> serde_json::Valu
         "pool_memory_mb": group.pool_memory_mb,
         "pool_gpu_count": group.pool_gpu_count,
         "template_ids": template_ids,
+        "members": members,
     })
 }
 
@@ -172,13 +185,41 @@ pub(crate) async fn list_groups(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    // One pass over every user for the member rows (id, username, tier), so a
+    // group catalog with many members never degrades into N queries per group.
+    let user_repo = UserRepository::new(&state.db);
+    let users = user_repo
+        .list_all_with_policy()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let user_by_id: std::collections::HashMap<Uuid, &UserWithPolicy> =
+        users.iter().map(|u| (u.id, u)).collect();
+
     let mut groups_json = Vec::with_capacity(groups.len());
     for group in &groups {
         let template_ids = repo
             .list_template_ids(group.id)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        groups_json.push(group_to_json(group, &template_ids));
+        let member_quotas = user_repo
+            .list_membership_quotas(group.id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let members = member_quotas
+            .iter()
+            .map(|mq| {
+                let user = user_by_id.get(&mq.user_id);
+                serde_json::json!({
+                    "user_id": mq.user_id,
+                    "username": user.map(|u| u.username.as_str()).unwrap_or(""),
+                    "tier": user.map(|u| u.tier).unwrap_or(crate::effective_context::TIER_USER),
+                    "cpu_quota": mq.cpu_quota,
+                    "memory_quota": mq.memory_quota,
+                    "gpu_quota": mq.gpu_quota,
+                })
+            })
+            .collect::<Vec<_>>();
+        groups_json.push(group_to_json(group, &template_ids, &members));
     }
 
     Ok(Json(serde_json::json!({ "groups": groups_json })))
@@ -244,7 +285,7 @@ async fn create_group(
     );
 
     Ok(Json(serde_json::json!({
-        "group": group_to_json(&group, &template_ids)
+        "group": group_to_json(&group, &template_ids, &[])
     })))
 }
 
@@ -299,6 +340,42 @@ async fn update_group(
                 input.can_view_audit_logs,
             ),
         };
+
+    // Pool-tightening guards (spec Decision 7): lowering a pool to a *finite*
+    // value is rejected while a member's finite quota sits above it (the
+    // `0 <= member quota <= pool` invariant) or while an active instance with a
+    // `-1` snapshot on that resource is attributed to the group (a whole-layer
+    // consumer that would silently stop counting). A member at `-1` is bounded
+    // only by the pool, so it never blocks a finite pool.
+    let members = UserRepository::new(&state.db)
+        .list_membership_quotas(id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let unlimited = WorkspaceInstanceRepository::new(&state.db)
+        .count_active_unlimited_snapshots(None, Some(id))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if input.pool_cpu_cores >= 0
+        && existing.pool_cpu_cores != input.pool_cpu_cores
+        && (members.iter().any(|m| m.cpu_quota > input.pool_cpu_cores)
+            || unlimited.cpu_cores > 0)
+    {
+        return Err(StatusCode::CONFLICT);
+    }
+    if input.pool_memory_mb >= 0
+        && existing.pool_memory_mb != input.pool_memory_mb
+        && (members.iter().any(|m| m.memory_quota > input.pool_memory_mb)
+            || unlimited.memory_mb > 0)
+    {
+        return Err(StatusCode::CONFLICT);
+    }
+    if input.pool_gpu_count >= 0
+        && existing.pool_gpu_count != input.pool_gpu_count
+        && (members.iter().any(|m| m.gpu_quota > input.pool_gpu_count)
+            || unlimited.gpu_count > 0)
+    {
+        return Err(StatusCode::CONFLICT);
+    }
 
     let updated = repo
         .update(
@@ -402,7 +479,7 @@ async fn update_group(
     );
 
     Ok(Json(serde_json::json!({
-        "group": group_to_json(&group, &template_ids)
+        "group": group_to_json(&group, &template_ids, &[])
     })))
 }
 
@@ -427,11 +504,18 @@ async fn delete_group(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    // A group that is still a resource-billing target cannot be deleted: its
-    // pool is what members' active instances bill against, and dropping it
-    // would silently orphan that accounting. The DB FK is `ON DELETE SET NULL`
-    // (a hard fallback), but the route refuses first.
-    if repo.count_instances_billed_to(id).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)? > 0 {
+    // A group that is still an active resource-billing target cannot be
+    // deleted: its pool is what active instances bill against, and dropping it
+    // would silently orphan that accounting. Stopped instances do not block —
+    // their `owner_group_id` becomes `NULL` (`ON DELETE SET NULL`) and they are
+    // re-attributed on their next restart. The FK is a hard fallback, but the
+    // route refuses first.
+    if repo
+        .count_active_instances_billed_to(id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        > 0
+    {
         return Err(StatusCode::CONFLICT);
     }
 
@@ -451,6 +535,152 @@ async fn delete_group(
     } else {
         Err(StatusCode::NOT_FOUND)
     }
+}
+
+/// The per-member resource-cap edit body. Each value follows the `0` /
+/// `>0` / `-1` convention (`-1` = unlimited).
+#[derive(serde::Deserialize)]
+struct MembershipQuotaInput {
+    cpu_quota: i32,
+    memory_quota: i64,
+    gpu_quota: i32,
+}
+
+/// Set a membership's resource cap inside a group (`PUT /api/groups/{id}/
+/// members/{user_id}/quota`, spec §7). Gates:
+///
+/// 1. the actor holds `can_manage_users`;
+/// 2. the target user's tier is strictly below the actor's (so a manager
+///    cannot edit a fellow-manager or an admin);
+/// 3. the membership's group tier is strictly below the actor's (so a manager
+///    cannot inflate a quota inside the Manager or Admin group).
+///
+/// Values are `-1` or bounded by the group pool; lowering to a finite value
+/// while an active whole-layer consumer (`-1` snapshot) is attributed to
+/// (user, group) is rejected with `409`.
+async fn update_member_quota(
+    State(state): State<AppState>,
+    Path((group_id, user_id)): Path<(Uuid, Uuid)>,
+    auth: AuthUser,
+    Json(input): Json<MembershipQuotaInput>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if !auth.can_manage_users() {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let repo = UserRepository::new(&state.db);
+    let group_repo = GroupRepository::new(&state.db);
+
+    let group = group_repo
+        .find_by_id(group_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let membership = repo
+        .get_membership_quota(user_id, group_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    // Tier guardrails: both the target's tier and the membership's group tier
+    // must be strictly below the actor's (spec user stories 20-21).
+    let target_tier = PolicyRepository::new(&state.db)
+        .load_user_tier(user_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let group_tier = group_kind_tier(group.kind.as_deref());
+    if auth.context.tier <= target_tier || auth.context.tier <= group_tier {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    // Validation: each value is `-1` (unlimited, bounded only by the pool) or
+    // within the pool — `0..=pool` when the pool is finite, any `>= 0` when
+    // the pool is unlimited. A member can never be granted more than the pool
+    // holds (spec user story 21).
+    let pool = ResourceUse {
+        cpu_cores: group.pool_cpu_cores as i64,
+        memory_mb: group.pool_memory_mb,
+        gpu_count: group.pool_gpu_count as i64,
+    };
+    let values: [(&str, i64, i64); 3] = [
+        ("cpu_quota", input.cpu_quota as i64, pool.cpu_cores),
+        ("memory_quota", input.memory_quota, pool.memory_mb),
+        ("gpu_quota", input.gpu_quota as i64, pool.gpu_count),
+    ];
+    for (name, value, pool_value) in values {
+        if value == -1 {
+            continue;
+        }
+        if value < -1 || (pool_value != -1 && value > pool_value) {
+            tracing::debug!(
+                "Rejecting out-of-pool membership quota: {name}={value} pool={pool_value}"
+            );
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+
+    // Whole-layer-consumer guard (spec §7): lowering to a *finite* value while
+    // an active instance with a `-1` snapshot on that resource is attributed
+    // to (user, group) would let it silently stop counting — reject `409` so
+    // the admin stops those instances before imposing limits.
+    let unlimited = WorkspaceInstanceRepository::new(&state.db)
+        .count_active_unlimited_snapshots(Some(user_id), Some(group_id))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let blocks_tightening = (input.cpu_quota >= 0 && unlimited.cpu_cores > 0)
+        || (input.memory_quota >= 0 && unlimited.memory_mb > 0)
+        || (input.gpu_quota >= 0 && unlimited.gpu_count > 0);
+    if blocks_tightening {
+        return Err(StatusCode::CONFLICT);
+    }
+
+    let updated = repo
+        .update_membership_quota(
+            user_id,
+            group_id,
+            input.cpu_quota,
+            input.memory_quota,
+            input.gpu_quota,
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !updated {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    state.audit.emit(
+        AuditEvent::from_auth(&auth, action::GROUP_QUOTA_CHANGE, target::GROUP)
+            .with_target(Some(group.id.to_string()), Some(group.name.clone()))
+            .with_detail(diff_detail(&[
+                (
+                    "cpu_quota".to_string(),
+                    serde_json::json!(membership.cpu_quota),
+                    serde_json::json!(input.cpu_quota),
+                ),
+                (
+                    "memory_quota".to_string(),
+                    serde_json::json!(membership.memory_quota),
+                    serde_json::json!(input.memory_quota),
+                ),
+                (
+                    "gpu_quota".to_string(),
+                    serde_json::json!(membership.gpu_quota),
+                    serde_json::json!(input.gpu_quota),
+                ),
+            ])),
+    );
+
+    Ok(Json(serde_json::json!({
+        "membership_quota": {
+            "user_id": user_id,
+            "group_id": group_id,
+            "cpu_quota": input.cpu_quota,
+            "memory_quota": input.memory_quota,
+            "gpu_quota": input.gpu_quota,
+        }
+    })))
 }
 
 /// The resource-billing view for a group: the pool, the aggregate usage billed

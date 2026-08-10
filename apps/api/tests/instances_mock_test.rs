@@ -2710,6 +2710,12 @@ async fn create_quota_user(
         .unwrap()
         .to_string();
     seed_direct_max_instances(ctx, &user_id, direct_max_instances).await;
+    // Give the user exactly one unlimited group so a launch without a billing
+    // group auto-attributes (spec User Story 5): these tests exercise the
+    // ceiling/whitelist/host layers, not the billing resolution. The group is
+    // fresh and pool-unlimited (-1), and the membership is unlimited (-1).
+    let group_id = seed_pool_group(ctx, &format!("grp-{}", username), -1, -1, -1).await;
+    add_group_member(ctx, &user_id, &group_id).await;
     user_id
 }
 
@@ -3720,6 +3726,79 @@ async fn test_launch_billing_group_not_member_returns_403() {
 }
 
 #[tokio::test]
+async fn test_launch_auto_attributes_single_group() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .times(1)
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    }).await;
+    let admin_token = ctx.login_admin().await;
+
+    // A user in exactly one group launches without a billing group: the API
+    // attributes to that group automatically (spec User Story 5).
+    let group_id = seed_pool_group(&ctx, "solo-grp", -1, -1, -1).await;
+    let template_id = create_template_only(&ctx, &admin_token, "solo-launch").await;
+    let (user_id, user_token) = create_user_and_token(&ctx, &admin_token, "solo_user").await;
+    add_group_member(&ctx, &user_id, &group_id).await;
+    grant_group_template(&ctx, &group_id, &template_id).await;
+    seed_direct_max_instances(&ctx, &user_id, 5).await;
+
+    let resp = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+    }), &user_token).await;
+    assert_eq!(resp.status(), 200, "body: {:?}", resp.text().await);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["instance"]["owner_group_id"], serde_json::json!(group_id));
+}
+
+#[tokio::test]
+async fn test_launch_without_group_requires_choice_in_multiple_groups() {
+    let ctx = MockContext::new(|_| {}).await;
+    let admin_token = ctx.login_admin().await;
+
+    let group_a = seed_pool_group(&ctx, "multi-a", -1, -1, -1).await;
+    let group_b = seed_pool_group(&ctx, "multi-b", -1, -1, -1).await;
+    let template_id = create_template_only(&ctx, &admin_token, "multi-launch").await;
+    let user_id = create_quota_user(&ctx, &admin_token, "multi_user", 5).await;
+    add_group_member(&ctx, &user_id, &group_a).await;
+    add_group_member(&ctx, &user_id, &group_b).await;
+    grant_template_whitelist(&ctx, &user_id, &template_id).await;
+    let user_token = ctx.login_user("multi_user", "password123").await;
+
+    // Omitted billing group with several memberships → clear 400 asking to
+    // choose (spec User Story 6); nothing is silently billed.
+    let resp = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+    }), &user_token).await;
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_launch_without_group_rejected_when_no_membership() {
+    let ctx = MockContext::new(|_| {}).await;
+    let admin_token = ctx.login_admin().await;
+
+    // A user who belongs to no group cannot launch at all — even a public
+    // template, since every instance needs a billing group (spec Decision on
+    // zero memberships).
+    let template_id = create_template_only(&ctx, &admin_token, "nogrp-launch").await;
+    let (_user_id, user_token) =
+        create_user_and_token(&ctx, &admin_token, "nogrp_user").await;
+
+    let resp = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+    }), &user_token).await;
+    assert_eq!(resp.status(), 403);
+
+    // Passing a bogus group_id is equally refused.
+    let resp = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "owner_group_id": uuid::Uuid::new_v4().to_string(),
+    }), &user_token).await;
+    assert_eq!(resp.status(), 403);
+}
+
+#[tokio::test]
 async fn test_group_delete_blocked_while_billed() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
@@ -3744,6 +3823,381 @@ async fn test_group_delete_blocked_while_billed() {
     // The group is still a billing target → deletion refused with 409.
     let del = ctx.delete_auth(&format!("/api/groups/{}", group_id), &admin_token).await;
     assert_eq!(del.status(), 409, "body: {:?}", del.text().await);
+}
+
+/// Insert a stopped instance attributed to `group_id` with a frozen `-1`
+/// (unlimited) snapshot on the named resource. Used to exercise the tightening
+/// guards without walking through a full unlimited launch.
+async fn insert_unlimited_snapshot_instance(
+    ctx: &MockContext,
+    template_id: &str,
+    owner_id: &str,
+    group_id: &str,
+    name: &str,
+    cpu: i32,
+    memory: i64,
+    gpu: i32,
+    status: &str,
+) -> String {
+    use openworkspace_api::db::workspace_instance;
+    use sea_orm::{ActiveModelTrait, Set};
+    let id = uuid::Uuid::new_v4();
+    let model = workspace_instance::ActiveModel {
+        id: Set(id),
+        template_id: Set(template_id.parse().unwrap()),
+        name: Set(name.to_string()),
+        instance_number: Set(1),
+        owner_id: Set(owner_id.parse().unwrap()),
+        container_id: Set(Some("fake-container-id".to_string())),
+        status: Set(status.to_string()),
+        access_token: Set(format!("tok-{}", name)),
+        access_password: Set("pwd".to_string()),
+        mount_persistent: Set(false),
+        host_port: Set(Some(49150)),
+        owner_group_id: Set(Some(group_id.parse().unwrap())),
+        host_cpu_cores: Set(cpu),
+        host_memory_mb: Set(memory),
+        host_gpu_count: Set(gpu),
+        ..Default::default()
+    };
+    model.insert(&ctx.db).await.unwrap().id.to_string()
+}
+
+#[tokio::test]
+async fn test_group_delete_allowed_when_only_stopped_instances() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .times(1)
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    }).await;
+    let admin_token = ctx.login_admin().await;
+
+    let group_id = seed_pool_group(&ctx, "del-stopped-pool", -1, -1, -1).await;
+    let template_id = create_template_only(&ctx, &admin_token, "del-stopped-launch").await;
+    let user_id = create_quota_user(&ctx, &admin_token, "del_stopped_user", 5).await;
+    add_group_member(&ctx, &user_id, &group_id).await;
+    grant_group_template(&ctx, &group_id, &template_id).await;
+    let user_token = ctx.login_user("del_stopped_user", "password123").await;
+
+    let launch = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "owner_group_id": group_id,
+    }), &user_token).await;
+    assert_eq!(launch.status(), 200, "body: {:?}", launch.text().await);
+    let instance_id = launch.json::<serde_json::Value>().await.unwrap()["instance"]["id"]
+        .as_str().unwrap().to_string();
+
+    // Stop the instance → the group is no longer an active billing target.
+    set_instance_status(&ctx.db, &instance_id, "stopped", Some("fake-container-id")).await;
+
+    // Deletion now succeeds (spec Decision 7).
+    let del = ctx.delete_auth(&format!("/api/groups/{}", group_id), &admin_token).await;
+    assert_eq!(del.status(), 204, "body: {:?}", del.text().await);
+}
+
+#[tokio::test]
+async fn test_restart_reattributes_null_attributed_instance() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .times(2)
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    }).await;
+    let admin_token = ctx.login_admin().await;
+
+    let group_id = seed_pool_group(&ctx, "reattribute-pool", -1, -1, -1).await;
+    let template_id = create_template_only(&ctx, &admin_token, "reattribute-launch").await;
+    // Exactly one membership (no auto group from create_quota_user), so the
+    // re-attribution deterministically lands on this group.
+    let (user_id, user_token) = create_user_and_token(&ctx, &admin_token, "reattribute_user").await;
+    add_group_member(&ctx, &user_id, &group_id).await;
+    grant_group_template(&ctx, &group_id, &template_id).await;
+    seed_direct_max_instances(&ctx, &user_id, 5).await;
+
+    let launch = ctx.post_auth("/api/instances", &serde_json::json!({
+        "template_id": template_id,
+        "owner_group_id": group_id,
+    }), &user_token).await;
+    assert_eq!(launch.status(), 200, "body: {:?}", launch.text().await);
+    let instance_id = launch.json::<serde_json::Value>().await.unwrap()["instance"]["id"]
+        .as_str().unwrap().to_string();
+    set_instance_status(&ctx.db, &instance_id, "stopped", Some("fake-container-id")).await;
+
+    // Simulate the group-deleted-after-stop case: null the attribution.
+    use openworkspace_api::db::workspace_instance;
+    use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
+    let model = workspace_instance::Entity::find()
+        .filter(workspace_instance::Column::Id.eq(instance_id.parse::<uuid::Uuid>().unwrap()))
+        .one(&ctx.db).await.unwrap().unwrap();
+    let mut active: workspace_instance::ActiveModel = model.into();
+    active.owner_group_id = Set(None);
+    active.update(&ctx.db).await.unwrap();
+
+    // The restart re-attributes to the owner's highest-tier membership (the
+    // only one) and restarts successfully against it (spec Decision 5).
+    let restart = ctx.post_auth(&format!("/api/instances/{}/start", instance_id), &serde_json::json!({}), &user_token).await;
+    assert_eq!(restart.status(), 200, "body: {:?}", restart.text().await);
+
+    // The re-attribution was persisted: the instance now bills the group again.
+    let get = ctx.get_auth(&format!("/api/instances/{}", instance_id), &user_token).await;
+    assert_eq!(get.status(), 200, "body: {:?}", get.text().await);
+    let body: serde_json::Value = get.json().await.unwrap();
+    assert_eq!(body["instance"]["owner_group_id"], serde_json::json!(group_id));
+}
+
+#[tokio::test]
+async fn test_restart_without_membership_rejected_403() {
+    let ctx = MockContext::new(|_| {}).await;
+    let admin_token = ctx.login_admin().await;
+
+    // A user with no group memberships at all cannot restart a NULL-attributed
+    // instance: there is no billing target to re-attribute to.
+    let (user_id, user_token) = create_user_and_token(&ctx, &admin_token, "no_member_restart").await;
+    let template_id = create_template_only(&ctx, &admin_token, "no-member-restart-tpl").await;
+    let stray_group = seed_pool_group(&ctx, "stray-deleted", -1, -1, -1).await;
+    let instance_id = insert_unlimited_snapshot_instance(
+        &ctx, &template_id, &user_id, &stray_group, "no-member-restart", 2, 4096, 0, "stopped",
+    ).await;
+    // The helper requires a group; clear the attribution the way a deleted
+    // group leaves it.
+    use openworkspace_api::db::workspace_instance;
+    use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
+    let model = workspace_instance::Entity::find()
+        .filter(workspace_instance::Column::Id.eq(instance_id.parse::<uuid::Uuid>().unwrap()))
+        .one(&ctx.db).await.unwrap().unwrap();
+    let mut active: workspace_instance::ActiveModel = model.into();
+    active.owner_group_id = Set(None);
+    active.update(&ctx.db).await.unwrap();
+
+    let restart = ctx.post_auth(&format!("/api/instances/{}/start", instance_id), &serde_json::json!({}), &user_token).await;
+    assert_eq!(restart.status(), 403);
+    let body: serde_json::Value = restart.json().await.unwrap();
+    assert_eq!(body["error"], "You belong to no billing group");
+}
+
+#[tokio::test]
+async fn test_member_quota_edit_roundtrip() {
+    let ctx = MockContext::new(|_| {}).await;
+    let admin_token = ctx.login_admin().await;
+
+    let group_id = seed_pool_group(&ctx, "quota-grp", 8, 16384, 2).await;
+    let user_id = create_quota_user(&ctx, &admin_token, "quota_user", 5).await;
+    add_group_member(&ctx, &user_id, &group_id).await;
+
+    // The member starts unlimited (-1) on every resource (the add_group_member
+    // default). Admin caps CPU at 4 cores.
+    let put = ctx.put_auth(
+        &format!("/api/groups/{}/members/{}/quota", group_id, user_id),
+        &serde_json::json!({ "cpu_quota": 4, "memory_quota": -1, "gpu_quota": 0 }),
+        &admin_token,
+    ).await;
+    assert_eq!(put.status(), 200, "body: {:?}", put.text().await);
+    let body: serde_json::Value = put.json().await.unwrap();
+    assert_eq!(body["membership_quota"]["cpu_quota"], 4);
+    assert_eq!(body["membership_quota"]["memory_quota"], -1);
+    assert_eq!(body["membership_quota"]["gpu_quota"], 0);
+
+    // The group catalog surfaces the member row with the new cap (spec §7).
+    let list = ctx.get_auth("/api/groups", &admin_token).await;
+    assert_eq!(list.status(), 200, "body: {:?}", list.text().await);
+    let body: serde_json::Value = list.json().await.unwrap();
+    let group = body["groups"].as_array().unwrap().iter()
+        .find(|g| g["id"] == serde_json::json!(group_id)).expect("group listed");
+    let member = group["members"].as_array().unwrap().iter()
+        .find(|m| m["user_id"] == serde_json::json!(user_id)).expect("member listed");
+    assert_eq!(member["username"], "quota_user");
+    assert_eq!(member["cpu_quota"], 4);
+    assert_eq!(member["memory_quota"], -1);
+    assert_eq!(member["gpu_quota"], 0);
+}
+
+#[tokio::test]
+async fn test_member_quota_edit_out_of_pool_rejected_400() {
+    let ctx = MockContext::new(|_| {}).await;
+    let admin_token = ctx.login_admin().await;
+
+    let group_id = seed_pool_group(&ctx, "quota-tight-pool", 8, 16384, 2).await;
+    let user_id = create_quota_user(&ctx, &admin_token, "quota_oob_user", 5).await;
+    add_group_member(&ctx, &user_id, &group_id).await;
+
+    // CPU 12 > finite pool 8 → 400 (member can never exceed the pool).
+    let resp = ctx.put_auth(
+        &format!("/api/groups/{}/members/{}/quota", group_id, user_id),
+        &serde_json::json!({ "cpu_quota": 12, "memory_quota": -1, "gpu_quota": -1 }),
+        &admin_token,
+    ).await;
+    assert_eq!(resp.status(), 400, "body: {:?}", resp.text().await);
+
+    // GPU 4 > finite pool 2 → 400.
+    let resp = ctx.put_auth(
+        &format!("/api/groups/{}/members/{}/quota", group_id, user_id),
+        &serde_json::json!({ "cpu_quota": -1, "memory_quota": -1, "gpu_quota": 4 }),
+        &admin_token,
+    ).await;
+    assert_eq!(resp.status(), 400);
+
+    // A value below -1 is malformed → 400.
+    let resp = ctx.put_auth(
+        &format!("/api/groups/{}/members/{}/quota", group_id, user_id),
+        &serde_json::json!({ "cpu_quota": -2, "memory_quota": -1, "gpu_quota": -1 }),
+        &admin_token,
+    ).await;
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_member_quota_edit_requires_higher_tier() {
+    let ctx = MockContext::new(|_| {}).await;
+    let admin_token = ctx.login_admin().await;
+
+    // A manager (tier 1) and a plain user (tier 0).
+    let group_id = seed_pool_group(&ctx, "quota-tier-grp", 8, -1, -1).await;
+    let mgr_id = create_user_and_token(&ctx, &admin_token, "quota_mgr").await.0;
+    let mgr_group = seed_group_kind(&ctx, "grp-quota-mgr", Some("manager"), false, true, false, false, false).await;
+    add_group_member(&ctx, &mgr_id, &mgr_group).await;
+    add_group_member(&ctx, &mgr_id, &group_id).await;
+    let plain_id = create_user_and_token(&ctx, &admin_token, "quota_plain").await.0;
+    add_group_member(&ctx, &plain_id, &group_id).await;
+    let mgr_token = ctx.login_user("quota_mgr", "password123").await;
+
+    // The manager's own tier (1) is strictly above the plain user's (0) and
+    // the custom group's (0) → allowed.
+    let ok = ctx.put_auth(
+        &format!("/api/groups/{}/members/{}/quota", group_id, plain_id),
+        &serde_json::json!({ "cpu_quota": 4, "memory_quota": -1, "gpu_quota": -1 }),
+        &mgr_token,
+    ).await;
+    assert_eq!(ok.status(), 200, "body: {:?}", ok.text().await);
+
+    // A user with no can_manage_users flag is refused outright. (This runs
+    // before plain joins the manager group — that membership would grant the
+    // flag via OR-aggregation.)
+    let plain_token = ctx.login_user("quota_plain", "password123").await;
+    let denied = ctx.put_auth(
+        &format!("/api/groups/{}/members/{}/quota", group_id, plain_id),
+        &serde_json::json!({ "cpu_quota": 4, "memory_quota": -1, "gpu_quota": -1 }),
+        &plain_token,
+    ).await;
+    assert_eq!(denied.status(), 403);
+
+    // Editing a member inside the *manager* group (tier 1) is refused: the
+    // target's tier (now 1) is not strictly below the actor's.
+    add_group_member(&ctx, &plain_id, &mgr_group).await;
+    let denied = ctx.put_auth(
+        &format!("/api/groups/{}/members/{}/quota", mgr_group, plain_id),
+        &serde_json::json!({ "cpu_quota": 4, "memory_quota": -1, "gpu_quota": -1 }),
+        &mgr_token,
+    ).await;
+    assert_eq!(denied.status(), 403, "body: {:?}", denied.text().await);
+}
+
+#[tokio::test]
+async fn test_member_quota_tightening_blocked_by_unlimited_snapshot() {
+    let ctx = MockContext::new(|_| {}).await;
+    let admin_token = ctx.login_admin().await;
+
+    let group_id = seed_pool_group(&ctx, "quota-unlim-grp", 8, 16384, 2).await;
+    let template_id = create_template_only(&ctx, &admin_token, "quota-unlim-tpl").await;
+    let user_id = create_quota_user(&ctx, &admin_token, "quota_unlim_user", 5).await;
+    add_group_member(&ctx, &user_id, &group_id).await;
+
+    // An active instance with a frozen `-1` CPU snapshot attributed to
+    // (user, group) — a whole-layer consumer that the negative-filtered sums
+    // never count.
+    insert_unlimited_snapshot_instance(
+        &ctx, &template_id, &user_id, &group_id, "quota-unlim", -1, 4096, 0, "running",
+    ).await;
+
+    // Lowering the member's CPU cap to a finite value → 409.
+    let resp = ctx.put_auth(
+        &format!("/api/groups/{}/members/{}/quota", group_id, user_id),
+        &serde_json::json!({ "cpu_quota": 4, "memory_quota": -1, "gpu_quota": -1 }),
+        &admin_token,
+    ).await;
+    assert_eq!(resp.status(), 409, "body: {:?}", resp.text().await);
+
+    // The same cap on a resource without a -1 snapshot succeeds.
+    let ok = ctx.put_auth(
+        &format!("/api/groups/{}/members/{}/quota", group_id, user_id),
+        &serde_json::json!({ "cpu_quota": -1, "memory_quota": -1, "gpu_quota": 2 }),
+        &admin_token,
+    ).await;
+    assert_eq!(ok.status(), 200, "body: {:?}", ok.text().await);
+}
+
+#[tokio::test]
+async fn test_group_pool_tightening_blocked_by_member_quota() {
+    let ctx = MockContext::new(|_| {}).await;
+    let admin_token = ctx.login_admin().await;
+
+    let group_id = seed_pool_group(&ctx, "pool-vs-member", 8, -1, -1).await;
+    let user_id = create_quota_user(&ctx, &admin_token, "pool_vs_member", 5).await;
+    add_group_member(&ctx, &user_id, &group_id).await;
+
+    // Cap the member at 4 cores (fits the 8-core pool).
+    let ok = ctx.put_auth(
+        &format!("/api/groups/{}/members/{}/quota", group_id, user_id),
+        &serde_json::json!({ "cpu_quota": 4, "memory_quota": -1, "gpu_quota": -1 }),
+        &admin_token,
+    ).await;
+    assert_eq!(ok.status(), 200, "body: {:?}", ok.text().await);
+
+    // Shrinking the pool below the member's finite cap → 409 (the `member
+    // quota <= pool` invariant would break).
+    let shrink = ctx.put_auth(&format!("/api/groups/{}", group_id), &serde_json::json!({
+        "name": "pool-vs-member",
+        "description": null,
+        "can_create_template": false,
+        "can_manage_users": false,
+        "can_manage_group_instances": false,
+        "can_manage_docker": false,
+        "can_manage_registry": false,
+        "can_view_monitoring": false,
+        "can_view_audit_logs": false,
+        "max_instances": 4,
+        "template_ids": [],
+        "billing_model": "shared",
+        "pool_cpu_cores": 2,
+        "pool_memory_mb": -1,
+        "pool_gpu_count": -1,
+    }), &admin_token).await;
+    assert_eq!(shrink.status(), 409, "body: {:?}", shrink.text().await);
+}
+
+#[tokio::test]
+async fn test_group_pool_tightening_blocked_by_unlimited_snapshot() {
+    let ctx = MockContext::new(|_| {}).await;
+    let admin_token = ctx.login_admin().await;
+
+    let group_id = seed_pool_group(&ctx, "pool-vs-unlim", 8, -1, -1).await;
+    let template_id = create_template_only(&ctx, &admin_token, "pool-vs-unlim-tpl").await;
+    let user_id = create_quota_user(&ctx, &admin_token, "pool_vs_unlim_user", 5).await;
+    add_group_member(&ctx, &user_id, &group_id).await;
+
+    // An active instance with a `-1` GPU snapshot attributed to the group.
+    insert_unlimited_snapshot_instance(
+        &ctx, &template_id, &user_id, &group_id, "pool-vs-unlim", 2, 4096, -1, "running",
+    ).await;
+
+    // Lowering the finite pool below nothing is the issue here — the mere
+    // presence of the -1 GPU snapshot blocks *any* finite pool on GPU.
+    let shrink = ctx.put_auth(&format!("/api/groups/{}", group_id), &serde_json::json!({
+        "name": "pool-vs-unlim",
+        "description": null,
+        "can_create_template": false,
+        "can_manage_users": false,
+        "can_manage_group_instances": false,
+        "can_manage_docker": false,
+        "can_manage_registry": false,
+        "can_view_monitoring": false,
+        "can_view_audit_logs": false,
+        "max_instances": 4,
+        "template_ids": [],
+        "billing_model": "shared",
+        "pool_cpu_cores": 8,
+        "pool_memory_mb": -1,
+        "pool_gpu_count": 1,
+    }), &admin_token).await;
+    assert_eq!(shrink.status(), 409, "body: {:?}", shrink.text().await);
 }
 
 #[tokio::test]

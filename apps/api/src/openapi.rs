@@ -301,6 +301,19 @@ pub struct GroupSchema {
     pub pool_memory_mb: i64,
     pub pool_gpu_count: i32,
     pub template_ids: Vec<Uuid>,
+    /// Each member's per-membership resource cap, plus username/tier so the
+    /// layered Groups tab renders without extra round-trips.
+    pub members: Vec<GroupMemberSchema>,
+}
+
+#[derive(utoipa::ToSchema)]
+pub struct GroupMemberSchema {
+    pub user_id: Uuid,
+    pub username: String,
+    pub tier: i32,
+    pub cpu_quota: i32,
+    pub memory_quota: i64,
+    pub gpu_quota: i32,
 }
 
 #[derive(utoipa::ToSchema)]

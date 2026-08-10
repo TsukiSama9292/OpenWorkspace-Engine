@@ -608,7 +608,13 @@ impl<'a> UserRepository<'a> {
         user_group::ActiveModel {
             user_id: Set(admin_user_id),
             group_id: Set(admin_group.id),
-            ..Default::default()
+            // The bootstrap admin keeps the pre-quota behavior: unlimited
+            // (membership quota -1). This is the single bootstrap exception to
+            // the "new memberships default 0" rule — locking the root admin
+            // out of resource usage on a fresh install is never desired.
+            cpu_quota: Set(-1),
+            memory_quota: Set(-1),
+            gpu_quota: Set(-1),
         }
         .insert(self.db)
         .await?;
@@ -1160,15 +1166,18 @@ impl<'a> GroupRepository<'a> {
         Ok(model.map(Self::from_model))
     }
 
-    /// Number of `workspace_instances` currently billing against the group
-    /// (`owner_group_id = group_id`). Used to guard group deletion: a group
-    /// that is still a billing target cannot be deleted.
-    pub async fn count_instances_billed_to(
+    /// Number of active instances (`starting` / `running` / `paused`) billed
+    /// against the group (`owner_group_id = group_id`). Used to guard group
+    /// deletion: a group with active billing cannot be deleted, while one
+    /// holding only stopped instances can (the FK `ON DELETE SET NULL` nulls
+    /// their attribution; the next restart re-attributes them, spec §7).
+    pub async fn count_active_instances_billed_to(
         &self,
         group_id: Uuid,
     ) -> Result<i64, sea_orm::DbErr> {
         Ok(workspace_instance::Entity::find()
             .filter(workspace_instance::Column::OwnerGroupId.eq(group_id))
+            .filter(workspace_instance::Column::Status.is_in(ACTIVE_STATUSES))
             .count(self.db)
             .await? as i64)
     }
@@ -1423,6 +1432,19 @@ impl<'a> WorkspaceTemplateRepository<'a> {
 
 // ── Workspace Instance Repository ─────────────────────────────
 
+/// Counts of active instances whose frozen resource snapshot is `-1`
+/// (unlimited) on each resource. A `-1` snapshot marks a whole-layer consumer
+/// (spec §7): the `-1` request rule means it was launched only while every
+/// checked layer was unlimited, and the negative-filtered usage sums never
+/// count it. Lowering any quota on that resource to a finite value is rejected
+/// while one exists in the scope.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UnlimitedSnapshotCounts {
+    pub cpu_cores: i64,
+    pub memory_mb: i64,
+    pub gpu_count: i64,
+}
+
 pub struct WorkspaceInstanceRepository<'a> {
     pub db: &'a DatabaseConnection,
 }
@@ -1430,6 +1452,41 @@ pub struct WorkspaceInstanceRepository<'a> {
 impl<'a> WorkspaceInstanceRepository<'a> {
     pub fn new(db: &'a DatabaseConnection) -> Self {
         Self { db }
+    }
+
+    /// Count active instances with a `-1` (unlimited) frozen snapshot on each
+    /// resource, optionally scoped to an owner and/or a billing group. Used by
+    /// the tightening guards: lowering a group pool (scope = group), a member
+    /// cap (scope = owner + group), or a host cap (scope = none) to a finite
+    /// value is rejected with `409` while such an instance is attributed in
+    /// that scope (spec §7).
+    pub async fn count_active_unlimited_snapshots(
+        &self,
+        owner_id: Option<Uuid>,
+        group_id: Option<Uuid>,
+    ) -> Result<UnlimitedSnapshotCounts, sea_orm::DbErr> {
+        let mut query = workspace_instance::Entity::find()
+            .filter(workspace_instance::Column::Status.is_in(ACTIVE_STATUSES));
+        if let Some(owner_id) = owner_id {
+            query = query.filter(workspace_instance::Column::OwnerId.eq(owner_id));
+        }
+        if let Some(group_id) = group_id {
+            query = query.filter(workspace_instance::Column::OwnerGroupId.eq(group_id));
+        }
+        let rows = query.all(self.db).await?;
+        let mut counts = UnlimitedSnapshotCounts::default();
+        for r in &rows {
+            if r.host_cpu_cores == -1 {
+                counts.cpu_cores += 1;
+            }
+            if r.host_memory_mb == -1 {
+                counts.memory_mb += 1;
+            }
+            if r.host_gpu_count == -1 {
+                counts.gpu_count += 1;
+            }
+        }
+        Ok(counts)
     }
 
     pub async fn launch(
@@ -1617,6 +1674,30 @@ impl<'a> WorkspaceInstanceRepository<'a> {
         let result = workspace_instance::Entity::update(workspace_instance::ActiveModel {
             id: Set(id),
             resolved_volume_host_path: Set(host_path.map(|s| s.to_string())),
+            ..Default::default()
+        })
+        .filter(workspace_instance::Column::Id.eq(id))
+        .exec(self.db)
+        .await;
+        match result {
+            Ok(_) => Ok(true),
+            Err(sea_orm::DbErr::RecordNotFound(_)) | Err(sea_orm::DbErr::RecordNotUpdated) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Set (or clear) the instance's billing group. Used by the restart
+    /// re-attribution of a `NULL`-attributed instance (spec §5): the group is
+    /// resolved from the owner's highest-tier membership and persisted before
+    /// the restart pipeline runs against it.
+    pub async fn set_owner_group_id(
+        &self,
+        id: Uuid,
+        group_id: Option<Uuid>,
+    ) -> Result<bool, sea_orm::DbErr> {
+        let result = workspace_instance::Entity::update(workspace_instance::ActiveModel {
+            id: Set(id),
+            owner_group_id: Set(group_id),
             ..Default::default()
         })
         .filter(workspace_instance::Column::Id.eq(id))
