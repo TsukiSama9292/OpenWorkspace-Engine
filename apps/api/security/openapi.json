@@ -318,6 +318,42 @@
         ],
         "type": "object"
       },
+      "GroupMemberSchema": {
+        "properties": {
+          "cpu_quota": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "gpu_quota": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "memory_quota": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "tier": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "user_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "username",
+          "tier",
+          "cpu_quota",
+          "memory_quota",
+          "gpu_quota"
+        ],
+        "type": "object"
+      },
       "GroupSchema": {
         "properties": {
           "billing_model": {
@@ -367,6 +403,13 @@
               "null"
             ]
           },
+          "members": {
+            "description": "Each member's per-membership resource cap, plus username/tier so the\nlayered Groups tab renders without extra round-trips.",
+            "items": {
+              "$ref": "#/components/schemas/GroupMemberSchema"
+            },
+            "type": "array"
+          },
           "name": {
             "type": "string"
           },
@@ -404,7 +447,8 @@
           "pool_cpu_cores",
           "pool_memory_mb",
           "pool_gpu_count",
-          "template_ids"
+          "template_ids",
+          "members"
         ],
         "type": "object"
       },
