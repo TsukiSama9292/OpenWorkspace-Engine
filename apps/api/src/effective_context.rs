@@ -75,16 +75,28 @@ pub struct EffectiveContext {
 }
 
 /// The resource pool a group offers its members, as serialized on
-/// `EffectiveContext.group_billing`.
+/// `EffectiveContext.group_billing`. Carries the group's display name and
+/// tier plus the user's own per-membership cap so the launch form can offer a
+/// billing target, show its pool, and default to the highest-cap membership.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct GroupBilling {
     pub group_id: Uuid,
+    pub group_name: String,
+    /// Derived from the group kind (Admin=2, Manager=1, else 0); used only for
+    /// picker tie-breaks.
+    pub tier: i32,
     /// `shared` | `dedicated`.
     pub billing_model: String,
     /// `-1` means "unlimited".
     pub pool_cpu_cores: i64,
     pub pool_memory_mb: i64,
     pub pool_gpu_count: i64,
+    /// The user's own per-member cap inside this group (`-1` = unlimited,
+    /// `0` = blocked), so the picker can default to the highest-cap
+    /// membership. Mirrors the member layer of the quota pre-flight.
+    pub member_cpu_cores: i64,
+    pub member_memory_mb: i64,
+    pub member_gpu_count: i64,
 }
 
 /// The pure inputs for `calculate_effective_context`: the user's identity and
@@ -101,6 +113,8 @@ pub struct UserPolicy {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupPolicy {
     pub id: Uuid,
+    /// Display name, surfaced on the billing picker and tie-breaks.
+    pub name: String,
     /// `admin` | `manager` | `user` | `None` (custom groups). Only the kind
     /// feeds tier derivation; names are cosmetic.
     pub kind: Option<String>,
@@ -116,6 +130,12 @@ pub struct GroupPolicy {
     pub pool_cpu_cores: i64,
     pub pool_memory_mb: i64,
     pub pool_gpu_count: i64,
+    /// The user's own per-member cap inside this group (`-1` = unlimited,
+    /// `0` = blocked). Surfaced on the billing picker so it can default to
+    /// the highest-cap membership.
+    pub member_cpu_cores: i64,
+    pub member_memory_mb: i64,
+    pub member_gpu_count: i64,
     pub can_create_template: bool,
     pub can_manage_users: bool,
     pub can_manage_group_instances: bool,
@@ -192,10 +212,15 @@ pub fn calculate_effective_context(
         .iter()
         .map(|g| GroupBilling {
             group_id: g.id,
+            group_name: g.name.clone(),
+            tier: group_kind_tier(g.kind.as_deref()),
             billing_model: g.billing_model.clone(),
             pool_cpu_cores: g.pool_cpu_cores,
             pool_memory_mb: g.pool_memory_mb,
             pool_gpu_count: g.pool_gpu_count,
+            member_cpu_cores: g.member_cpu_cores,
+            member_memory_mb: g.member_memory_mb,
+            member_gpu_count: g.member_gpu_count,
         })
         .collect();
 
@@ -616,12 +641,16 @@ mod tests {
     ) -> GroupPolicy {
         GroupPolicy {
             id,
+            name: format!("group-{}", id),
             kind: kind.map(|k| k.to_string()),
             max_instances,
             billing_model: "shared".to_string(),
             pool_cpu_cores: 0,
             pool_memory_mb: 0,
             pool_gpu_count: 0,
+            member_cpu_cores: -1,
+            member_memory_mb: -1,
+            member_gpu_count: -1,
             can_create_template: create,
             can_manage_users: manage_users,
             can_manage_group_instances: group_instances,
@@ -1472,14 +1501,23 @@ mod tests {
     #[test]
     fn group_billing_surfaces_each_group_pool() {
         let alice = user(uuid(1), None);
-        let mut g1 = group(uuid(10), None, Some(2), false, false, false, false, false, false, false);
+        let mut g1 = group(uuid(10), Some("manager"), Some(2), false, false, false, false, false, false, false);
+        g1.name = "ML Team".to_string();
         g1.billing_model = "dedicated".to_string();
         g1.pool_gpu_count = 1;
+        g1.member_cpu_cores = 4;
+        g1.member_memory_mb = 8192;
+        g1.member_gpu_count = 1;
 
         let ctx = calculate_effective_context(&alice, &[g1], &map(&[]), &[]);
         assert_eq!(ctx.group_billing.len(), 1);
         assert_eq!(ctx.group_billing[0].group_id, uuid(10));
+        assert_eq!(ctx.group_billing[0].group_name, "ML Team");
+        assert_eq!(ctx.group_billing[0].tier, TIER_MANAGER);
         assert_eq!(ctx.group_billing[0].billing_model, "dedicated");
         assert_eq!(ctx.group_billing[0].pool_gpu_count, 1);
+        assert_eq!(ctx.group_billing[0].member_cpu_cores, 4);
+        assert_eq!(ctx.group_billing[0].member_memory_mb, 8192);
+        assert_eq!(ctx.group_billing[0].member_gpu_count, 1);
     }
 }

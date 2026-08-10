@@ -2037,6 +2037,18 @@ impl<'a> PolicyRepository<'a> {
             .await?;
         let member_group_ids: Vec<Uuid> = memberships.iter().map(|m| m.group_id).collect();
 
+        // Per-membership caps (`0` = blocked, `-1` = unlimited) keyed by group,
+        // so the billing picker can default to the user's highest-cap group.
+        let member_quotas: HashMap<Uuid, (i32, i64, i32)> = memberships
+            .into_iter()
+            .map(|m| {
+                (
+                    m.group_id,
+                    (m.cpu_quota, m.memory_quota, m.gpu_quota),
+                )
+            })
+            .collect();
+
         let groups = group::Entity::find()
             .filter(group::Column::Id.is_in(member_group_ids))
             .order_by_asc(group::Column::Name)
@@ -2078,21 +2090,28 @@ impl<'a> PolicyRepository<'a> {
         };
         let group_policies: Vec<GroupPolicy> = groups
             .into_iter()
-            .map(|g| GroupPolicy {
-                id: g.id,
-                kind: g.kind,
-                max_instances: g.max_instances,
-                billing_model: g.billing_model,
-                pool_cpu_cores: g.pool_cpu_cores as i64,
-                pool_memory_mb: g.pool_memory_mb,
-                pool_gpu_count: g.pool_gpu_count as i64,
-                can_create_template: g.can_create_template,
-                can_manage_users: g.can_manage_users,
-                can_manage_group_instances: g.can_manage_group_instances,
-                can_manage_docker: g.can_manage_docker,
-                can_manage_registry: g.can_manage_registry,
-                can_view_monitoring: g.can_view_monitoring,
-                can_view_audit_logs: g.can_view_audit_logs,
+            .map(|g| {
+                let member_quota = member_quotas.get(&g.id).copied().unwrap_or((-1, -1, -1));
+                GroupPolicy {
+                    id: g.id,
+                    name: g.name.clone(),
+                    kind: g.kind,
+                    max_instances: g.max_instances,
+                    billing_model: g.billing_model,
+                    pool_cpu_cores: g.pool_cpu_cores as i64,
+                    pool_memory_mb: g.pool_memory_mb,
+                    pool_gpu_count: g.pool_gpu_count as i64,
+                    member_cpu_cores: member_quota.0 as i64,
+                    member_memory_mb: member_quota.1,
+                    member_gpu_count: member_quota.2 as i64,
+                    can_create_template: g.can_create_template,
+                    can_manage_users: g.can_manage_users,
+                    can_manage_group_instances: g.can_manage_group_instances,
+                    can_manage_docker: g.can_manage_docker,
+                    can_manage_registry: g.can_manage_registry,
+                    can_view_monitoring: g.can_view_monitoring,
+                    can_view_audit_logs: g.can_view_audit_logs,
+                }
             })
             .collect();
 
