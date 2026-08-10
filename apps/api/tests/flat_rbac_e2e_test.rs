@@ -127,9 +127,37 @@ async fn system_group_id(ctx: &TestContext, kind: &str) -> String {
         .to_string()
 }
 
-async fn launch_plain(ctx: &TestContext, template_id: &str) -> String {
+/// Give a member an unlimited (`-1`) resource quota inside a group via the
+/// per-member quota endpoint. Memberships created through the API default to
+/// `0` (blocked) per spec Decision 1, so tests that launch real resources must
+/// grant a quota to the billing group first.
+async fn grant_member_quota(ctx: &TestContext, group_id: &str, user_id: &str) {
+    ctx.login_admin().await;
     let resp = ctx
-        .post("/api/instances", &serde_json::json!({ "template_id": template_id }))
+        .put(
+            &format!("/api/groups/{}/members/{}/quota", group_id, user_id),
+            &serde_json::json!({ "cpu_quota": -1, "memory_quota": -1, "gpu_quota": -1 }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "grant member quota failed");
+}
+
+async fn launch_plain(ctx: &TestContext, template_id: &str) -> String {
+    launch_plain_in_group(ctx, template_id, None).await
+}
+
+async fn launch_plain_in_group(
+    ctx: &TestContext,
+    template_id: &str,
+    billing_group_id: Option<&str>,
+) -> String {
+    let mut body = serde_json::Map::new();
+    body.insert("template_id".to_string(), serde_json::json!(template_id));
+    if let Some(group_id) = billing_group_id {
+        body.insert("owner_group_id".to_string(), serde_json::json!(group_id));
+    }
+    let resp = ctx
+        .post("/api/instances", &serde_json::Value::Object(body))
         .await;
     assert_eq!(resp.status(), 200, "launch failed: {:?}", resp.text().await);
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -651,11 +679,16 @@ async fn test_flat_rbac_2_tiers_end_to_end() {
 
     // ── Instance tier guardrails (real Docker) ────────────────────────
     ctx.login_admin().await;
+    grant_member_quota(&ctx, &team, &alice_id).await;
+    grant_member_quota(&ctx, &team, &mike2_id).await;
     let admin_instance = launch_plain(&ctx, &tpl1).await;
     assert_eq!(ctx.login_user("rbac2_alice", "pw123456").await.status(), 200);
-    let alice_instance = launch_plain(&ctx, &tpl1).await;
+    // Alice and Mike2 ride two groups each (user/manager + team), so the
+    // billing group must be named explicitly and a member quota granted —
+    // omitted attribution would 400 "choose a billing group".
+    let alice_instance = launch_plain_in_group(&ctx, &tpl1, Some(&team)).await;
     assert_eq!(ctx.login_user("rbac2_mike2", "pw123456").await.status(), 200);
-    let mike2_instance = launch_plain(&ctx, &tpl1).await;
+    let mike2_instance = launch_plain_in_group(&ctx, &tpl1, Some(&team)).await;
 
     // A manager reads/stops/deletes a tier-0 owner's shared-group instance.
     assert_eq!(ctx.login_user("rbac2_mike", "pw123456").await.status(), 200);
@@ -736,8 +769,13 @@ async fn test_template_visibility_end_to_end() {
     assert_eq!(by_id(&tpl_plain)["visibility"], "private", "absent field defaults to private");
 
     // A user with no template grants (the seeded User system group's whitelist
-    // is empty) launches the public template for real.
+    // is empty) launches the public template for real. The seeded User group
+    // is the sole billing group, so the launch auto-attributes there — a member
+    // quota must be granted first (new memberships default to `0`).
     let no_grant_id = create_user(&ctx, "vis_nogrant").await;
+    let user_system_group = system_group_id(&ctx, "user").await;
+    ctx.login_admin().await;
+    grant_member_quota(&ctx, &user_system_group, &no_grant_id).await;
     assert_eq!(ctx.login_user("vis_nogrant", "pw123456").await.status(), 200);
     let body: serde_json::Value = ctx.get("/api/auth/me").await.json().await.unwrap();
     assert_eq!(
@@ -792,6 +830,7 @@ async fn test_template_visibility_end_to_end() {
     let whitelist_group = create_group(&ctx, "vis_trusted", 1, std::slice::from_ref(&tpl_plain)).await;
     let trusted_id = create_user(&ctx, "vis_trusted").await;
     assign_user_policy(&ctx, &trusted_id, &[whitelist_group], None).await;
+    grant_member_quota(&ctx, &whitelist_group, &trusted_id).await;
     assert_eq!(ctx.login_user("vis_trusted", "pw123456").await.status(), 200);
     let private_instance = launch_plain(&ctx, &tpl_plain).await;
 
