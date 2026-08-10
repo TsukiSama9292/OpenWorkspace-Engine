@@ -343,6 +343,12 @@ pub mod user_group {
         pub user_id: Uuid,
         #[sea_orm(primary_key)]
         pub group_id: Uuid,
+        /// Per-member resource cap inside this group (`0` = blocked, `-1` =
+        /// unlimited). The personal layer of the quota pre-flight.
+        pub cpu_quota: i32,
+        /// Per-member memory cap in MB (matches `groups.pool_memory_mb`).
+        pub memory_quota: i64,
+        pub gpu_quota: i32,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -539,6 +545,15 @@ pub struct UserWithPolicy {
     pub group_ids: Vec<Uuid>,
     pub is_admin: bool,
     pub tier: i32,
+}
+
+/// One member's resource cap inside a group (`0` = blocked, `-1` = unlimited).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MembershipQuota {
+    pub user_id: Uuid,
+    pub cpu_quota: i32,
+    pub memory_quota: i64,
+    pub gpu_quota: i32,
 }
 
 pub struct UserRepository<'a> {
@@ -828,6 +843,107 @@ impl<'a> UserRepository<'a> {
             Err(sea_orm::DbErr::RecordNotFound(_)) | Err(sea_orm::DbErr::RecordNotUpdated) => Ok(false),
             Err(e) => Err(e),
         }
+    }
+
+    /// The membership row linking `user_id` to `group_id`, with its resource
+    /// cap. `None` when the pair is not a membership.
+    pub async fn get_membership_quota(
+        &self,
+        user_id: Uuid,
+        group_id: Uuid,
+    ) -> Result<Option<MembershipQuota>, sea_orm::DbErr> {
+        let row = user_group::Entity::find_by_id((user_id, group_id))
+            .one(self.db)
+            .await?;
+        Ok(row.map(|m| MembershipQuota {
+            user_id: m.user_id,
+            cpu_quota: m.cpu_quota,
+            memory_quota: m.memory_quota,
+            gpu_quota: m.gpu_quota,
+        }))
+    }
+
+    /// Every member's resource cap in the group, as a `MembershipQuota` list.
+    /// Empty for a group with no members.
+    pub async fn list_membership_quotas(
+        &self,
+        group_id: Uuid,
+    ) -> Result<Vec<MembershipQuota>, sea_orm::DbErr> {
+        let rows = user_group::Entity::find()
+            .filter(user_group::Column::GroupId.eq(group_id))
+            .all(self.db)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|m| MembershipQuota {
+                user_id: m.user_id,
+                cpu_quota: m.cpu_quota,
+                memory_quota: m.memory_quota,
+                gpu_quota: m.gpu_quota,
+            })
+            .collect())
+    }
+
+    /// Set a membership's resource cap. Returns `false` when the pair is not a
+    /// membership.
+    pub async fn update_membership_quota(
+        &self,
+        user_id: Uuid,
+        group_id: Uuid,
+        cpu_quota: i32,
+        memory_quota: i64,
+        gpu_quota: i32,
+    ) -> Result<bool, sea_orm::DbErr> {
+        let result = user_group::Entity::update(user_group::ActiveModel {
+            user_id: Set(user_id),
+            group_id: Set(group_id),
+            cpu_quota: Set(cpu_quota),
+            memory_quota: Set(memory_quota),
+            gpu_quota: Set(gpu_quota),
+        })
+        .filter(
+            user_group::Column::UserId
+                .eq(user_id)
+                .and(user_group::Column::GroupId.eq(group_id)),
+        )
+        .exec(self.db)
+        .await;
+        match result {
+            Ok(_) => Ok(true),
+            Err(sea_orm::DbErr::RecordNotFound(_)) | Err(sea_orm::DbErr::RecordNotUpdated) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The group id of the user's highest-tier membership (admin > manager >
+    /// user), tie-broken by the oldest membership row. `None` when the user
+    /// belongs to no group. Used by the upgrade backfill and the restart
+    /// re-attribution of a `NULL`-attributed instance.
+    pub async fn highest_tier_membership(
+        &self,
+        user_id: Uuid,
+    ) -> Result<Option<Uuid>, sea_orm::DbErr> {
+        // The tier ranking cannot be expressed as an ORDER BY in sea-orm, so
+        // the candidate set is small and ranked here instead.
+        let memberships = user_group::Entity::find()
+            .filter(user_group::Column::UserId.eq(user_id))
+            .find_also_related(group::Entity)
+            .all(self.db)
+            .await?;
+        let mut ranked: Vec<(i32, Uuid)> = memberships
+            .into_iter()
+            .filter_map(|(m, g)| {
+                g.map(|g| {
+                    let tier = crate::effective_context::group_kind_tier(g.kind.as_deref());
+                    (tier, m.group_id)
+                })
+            })
+            .collect();
+        ranked.sort_by(|a, b| {
+            b.0.cmp(&a.0)
+                .then_with(|| a.1.to_string().cmp(&b.1.to_string()))
+        });
+        Ok(ranked.into_iter().map(|(_, id)| id).next())
     }
 }
 

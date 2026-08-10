@@ -270,6 +270,15 @@ pub enum PreflightReject {
         limit: i64,
         group_id: Option<Uuid>,
     },
+    /// The launch's owner is at their personal resource cap inside the billing
+    /// group (409). This is the per-member layer, checked before the group
+    /// pool (spec Decision 5).
+    MemberResourceExceeded {
+        resource: ResourceKind,
+        current: i64,
+        limit: i64,
+        group_id: Option<Uuid>,
+    },
 }
 
 /// Which resource failed a resource-cap check. `as_str` is the machine-readable
@@ -302,13 +311,20 @@ pub struct ResourceUse {
 }
 
 /// The resource context for a launch/restart pre-flight: the caps and current
-/// usage of both the host and the launch's billing target.
+/// usage of the host and the launch's billing target (the charged group, or a
+/// self-bill). For a group-billed launch, the member cap is the owner's
+/// personal quota inside the charged group.
 #[derive(Debug, Clone)]
 pub struct QuotaContext {
     /// The pool the charged target offers (`-1` = unlimited).
     pub pool: ResourceUse,
     /// Resources already billed to the charged target.
     pub billed: ResourceUse,
+    /// The launch owner's personal cap inside the charged group (`-1` =
+    /// unlimited). Ignored for self-billed launches.
+    pub member_quota: ResourceUse,
+    /// The owner's usage already billed against their personal cap.
+    pub member_used: ResourceUse,
     /// Host-wide capacity (`-1` = disabled).
     pub host_capacity: ResourceUse,
     /// Host-wide usage across all active instances.
@@ -324,6 +340,16 @@ pub fn add_use(a: &ResourceUse, b: &ResourceUse) -> ResourceUse {
         memory_mb: a.memory_mb + b.memory_mb,
         gpu_count: a.gpu_count + b.gpu_count,
     }
+}
+
+/// Convert a template memory value (bytes; `-1` = unlimited) to the quota
+/// layer's MB. `-1` is preserved; a positive byte count rounds up to a whole
+/// MB so a request is never under-counted against a quota.
+pub fn memory_bytes_to_mb(bytes: i64) -> i64 {
+    if bytes < 0 {
+        return bytes;
+    }
+    bytes.div_ceil(1024 * 1024)
 }
 
 /// A template's launch visibility — the per-template override that sits above
@@ -383,13 +409,21 @@ impl FromStr for TemplateVisibility {
 ///    → `409` (`-1` = no limit, `0` = blocked). No tier is exempt: admin
 ///    instances still count toward the host limit, so the global check always
 ///    runs.
-/// 5. For each resource, when the host ceiling is enabled (`>= 0`, i.e. not
-///    `-1`): `host_used + requested > host_capacity` → `409` for a positive
-///    request. Host resource caps are global and apply to every tier.
+/// 5. For each resource, when the launch owner's member cap is enabled
+///    (`>= 0`): `member_used + requested > member_quota` → `409`. The member
+///    layer sits between the instance ceiling and the pool (spec Decision 5):
+///    a member with a small personal cap is stopped before their own group's
+///    pool is even consulted.
 /// 6. For each resource, when the billing target's pool is enabled (`>= 0`):
 ///    `billed + requested > pool` → `409`. The `pool`/`billed` come from the
 ///    launch's billing target — the charged group, or an unlimited self-bill
 ///    (`QuotaContext.pool` all `-1`) that never rejects.
+/// 7. For each resource, when the host ceiling is enabled (`>= 0`):
+///    `host_used + requested > host_capacity` → `409` for a positive request.
+///    Host resource caps are global and apply to every tier.
+///
+/// Resource check order per resource is fixed: member cap, then pool, then
+/// host caps.
 pub fn pre_flight(
     context: &EffectiveContext,
     host_active_count: i32,
@@ -434,10 +468,12 @@ pub fn pre_flight(
 
     // Resource checks run per resource so the `-1` request rule (spec Decision
     // on unlimited requests) can inspect every layer before deciding. Order per
-    // resource is fixed: chosen group pool first, then host caps.
+    // resource is fixed: member cap, then chosen group pool, then host caps.
     let resources = [
         (
             ResourceKind::Cpu,
+            billing.member_quota.cpu_cores,
+            billing.member_used.cpu_cores,
             billing.pool.cpu_cores,
             billing.billed.cpu_cores,
             billing.host_capacity.cpu_cores,
@@ -446,6 +482,8 @@ pub fn pre_flight(
         ),
         (
             ResourceKind::Memory,
+            billing.member_quota.memory_mb,
+            billing.member_used.memory_mb,
             billing.pool.memory_mb,
             billing.billed.memory_mb,
             billing.host_capacity.memory_mb,
@@ -454,6 +492,8 @@ pub fn pre_flight(
         ),
         (
             ResourceKind::Gpu,
+            billing.member_quota.gpu_count,
+            billing.member_used.gpu_count,
             billing.pool.gpu_count,
             billing.billed.gpu_count,
             billing.host_capacity.gpu_count,
@@ -462,15 +502,34 @@ pub fn pre_flight(
         ),
     ];
 
-    for (resource, pool_limit, pool_current, host_limit, host_current, requested) in resources {
+    for (
+        resource,
+        member_limit,
+        member_current,
+        pool_limit,
+        pool_current,
+        host_limit,
+        host_current,
+        requested,
+    ) in resources
+    {
         // `-1` request rule (spec Decision): a template resource of `-1` asks
         // for unlimited of that resource and is accepted only when that
         // resource's limit is `-1` (unlimited) at every checked layer —
-        // otherwise the launch is refused at the first binding layer (pool
-        // before host). A request of `0` is a finite zero-cost request (it
-        // consumes nothing) and is always fine. A positive request is compared
-        // as `current + requested ≤ limit` against every finite layer.
+        // otherwise the launch is refused at the first binding layer (member
+        // before pool before host). A request of `0` is a finite zero-cost
+        // request (it consumes nothing) and is always fine. A positive request
+        // is compared as `current + requested ≤ limit` against every finite
+        // layer.
         if requested < 0 {
+            if member_limit >= 0 {
+                return Err(PreflightReject::MemberResourceExceeded {
+                    resource,
+                    current: member_current,
+                    limit: member_limit,
+                    group_id: billing.target_group_id,
+                });
+            }
             if pool_limit >= 0 {
                 return Err(PreflightReject::PoolResourceExceeded {
                     resource,
@@ -487,6 +546,14 @@ pub fn pre_flight(
                 });
             }
         } else if requested > 0 {
+            if member_limit >= 0 && member_current + requested > member_limit {
+                return Err(PreflightReject::MemberResourceExceeded {
+                    resource,
+                    current: member_current,
+                    limit: member_limit,
+                    group_id: billing.target_group_id,
+                });
+            }
             if pool_limit >= 0 && pool_current + requested > pool_limit {
                 return Err(PreflightReject::PoolResourceExceeded {
                     resource,
@@ -876,10 +943,39 @@ mod tests {
         QuotaContext {
             pool: res(-1, -1, -1),
             billed: res(0, 0, 0),
+            member_quota: res(-1, -1, -1),
+            member_used: res(0, 0, 0),
             host_capacity: res(-1, -1, -1),
             host_used: res(0, 0, 0),
             target_group_id: None,
         }
+    }
+
+    /// A finite group-billed quota context: member cap and pool both `limit`,
+    /// host caps disabled.
+    fn quota_finite(limit: i64) -> QuotaContext {
+        QuotaContext {
+            pool: res(limit, limit, limit),
+            billed: res(0, 0, 0),
+            member_quota: res(limit, limit, limit),
+            member_used: res(0, 0, 0),
+            host_capacity: res(-1, -1, -1),
+            host_used: res(0, 0, 0),
+            target_group_id: Some(uuid(300)),
+        }
+    }
+
+    #[test]
+    fn memory_bytes_to_mb_rounds_up_and_preserves_unlimited() {
+        // 4 GiB exactly → 4096 MB.
+        assert_eq!(memory_bytes_to_mb(4_294_967_296), 4096);
+        // 1 byte over a GiB boundary rounds up so a request is never
+        // under-counted.
+        assert_eq!(memory_bytes_to_mb(4_294_967_297), 4097);
+        // Zero stays zero.
+        assert_eq!(memory_bytes_to_mb(0), 0);
+        // `-1` (unlimited) is preserved verbatim.
+        assert_eq!(memory_bytes_to_mb(-1), -1);
     }
 
     #[test]
@@ -1125,6 +1221,130 @@ mod tests {
             ..quota()
         };
         assert!(pre_flight(&ctx, 0, -1, uuid(200), 0, TemplateVisibility::Private, &res(1, 2048, 1), &billing).is_ok());
+    }
+
+    // ── per-member resource cap (spec Decision 5: the personal layer) ────────
+
+    #[test]
+    fn pre_flight_member_cap_rejects_when_over() {
+        let ctx = allow_all();
+        let billing = QuotaContext {
+            member_quota: res(4, 4096, 2),
+            member_used: res(3, 2048, 1),
+            target_group_id: Some(uuid(10)),
+            ..quota()
+        };
+        assert_eq!(
+            pre_flight(&ctx, 0, -1, uuid(200), 0, TemplateVisibility::Private, &res(2, 0, 0), &billing),
+            Err(PreflightReject::MemberResourceExceeded {
+                resource: ResourceKind::Cpu,
+                current: 3,
+                limit: 4,
+                group_id: Some(uuid(10)),
+            })
+        );
+        // Memory is the binding resource here: 2048 used + 2049 requested > 4096 cap.
+        assert_eq!(
+            pre_flight(&ctx, 0, -1, uuid(200), 0, TemplateVisibility::Private, &res(0, 2049, 0), &billing),
+            Err(PreflightReject::MemberResourceExceeded {
+                resource: ResourceKind::Memory,
+                current: 2048,
+                limit: 4096,
+                group_id: Some(uuid(10)),
+            })
+        );
+    }
+
+    #[test]
+    fn pre_flight_member_cap_binds_before_pool() {
+        // The member cap is checked before the pool (spec Decision 5): a small
+        // personal cap rejects even when the group pool would fit the request.
+        let ctx = allow_all();
+        let billing = QuotaContext {
+            member_quota: res(2, 1024, 1),
+            member_used: res(1, 512, 0),
+            pool: res(16, 16384, 8),
+            billed: res(0, 0, 0),
+            target_group_id: Some(uuid(10)),
+            ..quota()
+        };
+        assert_eq!(
+            pre_flight(&ctx, 0, -1, uuid(200), 0, TemplateVisibility::Private, &res(2, 512, 1), &billing),
+            Err(PreflightReject::MemberResourceExceeded {
+                resource: ResourceKind::Cpu,
+                current: 1,
+                limit: 2,
+                group_id: Some(uuid(10)),
+            })
+        );
+    }
+
+    #[test]
+    fn pre_flight_member_cap_exact_fit_allowed() {
+        let ctx = allow_all();
+        let billing = QuotaContext {
+            member_quota: res(4, 4096, 2),
+            member_used: res(3, 2048, 1),
+            target_group_id: Some(uuid(10)),
+            ..quota()
+        };
+        assert!(pre_flight(&ctx, 0, -1, uuid(200), 0, TemplateVisibility::Private, &res(1, 2048, 1), &billing).is_ok());
+    }
+
+    #[test]
+    fn pre_flight_member_cap_unlimited_allows() {
+        let ctx = allow_all();
+        let billing = QuotaContext {
+            member_quota: res(-1, -1, -1),
+            member_used: res(999, 999, 999),
+            target_group_id: Some(uuid(10)),
+            ..quota()
+        };
+        assert!(pre_flight(&ctx, 0, -1, uuid(200), 0, TemplateVisibility::Private, &res(500, 500, 500), &billing).is_ok());
+    }
+
+    #[test]
+    fn pre_flight_member_cap_zero_blocks() {
+        // `0` is a real zero: a blocked personal cap rejects every finite request.
+        let ctx = allow_all();
+        let billing = QuotaContext {
+            member_quota: res(0, 0, 0),
+            member_used: res(0, 0, 0),
+            target_group_id: Some(uuid(10)),
+            ..quota()
+        };
+        assert_eq!(
+            pre_flight(&ctx, 0, -1, uuid(200), 0, TemplateVisibility::Private, &res(1, 0, 0), &billing),
+            Err(PreflightReject::MemberResourceExceeded {
+                resource: ResourceKind::Cpu,
+                current: 0,
+                limit: 0,
+                group_id: Some(uuid(10)),
+            })
+        );
+    }
+
+    #[test]
+    fn pre_flight_unlimited_request_rejected_by_finite_member() {
+        // An unlimited (-1) request is refused at the member layer before the
+        // pool is consulted.
+        let ctx = allow_all();
+        let billing = QuotaContext {
+            member_quota: res(4, 0, 0),
+            member_used: res(0, 0, 0),
+            pool: res(-1, -1, -1),
+            target_group_id: Some(uuid(10)),
+            ..quota()
+        };
+        assert_eq!(
+            pre_flight(&ctx, 0, -1, uuid(200), 0, TemplateVisibility::Private, &res(-1, 0, 0), &billing),
+            Err(PreflightReject::MemberResourceExceeded {
+                resource: ResourceKind::Cpu,
+                current: 0,
+                limit: 4,
+                group_id: Some(uuid(10)),
+            })
+        );
     }
 
     #[test]

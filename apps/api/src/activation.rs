@@ -32,10 +32,11 @@ use sea_orm::{
 use uuid::Uuid;
 
 use crate::db::{
-    user, workspace_instance, WorkspaceInstance, WorkspaceTemplate, ACTIVE_STATUSES,
+    user, user_group, workspace_instance, WorkspaceInstance, WorkspaceTemplate, ACTIVE_STATUSES,
 };
 use crate::effective_context::{
-    pre_flight, add_use, EffectiveContext, PreflightReject, QuotaContext, ResourceUse,
+    memory_bytes_to_mb, pre_flight, add_use, EffectiveContext, PreflightReject, QuotaContext,
+    ResourceUse,
 };
 use crate::system_settings::SystemSettingsRepository;
 
@@ -317,7 +318,7 @@ pub async fn activate(
 
     let active_own_count = count_active_instances_for_user(&tx, request.user_id).await?;
 
-    let (pool, billed, snapshot) = match &target_group {
+    let (pool, billed, member_quota, member_used, snapshot) = match &target_group {
         Some(group) => {
             let pool = ResourceUse {
                 cpu_cores: group.pool_cpu_cores as i64,
@@ -325,6 +326,19 @@ pub async fn activate(
                 gpu_count: group.pool_gpu_count as i64,
             };
             let billed = sum_resources_for_group(&tx, group.id).await?;
+            // The owner's personal cap inside the charged group (`0` = blocked,
+            // `-1` = unlimited). A missing membership row (deleted after the
+            // route guard) defaults to unlimited rather than rejecting the
+            // already-in-flight reservation.
+            let membership = user_group::Entity::find_by_id((request.user_id, group.id))
+                .one(&tx)
+                .await?;
+            let member_quota = ResourceUse {
+                cpu_cores: membership.as_ref().map(|m| m.cpu_quota as i64).unwrap_or(-1),
+                memory_mb: membership.as_ref().map(|m| m.memory_quota).unwrap_or(-1),
+                gpu_count: membership.as_ref().map(|m| m.gpu_quota as i64).unwrap_or(-1),
+            };
+            let member_used = sum_resources_for_user_in_group(&tx, request.user_id, group.id).await?;
             // Freeze the pool caps in effect at launch so the UI can report what
             // the instance was launched under even after the group is
             // reconfigured. The live restart/launch check always uses the
@@ -336,11 +350,12 @@ pub async fn activate(
                 "pool_memory_mb": group.pool_memory_mb,
                 "pool_gpu_count": group.pool_gpu_count,
             }));
-            (pool, billed, snapshot)
+            (pool, billed, member_quota, member_used, snapshot)
         }
         None => {
             let billed = sum_resources_for_user_self_billed(&tx, request.user_id).await?;
-            // A self-billed launch has no pool to spend: unlimited (`-1`).
+            // A self-billed launch has no pool or personal cap to spend:
+            // unlimited (`-1`).
             (
                 ResourceUse {
                     cpu_cores: -1,
@@ -348,6 +363,16 @@ pub async fn activate(
                     gpu_count: -1,
                 },
                 billed,
+                ResourceUse {
+                    cpu_cores: -1,
+                    memory_mb: -1,
+                    gpu_count: -1,
+                },
+                ResourceUse {
+                    cpu_cores: 0,
+                    memory_mb: 0,
+                    gpu_count: 0,
+                },
                 None,
             )
         }
@@ -356,13 +381,16 @@ pub async fn activate(
     let billing = QuotaContext {
         pool,
         billed,
+        member_quota,
+        member_used,
         host_capacity,
         host_used,
         target_group_id: request.owner_group_id,
     };
     let requested_resources = ResourceUse {
         cpu_cores: request.template.cores as i64,
-        memory_mb: request.template.memory,
+        // Template memory is stored in bytes; the quota layer accounts in MB.
+        memory_mb: memory_bytes_to_mb(request.template.memory),
         gpu_count: request.template.gpu_count as i64,
     };
 
@@ -463,9 +491,10 @@ async fn reserve<C: ConnectionTrait>(
                 owner_group_id: Set(request.owner_group_id),
                 billing_group_snapshot: Set(billing_group_snapshot.cloned()),
                 // The instance's billed resources are exactly what its template
-                // requests; the container is created to that size.
+                // requests; the container is created to that size. Memory is
+                // converted to the quota layer's MB (template stores bytes).
                 host_cpu_cores: Set(request.template.cores),
-                host_memory_mb: Set(request.template.memory),
+                host_memory_mb: Set(memory_bytes_to_mb(request.template.memory)),
                 host_gpu_count: Set(request.template.gpu_count),
                 ..Default::default()
             };
