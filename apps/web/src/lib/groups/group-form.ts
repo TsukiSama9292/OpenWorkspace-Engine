@@ -1,5 +1,5 @@
 import { createGroup, updateGroup } from '$lib/api/rbac-actions';
-import { DISABLED, UNLIMITED, isTriStateValid, triStateFromValue, valueFromTriState, type TriState } from '$lib/tri-state';
+import { UNLIMITED, isTriStateValid, triStateFromValue, valueFromTriState, type TriState } from '$lib/tri-state';
 import type { Group, GroupInput } from '$lib/types';
 
 export type BillingModel = 'shared' | 'dedicated';
