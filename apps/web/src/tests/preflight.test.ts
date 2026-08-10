@@ -11,7 +11,7 @@ const GROUP_POOL_CPU: PreflightRejection = {
   scope: 'group_pool_cpu', current: 2, limit: 2, requested: 1, group_id: 'g1',
 };
 const MEMBER_QUOTA_MEMORY: PreflightRejection = {
-  scope: 'member_quota_memory', current: 4096, limit: 8192, requested: 1024,
+  scope: 'member_quota_memory', current: 4096, limit: 8192, requested: 1,
 };
 const HOST_MEMORY_UNLIMITED: PreflightRejection = { scope: 'host_resource_memory', current: 4, limit: -1, requested: 1 };
 
