@@ -3759,6 +3759,149 @@ async fn test_launch_consumes_billing_group_pool() {
 }
 
 #[tokio::test]
+async fn test_concurrent_launches_same_group_pool_exactly_one_succeeds() {
+    let ctx = MockContext::new(|m| {
+        m.expect_create_container_from_template()
+            .times(1)
+            .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+    }).await;
+
+    let admin_token = ctx.login_admin().await;
+    // A 2-core pool fits exactly one default template (2 cores).
+    let group_id = seed_pool_group(&ctx, "conc-pool-grp", 2, -1, -1).await;
+    let template_id = create_template_only(&ctx, &admin_token, "conc-pool").await;
+    // Two DIFFERENT users billing against the same group pool: no user-row
+    // lock is shared, so the group-row lock alone must serialize pool
+    // consumption — exactly one fits, the sibling gets 409 `group_pool_cpu`.
+    for username in ["conc_pool_a", "conc_pool_b"] {
+        let user_id = create_quota_user(&ctx, &admin_token, username, 5).await;
+        add_group_member(&ctx, &user_id, &group_id).await;
+    }
+    grant_group_template(&ctx, &group_id, &template_id).await;
+    let token_a = ctx.login_user("conc_pool_a", "password123").await;
+    let token_b = ctx.login_user("conc_pool_b", "password123").await;
+
+    let client = ctx.client.clone();
+    let url = format!("{}/api/instances", ctx.base_url);
+    let body = serde_json::json!({ "template_id": template_id, "owner_group_id": group_id });
+    let mut handles = Vec::new();
+    for token in [token_a, token_b] {
+        let client = client.clone();
+        let url = url.clone();
+        let body = body.clone();
+        handles.push(tokio::spawn(async move {
+            let resp = client
+                .post(&url)
+                .header("Cookie", format!("ow_token={}", token))
+                .json(&body)
+                .send()
+                .await
+                .unwrap();
+            (resp.status(), resp.json::<serde_json::Value>().await.unwrap())
+        }));
+    }
+
+    let mut ok = 0;
+    let mut pool_conflicts = 0;
+    for handle in handles {
+        let (status, body) = handle.await.unwrap();
+        match status {
+            reqwest::StatusCode::OK => ok += 1,
+            reqwest::StatusCode::CONFLICT => {
+                pool_conflicts += 1;
+                assert_eq!(body["rejection"]["scope"], "group_pool_cpu");
+                assert_eq!(body["rejection"]["current"], 2);
+                assert_eq!(body["rejection"]["limit"], 2);
+                assert_eq!(body["rejection"]["requested"], 1);
+                assert_eq!(body["rejection"]["group_id"], serde_json::json!(group_id));
+            }
+            other => panic!("unexpected status: {}", other),
+        }
+    }
+    assert_eq!(ok, 1, "exactly one concurrent launch must fit the group pool");
+    assert_eq!(pool_conflicts, 1, "the sibling launch must 409 on the group pool");
+}
+
+#[tokio::test]
+async fn test_concurrent_launches_different_groups_proceed_in_parallel_at_host_cap() {
+    // A Barrier inside the docker-create mock proves both launches reach the
+    // create stage at the same time: had the precise layers serialized across
+    // groups — or a host-wide gate blocked the sibling — the first create
+    // would sit on the barrier until it times out instead of passing it.
+    let gate = Arc::new(tokio::sync::Barrier::new(2));
+    let gate_for_mock = gate.clone();
+    let ctx = MockContext::new(move |m| {
+        m.expect_create_container_from_template()
+            .times(2)
+            .returning(move |_, _, _, _, _| {
+                let gate = gate_for_mock.clone();
+                Box::pin(async move {
+                    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), gate.wait()).await;
+                    Ok("fake-container-id".to_string())
+                })
+            });
+    }).await;
+
+    let admin_token = ctx.login_admin().await;
+    // Host caps exactly fit the two concurrent 2-core launches (2 + 2 = 4):
+    // each must clear the best-effort host check, and different groups never
+    // contend on a lock, so both run in parallel and both succeed.
+    let settings = serde_json::json!({
+        "host_cpu_cores": 4,
+        "host_memory_mb": -1,
+        "host_gpu_count": -1,
+        "host_instance_limit": -1,
+    });
+    assert_eq!(ctx.put_auth("/api/admin/settings", &settings, &admin_token).await.status(), 200);
+
+    let template_id = create_template_only(&ctx, &admin_token, "conc-host").await;
+    for (username, ceiling) in [("conc_host_a", 5), ("conc_host_b", 5)] {
+        let user_id = create_quota_user(&ctx, &admin_token, username, ceiling).await;
+        grant_template_whitelist(&ctx, &user_id, &template_id).await;
+    }
+    let token_a = ctx.login_user("conc_host_a", "password123").await;
+    let token_b = ctx.login_user("conc_host_b", "password123").await;
+
+    let client = ctx.client.clone();
+    let url = format!("{}/api/instances", ctx.base_url);
+    let body = serde_json::json!({ "template_id": template_id });
+    let mut handles = Vec::new();
+    for token in [token_a, token_b] {
+        let client = client.clone();
+        let url = url.clone();
+        let body = body.clone();
+        handles.push(tokio::spawn(async move {
+            client
+                .post(&url)
+                .header("Cookie", format!("ow_token={}", token))
+                .json(&body)
+                .send()
+                .await
+                .unwrap()
+                .status()
+        }));
+    }
+    for handle in handles {
+        assert_eq!(handle.await.unwrap(), reqwest::StatusCode::OK);
+    }
+
+    // Both committed against their own groups: distinct host ports, and the
+    // committed host cores sum exactly to the cap (no cross-group overlap).
+    use openworkspace_api::db::workspace_instance;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    let instances = workspace_instance::Entity::find()
+        .filter(workspace_instance::Column::TemplateId.eq(uuid::Uuid::parse_str(&template_id).unwrap()))
+        .all(&ctx.db).await.unwrap();
+    assert_eq!(instances.len(), 2);
+    let mut ports: Vec<i32> = instances.iter().filter_map(|i| i.host_port).collect();
+    ports.sort_unstable();
+    assert_eq!(ports.len(), 2, "both concurrent launches must commit a host port");
+    assert_ne!(ports[0], ports[1], "concurrent launches must allocate distinct host ports");
+    let cores: i32 = instances.iter().map(|i| i.host_cpu_cores).sum();
+    assert_eq!(cores, 4, "the two launches must sum exactly to the host cap");
+}
+
+#[tokio::test]
 async fn test_launch_billing_group_not_member_returns_403() {
     let ctx = MockContext::new(|_| {}).await;
     let admin_token = ctx.login_admin().await;
