@@ -24,8 +24,96 @@ not lock anyone out.
 
 **Blocked by:** None — can start immediately
 
-**Status:** completed (backend ticket delivered — migration, runtime flip,
-validation, and tests all green: `check.sh` silent, `run_tests.sh` 715/715)
+**Status:** in-progress (revision round — billing attribution + member-quota
+editing landed; full suite not green yet: 18 `instances_mock_test` failures
+from the billing auto-attribute change are being fixed). The base delivery
+(`-1` sentinel flip + quota feature, `check.sh` silent, `run_tests.sh`
+715/715) was completed and committed; the revision round below is new work on
+top of it.
+
+## Revision round — 2026-08-10 (billing attribution + member-quota editing)
+
+> **Status update (2026-08-10, in flight):** the revision round on top of the
+> completed base delivery is **committed but not green**. `check.sh` is silent
+> (zero warnings, both feature sets). `run_tests.sh` is currently **RED**: 18
+> `instances_mock_test` tests fail because the new billing-group auto-attribute
+> rule changed launch semantics that pre-existing tests relied on. Fix in
+> progress.
+
+### Done (committed on `feature/resource-quotas`)
+
+- `a9f8d34` — feat(api): per-member quotas, pool-tightening guards, billing
+  auto-attribute (6 files, +883/-26):
+  - New endpoint `PUT /api/groups/{id}/members/{user_id}/quota`
+    (groups.rs:29, handler ~550) — per-member quota editing, gated by
+    `can_manage_users` + target-user tier + group tier strictly below the
+    actor; values `-1` / within `[0, group_pool]`; audit `GROUP_QUOTA_CHANGE`.
+  - Pool-tightening 409 guards: lowering a pool below a member's finite quota
+    → 409; lowering any quota to a finite value while an active `-1`-snapshot
+    instance is in scope → 409; deleting a group with an active attributed
+    instance → 409.
+  - Billing-group resolution at launch (instances.rs:834-871): named group not
+    in `context.group_ids` → 403; absent with exactly one membership →
+    auto-attribute; absent with several memberships → 400 "You belong to
+    several groups; choose a billing group"; zero memberships → 403.
+  - `owner_group_id` + resource snapshot stored at launch and exposed in the
+    instance JSON (instances.rs:116); `GET /api/groups` now returns each
+    group's members with per-membership quotas (`members` array).
+  - Restart re-attribution (instances.rs:1326-1371): a `NULL`-attributed
+    stopped instance is re-attributed to the owner's highest-tier membership
+    (persisted) before pre-flight; no membership → 403.
+- `a662d3b` — chore(api): regenerate OpenAPI spec (+45/-1: `GroupMemberSchema`
+  + `GroupSchema.members`); `committed_spec_is_in_sync` green.
+- `a22bb6b` + `5314a87` — fix(api): flat_rbac_e2e tests launch with an explicit
+  billing group + member quota grants (added helpers `grant_member_quota` via
+  the new PUT endpoint and `launch_plain_in_group`); `whitelist_group.clone()`
+  fix. **`flat_rbac_e2e_test` now green.**
+
+### In flight (the reason `run_tests.sh` is red)
+
+- **18 `instances_mock_test` failures**, all downstream of the billing
+  auto-attribute change. Root cause: `/api/users` (users.rs:253-277) auto-adds
+  the migration-seeded User system group as default membership when
+  `group_ids` is omitted, so:
+  - `create_quota_user` users end up in **2 groups** (User system + the helper's
+    `grp-<username>`) → launch without `owner_group_id` → 400 "several groups".
+  - plain `create_user_and_token` users end up in **1 group** (User system,
+    membership quota 0) → launch auto-attributes to it → 409
+    `member_quota_cpu` (used: 0, quota: 0).
+  - Before this round, omitting the billing group self-billed with no
+    membership check, so these tests never exercised a billing resolution.
+- Failing tests (full list from `--no-fail-fast`):
+  `test_admin_restart_accounts_against_owner_quota` (2975),
+  `test_concurrent_launches_same_user_at_ceiling_exactly_one_succeeds` (3090),
+  `test_concurrent_launches_different_users_both_succeed` (3150),
+  `test_concurrent_launches_allocate_distinct_subnets` (757),
+  `test_gate_instance_lifecycle_same_group_scope` (3468),
+  `test_gate_group_manager_list_includes_same_group_instances` (3525),
+  `test_heartbeat_forbidden_for_non_owner` (1811),
+  `test_host_resource_cap_blocks_second_launch` (4335),
+  `test_launch_auto_attributes_single_group` (3749),
+  `test_launch_persistent_conflict_is_per_owner` (2231),
+  `test_launch_rejected_by_ceiling_returns_409_and_leaves_no_row` (2786),
+  `test_launch_rejected_by_template_whitelist_returns_403` (2824),
+  `test_launch_rejected_by_host_ceiling_returns_409` (3032),
+  `test_restart_reattributes_null_attributed_instance` (3938),
+  `test_restart_without_membership_rejected_403` (3974),
+  `test_start_infra_failure_rolls_back_to_stopped` (2906),
+  `test_start_rejected_by_ceiling_leaves_instance_stopped` (2862),
+  `test_user_launch_infra_failure_marks_error_and_keeps_record` (2943).
+- Fix plan: make the helper-launched users resolve to a **single** billing
+  group with a usable membership quota, mirroring the flat_rbac fix — either
+  pass an explicit `owner_group_id` at each launch or restructure the helpers
+  (`create_quota_user` / launch call sites) so auto-attribute lands on the
+  intended group. Then re-run the full suite until green.
+
+### Gate state
+
+- `bash scripts/check.sh` — **silent** (zero warnings, both feature sets).
+- `bash scripts/run_tests.sh` — **RED**: 18 `instances_mock_test` failures
+  (listed above); `flat_rbac_e2e_test` green after `a22bb6b`/`5314a87`.
+- Next: fix the 18, then full-suite green → doc sync (this ticket, spec,
+  roadmap, CHANGELOG).
 
 ## Implementation audit — 2026-08-09 (working tree on `feature/resource-quotas`)
 
@@ -34,6 +122,11 @@ validation, and tests all green: `check.sh` silent, `run_tests.sh` 715/715)
 > `feature/resource-quotas`; `bash scripts/check.sh` is silent (zero warnings,
 > both feature sets) and `bash scripts/run_tests.sh` is **green: 715/715
 > passed**. The full gate also uncovered and fixed three real bugs (below).
+>
+> **Follow-up:** the 2026-08-10 revision round (billing attribution +
+> member-quota editing) landed **on top of** this audit and is tracked in the
+> "Revision round — 2026-08-10" section above. The 715/715 result below is the
+> base-delivery gate; the revision round has its own (currently red) gate.
 
 ### Done (uncommitted working tree)
 

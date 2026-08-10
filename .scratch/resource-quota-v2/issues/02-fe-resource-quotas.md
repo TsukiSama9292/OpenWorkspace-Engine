@@ -16,12 +16,15 @@ from ticket 01.
 **Blocked by:** 01 — Backend: resource quotas, attribution, and the `-1`
 convention
 
-**Status:** ready-for-agent
+**Status:** ready-for-agent (blocked — ticket 01 revision round in progress)
 
-## Status — 2026-08-09
+## Status — 2026-08-10
 
-Not started. No `apps/web/` changes exist in the working tree; all `-1` flip
-work so far is backend-only (ticket 01).
+Not started. No `apps/web/` changes exist in the working tree; all backend work
+is in ticket 01. Ticket 01's base delivery is committed; its 2026-08-10
+revision round (billing attribution + member-quota editing) is committed but
+its test suite is not yet green (18 `instances_mock_test` failures in flight),
+so 02 must not start until 01 closes green.
 
 Backend contract confirmed for this ticket to build against (from the 01 audit):
 
@@ -40,6 +43,14 @@ Backend contract confirmed for this ticket to build against (from the 01 audit):
   contract types + `preflight.ts` copy + byte-format rendering still to do.
 - `direct_max_instances` stays nullable (`NULL` = inherit group ceiling);
   `-1` = unlimited; `0` = blocked.
+- New (revision round, backend committed): launch carries an optional billing
+  `owner_group_id` — present-and-not-a-membership → `403`; absent with exactly
+  one membership → auto-attribute; absent with several → `400`; zero
+  memberships → `403`. `Instance` JSON exposes `owner_group_id` plus the
+  resource snapshot; `Group` JSON includes a `members` array with per-membership
+  quotas; managers (not just admins) can edit a member's quota via the member
+  quota endpoint. The frontend picker (multi-group only, default highest-cap
+  membership) and the manager Groups-tab quota editing build against these.
 
 ## Acceptance criteria
 
