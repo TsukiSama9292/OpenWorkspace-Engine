@@ -97,9 +97,9 @@ describe("template-form", () => {
       expect(state.ramGb).toBe(4);
       expect(state.gpuCount).toBe(0);
       expect(state.remoteType).toBe("kasmvnc");
-      expect(state.maxRunSeconds).toBeNull();
+      expect(state.maxRunSeconds).toBe(-1);
       expect(state.timeoutAction).toBe("remove");
-      expect(state.keepTimeSeconds).toBeNull();
+      expect(state.keepTimeSeconds).toBe(-1);
       expect(state.keepTimeAction).toBe("pause");
       expect(state.dockerInInstance).toBe(false);
       expect(state.visibility).toBe("private");
@@ -190,7 +190,7 @@ describe("template-form", () => {
       );
     });
 
-    it("sends null for empty optional fields and omits empty config sections", async () => {
+    it("sends -1 for disabled limits and omits empty config sections", async () => {
       const mockFetch = vi
         .fn()
         .mockResolvedValue(jsonResponse({ template: { id: "tpl-new" } }));
@@ -215,9 +215,9 @@ describe("template-form", () => {
             exec_config: {},
             volume_mappings: {},
             persistent_storage_path: null,
-            max_run_seconds: null,
+            max_run_seconds: -1,
             timeout_action: "remove",
-            keep_time_seconds: null,
+            keep_time_seconds: -1,
             keep_time_action: "pause",
             network_bandwidth_up_mbps: 0,
             network_bandwidth_down_mbps: 0,
@@ -285,7 +285,7 @@ describe("template-form", () => {
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    it("sends null keep-time and the pause action when keep-time is disabled", async () => {
+    it("sends -1 keep-time and the pause action when keep-time is disabled", async () => {
       const mockFetch = vi
         .fn()
         .mockResolvedValue(jsonResponse({ template: { id: "tpl-new" } }));
@@ -294,7 +294,7 @@ describe("template-form", () => {
       await submitTemplate({ ...createInitialFormState(), name: "X" });
 
       const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
-      expect(body.keep_time_seconds).toBeNull();
+      expect(body.keep_time_seconds).toBe(-1);
       expect(body.keep_time_action).toBe("pause");
     });
 
@@ -402,10 +402,10 @@ describe("template-form", () => {
     it("maps auto-sleep fields, defaulting a missing duration to off", () => {
       const state = formStateFromTemplate({
         ...template,
-        max_run_seconds: null,
+        max_run_seconds: -1,
         timeout_action: "remove",
       });
-      expect(state.maxRunSeconds).toBeNull();
+      expect(state.maxRunSeconds).toBe(-1);
       expect(state.timeoutAction).toBe("remove");
     });
 
@@ -447,10 +447,10 @@ describe("template-form", () => {
     it("maps a missing keep-time duration to off with the pause default", () => {
       const state = formStateFromTemplate({
         ...template,
-        keep_time_seconds: null,
+        keep_time_seconds: -1,
         keep_time_action: "pause",
       });
-      expect(state.keepTimeSeconds).toBeNull();
+      expect(state.keepTimeSeconds).toBe(-1);
       expect(state.keepTimeAction).toBe("pause");
     });
   });

@@ -49,9 +49,9 @@ export interface TemplateFormState {
   shmSize: string;
   networkMode: string;
   containerRuntime: string;
-  maxRunSeconds: number | null;
+  maxRunSeconds: number;
   timeoutAction: TimeoutAction;
-  keepTimeSeconds: number | null;
+  keepTimeSeconds: number;
   keepTimeAction: TimeoutAction;
   bandwidthUpMbps: number;
   bandwidthDownMbps: number;
@@ -81,9 +81,9 @@ export function createInitialFormState(): TemplateFormState {
     shmSize: '',
     networkMode: '',
     containerRuntime: 'runc',
-    maxRunSeconds: null,
+    maxRunSeconds: -1,
     timeoutAction: 'remove',
-    keepTimeSeconds: null,
+    keepTimeSeconds: -1,
     keepTimeAction: 'pause',
     bandwidthUpMbps: 0,
     bandwidthDownMbps: 0,
@@ -192,9 +192,9 @@ export function formStateFromTemplate(t: Template): TemplateFormState {
     shmSize: rc.shmSize,
     networkMode: rc.networkMode,
     containerRuntime: t.container_runtime,
-    maxRunSeconds: t.max_run_seconds ?? null,
+    maxRunSeconds: t.max_run_seconds,
     timeoutAction: t.timeout_action ?? 'remove',
-    keepTimeSeconds: t.keep_time_seconds ?? null,
+    keepTimeSeconds: t.keep_time_seconds,
     keepTimeAction: (t.keep_time_action ?? 'pause') as TimeoutAction,
     bandwidthUpMbps: t.network_bandwidth_up_mbps ?? 0,
     bandwidthDownMbps: t.network_bandwidth_down_mbps ?? 0,

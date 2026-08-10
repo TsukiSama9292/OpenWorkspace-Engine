@@ -7,9 +7,9 @@
     gpuCount: number;
     dockerRegistry: string;
     persistentStoragePath: string;
-    maxRunSeconds: number | null;
+    maxRunSeconds: number;
     timeoutAction: TimeoutAction;
-    keepTimeSeconds: number | null;
+    keepTimeSeconds: number;
     keepTimeAction: TimeoutAction;
   }
 
@@ -32,10 +32,10 @@
 
   const DEFAULT_SECONDS = 3600;
 
-  let usageEnabled = $state(maxRunSeconds !== null);
-  let keepTimeEnabled = $state(keepTimeSeconds !== null);
-  let maxRunSecondsInput = $state(String(maxRunSeconds ?? DEFAULT_SECONDS));
-  let keepTimeSecondsInput = $state(String(keepTimeSeconds ?? DEFAULT_SECONDS));
+  let usageEnabled = $state(maxRunSeconds > 0);
+  let keepTimeEnabled = $state(keepTimeSeconds > 0);
+  let maxRunSecondsInput = $state(String(maxRunSeconds > 0 ? maxRunSeconds : DEFAULT_SECONDS));
+  let keepTimeSecondsInput = $state(String(keepTimeSeconds > 0 ? keepTimeSeconds : DEFAULT_SECONDS));
 
   function parseSeconds(raw: string | null): number | null {
     if (raw === null || raw.trim() === '') return null;
@@ -44,7 +44,7 @@
   }
 
   $effect(() => {
-    if (maxRunSeconds !== null) {
+    if (maxRunSeconds > 0) {
       usageEnabled = true;
       maxRunSecondsInput = String(maxRunSeconds);
     } else {
@@ -53,7 +53,7 @@
   });
 
   $effect(() => {
-    if (keepTimeSeconds !== null) {
+    if (keepTimeSeconds > 0) {
       keepTimeEnabled = true;
       keepTimeSecondsInput = String(keepTimeSeconds);
     } else {
@@ -63,7 +63,7 @@
 
   function onUsageLimitEnabledChange(event: Event) {
     const enabled = (event.currentTarget as HTMLInputElement).checked;
-    maxRunSeconds = enabled ? parseSeconds(maxRunSecondsInput) ?? DEFAULT_SECONDS : null;
+    maxRunSeconds = enabled ? parseSeconds(maxRunSecondsInput) ?? DEFAULT_SECONDS : -1;
   }
 
   function onMaxRunSecondsInput() {
@@ -74,7 +74,7 @@
 
   function onKeepTimeEnabledChange(event: Event) {
     const enabled = (event.currentTarget as HTMLInputElement).checked;
-    keepTimeSeconds = enabled ? parseSeconds(keepTimeSecondsInput) ?? DEFAULT_SECONDS : null;
+    keepTimeSeconds = enabled ? parseSeconds(keepTimeSecondsInput) ?? DEFAULT_SECONDS : -1;
   }
 
   function onKeepTimeSecondsInput() {

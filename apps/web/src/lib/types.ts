@@ -17,9 +17,9 @@ export interface Template {
   remote_type: RemoteType;
   persistent_storage_path: string;
   container_runtime: string;
-  max_run_seconds: number | null;
+  max_run_seconds: number;
   timeout_action: TimeoutAction;
-  keep_time_seconds: number | null;
+  keep_time_seconds: number;
   keep_time_action: TimeoutAction;
   network_bandwidth_up_mbps: number;
   network_bandwidth_down_mbps: number;
@@ -55,8 +55,22 @@ export interface Instance {
   keep_time_deadline?: string | null;
   keep_time_seconds?: number | null;
   keep_time_action?: TimeoutAction | null;
+  owner_group_id?: string | null;
+  billing_group_snapshot?: BillingGroupSnapshot | null;
+  host_cpu_cores?: number;
+  host_memory_mb?: number;
+  host_gpu_count?: number;
   created_at: string;
   updated_at: string;
+}
+
+/** The frozen pool caps of the billing group an instance is attributed to. */
+export interface BillingGroupSnapshot {
+  group_id: string;
+  billing_model: 'shared' | 'dedicated';
+  pool_cpu_cores: number;
+  pool_memory_mb: number;
+  pool_gpu_count: number;
 }
 
 export interface VncSettings {
@@ -67,16 +81,45 @@ export interface VncSettings {
   scaleViewport: boolean;
 }
 
-export type PreflightRejectionScope = 'template_not_allowed' | 'user_instance' | 'host_instance';
+export type PreflightRejectionScope =
+  | 'template_not_allowed'
+  | 'template_hidden'
+  | 'user_instance'
+  | 'host_instance'
+  | 'host_resource_cpu'
+  | 'host_resource_memory'
+  | 'host_resource_gpu'
+  | 'group_pool_cpu'
+  | 'group_pool_memory'
+  | 'group_pool_gpu'
+  | 'member_quota_cpu'
+  | 'member_quota_memory'
+  | 'member_quota_gpu';
 
 export interface PreflightRejection {
   scope: PreflightRejectionScope;
   current: number;
   limit: number;
   requested: number;
+  /** Present on group pool / member quota rejections: the billing group. */
+  group_id?: string;
 }
 
-const PREFLIGHT_SCOPES: PreflightRejectionScope[] = ['template_not_allowed', 'user_instance', 'host_instance'];
+const PREFLIGHT_SCOPES: PreflightRejectionScope[] = [
+  'template_not_allowed',
+  'template_hidden',
+  'user_instance',
+  'host_instance',
+  'host_resource_cpu',
+  'host_resource_memory',
+  'host_resource_gpu',
+  'group_pool_cpu',
+  'group_pool_memory',
+  'group_pool_gpu',
+  'member_quota_cpu',
+  'member_quota_memory',
+  'member_quota_gpu',
+];
 
 export function isPreflightRejection(value: unknown): value is PreflightRejection {
   if (!value || typeof value !== 'object') return false;
@@ -106,6 +149,26 @@ export interface EffectiveContext {
   allowed_template_ids: string[];
   group_ids: string[];
   direct_max_instances: number | null;
+  /** Per-group pools so the launch form can offer a billing target. */
+  group_billing?: GroupBilling[];
+  /** Aggregate pool across the user's member groups (-1 = unlimited). */
+  resource_quotas?: ResourceUse;
+}
+
+/** The resource pool a group offers, as serialized on `group_billing`. */
+export interface GroupBilling {
+  group_id: string;
+  billing_model: 'shared' | 'dedicated';
+  pool_cpu_cores: number;
+  pool_memory_mb: number;
+  pool_gpu_count: number;
+}
+
+/** A resource snapshot: used amounts and caps. `-1` = unlimited. */
+export interface ResourceUse {
+  cpu_cores: number;
+  memory_mb: number;
+  gpu_count: number;
 }
 
 export const TIER_USER = 0;
@@ -126,9 +189,24 @@ export interface Group {
   can_view_audit_logs: boolean;
   max_instances: number | null;
   template_ids: string[];
+  billing_model?: 'shared' | 'dedicated';
+  pool_cpu_cores?: number;
+  pool_memory_mb?: number;
+  pool_gpu_count?: number;
+  members?: GroupMember[];
 }
 
-export type GroupInput = Omit<Group, 'id' | 'kind'>;
+/** A member row of a group: identity plus per-member resource quotas. */
+export interface GroupMember {
+  user_id: string;
+  username: string;
+  tier: number;
+  cpu_quota: number;
+  memory_quota: number;
+  gpu_quota: number;
+}
+
+export type GroupInput = Omit<Group, 'id' | 'kind' | 'members'>;
 
 export interface GroupMembershipPayload {
   group_ids: string[];
