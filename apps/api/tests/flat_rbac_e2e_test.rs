@@ -829,7 +829,7 @@ async fn test_template_visibility_end_to_end() {
     ctx.login_admin().await;
     let whitelist_group = create_group(&ctx, "vis_trusted", 1, std::slice::from_ref(&tpl_plain)).await;
     let trusted_id = create_user(&ctx, "vis_trusted").await;
-    assign_user_policy(&ctx, &trusted_id, &[whitelist_group.clone()], None).await;
+    assign_user_policy(&ctx, &trusted_id, std::slice::from_ref(&whitelist_group), None).await;
     grant_member_quota(&ctx, &whitelist_group, &trusted_id).await;
     assert_eq!(ctx.login_user("vis_trusted", "pw123456").await.status(), 200);
     let private_instance = launch_plain(&ctx, &tpl_plain).await;
