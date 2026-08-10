@@ -1,5 +1,17 @@
 import { createGroup, updateGroup } from '$lib/api/rbac-actions';
+import { DISABLED, UNLIMITED, isTriStateValid, triStateFromValue, valueFromTriState, type TriState } from '$lib/tri-state';
 import type { Group, GroupInput } from '$lib/types';
+
+export type BillingModel = 'shared' | 'dedicated';
+
+/** UI pool inputs are expressed in GB; the API uses MB. */
+const GB_TO_MB = 1024;
+
+export function gbToTriState(mb: number | undefined): TriState {
+  const t = triStateFromValue(mb);
+  if (t.mode !== 'custom') return t;
+  return { mode: 'custom', value: Math.max(1, Math.round(t.value / GB_TO_MB)) };
+}
 
 export const GROUP_FLAGS = [
   'can_create_template',
@@ -25,6 +37,10 @@ export interface GroupFormState {
   can_view_monitoring: boolean;
   can_view_audit_logs: boolean;
   max_instances: string;
+  billing_model: BillingModel;
+  poolCpu: TriState;
+  poolMemory: TriState;
+  poolGpu: TriState;
   template_ids: string[];
   loading: boolean;
   error: string;
@@ -32,6 +48,19 @@ export interface GroupFormState {
 
 export function isSystemGroup(group: Group): boolean {
   return group.kind !== null;
+}
+
+export function describePoolValue(v: number | undefined): string {
+  const n = v ?? -1;
+  if (n < 0) return 'unlimited';
+  if (n === 0) return 'disabled';
+  return String(n);
+}
+
+export function describeGroupPool(group: Pick<Group, 'billing_model' | 'pool_cpu_cores' | 'pool_memory_mb' | 'pool_gpu_count'>): string {
+  const memMb = group.pool_memory_mb;
+  const mem = memMb == null || memMb < 0 || memMb === 0 ? memMb : Math.round(memMb / 1024);
+  return `${group.billing_model ?? 'shared'} · CPU ${describePoolValue(group.pool_cpu_cores)} · Mem ${describePoolValue(mem)} GB · GPU ${describePoolValue(group.pool_gpu_count)}`;
 }
 
 export function createInitialGroupForm(): GroupFormState {
@@ -47,6 +76,10 @@ export function createInitialGroupForm(): GroupFormState {
     can_view_monitoring: false,
     can_view_audit_logs: false,
     max_instances: '2',
+    billing_model: 'shared',
+    poolCpu: { ...UNLIMITED },
+    poolMemory: { ...UNLIMITED },
+    poolGpu: { ...UNLIMITED },
     template_ids: [],
     loading: false,
     error: ''
@@ -66,6 +99,10 @@ export function groupFormFromGroup(group: Group): GroupFormState {
     can_view_monitoring: group.can_view_monitoring,
     can_view_audit_logs: group.can_view_audit_logs,
     max_instances: group.max_instances == null ? '' : String(group.max_instances),
+    billing_model: group.billing_model ?? 'shared',
+    poolCpu: triStateFromValue(group.pool_cpu_cores),
+    poolMemory: gbToTriState(group.pool_memory_mb),
+    poolGpu: triStateFromValue(group.pool_gpu_count),
     template_ids: [...group.template_ids],
     loading: false,
     error: ''
@@ -85,8 +122,17 @@ export function buildGroupInput(state: GroupFormState): GroupInput {
     can_view_monitoring: systemFlags.can_view_monitoring ?? state.can_view_monitoring,
     can_view_audit_logs: systemFlags.can_view_audit_logs ?? state.can_view_audit_logs,
     max_instances: Number(state.max_instances) || 0,
+    billing_model: state.billing_model,
+    pool_cpu_cores: valueFromTriState(state.poolCpu),
+    pool_memory_mb: toMemoryMb(state.poolMemory),
+    pool_gpu_count: valueFromTriState(state.poolGpu),
     template_ids: [...state.template_ids]
   };
+}
+
+function toMemoryMb(pool: TriState): number {
+  const value = valueFromTriState(pool);
+  return value <= 0 ? value : value * GB_TO_MB;
 }
 
 export function systemGroupFlags(kind: Group['kind']): {
@@ -108,6 +154,9 @@ function validate(state: GroupFormState): string | undefined {
   if (Number.isNaN(Number(state.max_instances)) || Number(state.max_instances) < 0) {
     return 'Max instances must be >= 0 (0 = unlimited)';
   }
+  if (!isTriStateValid(state.poolCpu)) return 'Pool CPU must be -1 (unlimited), 0 (disabled), or a positive number';
+  if (!isTriStateValid(state.poolMemory)) return 'Pool memory must be -1 (unlimited), 0 (disabled), or a positive number';
+  if (!isTriStateValid(state.poolGpu)) return 'Pool GPU must be -1 (unlimited), 0 (disabled), or a positive number';
   return undefined;
 }
 

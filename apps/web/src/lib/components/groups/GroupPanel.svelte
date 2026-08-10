@@ -9,9 +9,11 @@
     submitGroup,
     submitGroupUpdate,
     isSystemGroup,
+    describeGroupPool,
     type GroupFlag,
     type GroupFormState
   } from '$lib/groups/group-form';
+  import TriStateInput from '$lib/components/forms/TriStateInput.svelte';
   import type { EffectiveContext, Group, Template } from '$lib/types';
 
   let {
@@ -187,6 +189,7 @@
                 <th>Name</th>
                 <th>Permissions</th>
                 <th>Max Instances</th>
+                <th>Resource Pool</th>
                 <th>Templates</th>
                 <th>Actions</th>
               </tr>
@@ -209,6 +212,7 @@
                     {/each}
                   </td>
                   <td>{group.max_instances == null || group.max_instances === 0 ? 'Unlimited' : group.max_instances}</td>
+                  <td class="td-id">{describeGroupPool(group)}</td>
                   <td class="td-groups">
                     {#if group.template_ids.length === 0}
                       <span class="td-id">None</span>
@@ -264,6 +268,26 @@
         <div class="modal-field">
           <label for="group-max-instances" class="modal-label">Max Instances (0 = unlimited)</label>
           <input id="group-max-instances" class="modal-input" type="number" min="0" bind:value={form.max_instances} />
+        </div>
+        <div class="modal-field">
+          <span class="modal-label">Resource Pool</span>
+          <label class="group-toggle-row">
+            <span class="group-toggle-label">Billing model</span>
+            <select
+              class="modal-input"
+              aria-label="Billing model"
+              bind:value={form.billing_model}
+            >
+              <option value="shared">shared — every member bills the same pool</option>
+              <option value="dedicated">dedicated — each member sees their own quota</option>
+            </select>
+          </label>
+          <div class="pool-grid">
+            <TriStateInput label="Pool CPU (cores)" bind:value={form.poolCpu} unit="cores" placeholder="e.g. 8" />
+            <TriStateInput label="Pool Memory (GB)" bind:value={form.poolMemory} unit="GB" placeholder="e.g. 16" />
+            <TriStateInput label="Pool GPU" bind:value={form.poolGpu} unit="GPUs" placeholder="e.g. 2" />
+          </div>
+          <p class="modal-hint">Unlimited (-1) means no pool cap; Disabled (0) means members cannot bill this resource; Custom sets an exact cap.</p>
         </div>
         <div class="modal-field">
           <span class="modal-label">Template Whitelist</span>
@@ -379,6 +403,12 @@
     flex-direction: column;
     gap: 6px;
     margin-bottom: 1rem;
+  }
+
+  .pool-grid {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
   }
 
   .modal-label {

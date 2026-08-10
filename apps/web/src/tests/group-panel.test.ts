@@ -150,6 +150,19 @@ describe('GroupPanel', () => {
     const maxInput = screen.getByLabelText(/Max Instances/) as HTMLInputElement;
     await fireEvent.input(maxInput, { target: { value: '5' } });
 
+    const billingSelect = screen.getByLabelText('Billing model') as HTMLSelectElement;
+    await fireEvent.change(billingSelect, { target: { value: 'dedicated' } });
+
+    const cpuMode = screen.getByLabelText('Pool CPU (cores) mode') as HTMLSelectElement;
+    await fireEvent.change(cpuMode, { target: { value: 'custom' } });
+    const cpuValue = screen.getByLabelText('Pool CPU (cores) value') as HTMLInputElement;
+    await fireEvent.input(cpuValue, { target: { value: '8' } });
+
+    const memMode = screen.getByLabelText('Pool Memory (GB) mode') as HTMLSelectElement;
+    await fireEvent.change(memMode, { target: { value: 'custom' } });
+    const memValue = screen.getByLabelText('Pool Memory (GB) value') as HTMLInputElement;
+    await fireEvent.input(memValue, { target: { value: '16' } });
+
     await fireEvent.click(screen.getByText('Create Group'));
 
     await waitFor(() => {
@@ -167,6 +180,10 @@ describe('GroupPanel', () => {
         can_view_monitoring: false,
         can_view_audit_logs: false,
         max_instances: 5,
+        billing_model: 'dedicated',
+        pool_cpu_cores: 8,
+        pool_memory_mb: 16384,
+        pool_gpu_count: -1,
         template_ids: ['t1', 't2']
       });
     });
