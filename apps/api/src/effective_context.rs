@@ -349,7 +349,8 @@ pub fn memory_bytes_to_mb(bytes: i64) -> i64 {
     if bytes < 0 {
         return bytes;
     }
-    bytes.div_ceil(1024 * 1024)
+    const MB: i64 = 1024 * 1024;
+    bytes / MB + i64::from(bytes % MB != 0)
 }
 
 /// A template's launch visibility — the per-template override that sits above

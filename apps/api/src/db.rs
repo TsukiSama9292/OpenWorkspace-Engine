@@ -608,6 +608,7 @@ impl<'a> UserRepository<'a> {
         user_group::ActiveModel {
             user_id: Set(admin_user_id),
             group_id: Set(admin_group.id),
+            ..Default::default()
         }
         .insert(self.db)
         .await?;
@@ -813,9 +814,12 @@ impl<'a> UserRepository<'a> {
             .exec(self.db)
             .await?;
         for &group_id in group_ids {
+            // New memberships default to `0` (blocked) per spec Decision 1 —
+            // the DB column default, left unset here.
             user_group::ActiveModel {
                 user_id: Set(user_id),
                 group_id: Set(group_id),
+                ..Default::default()
             }
             .insert(self.db)
             .await?;
@@ -923,18 +927,29 @@ impl<'a> UserRepository<'a> {
         &self,
         user_id: Uuid,
     ) -> Result<Option<Uuid>, sea_orm::DbErr> {
-        // The tier ranking cannot be expressed as an ORDER BY in sea-orm, so
-        // the candidate set is small and ranked here instead.
         let memberships = user_group::Entity::find()
             .filter(user_group::Column::UserId.eq(user_id))
-            .find_also_related(group::Entity)
             .all(self.db)
             .await?;
+        if memberships.is_empty() {
+            return Ok(None);
+        }
+        let group_ids: Vec<Uuid> = memberships.iter().map(|m| m.group_id).collect();
+        let groups = group::Entity::find()
+            .filter(group::Column::Id.is_in(group_ids))
+            .all(self.db)
+            .await?;
+        let kind_by_id: std::collections::HashMap<Uuid, Option<String>> = groups
+            .into_iter()
+            .map(|g| (g.id, g.kind))
+            .collect();
+        // Rank the user's memberships by their group's kind tier, highest
+        // first; ties break on the group id for determinism.
         let mut ranked: Vec<(i32, Uuid)> = memberships
             .into_iter()
-            .filter_map(|(m, g)| {
-                g.map(|g| {
-                    let tier = crate::effective_context::group_kind_tier(g.kind.as_deref());
+            .filter_map(|m| {
+                kind_by_id.get(&m.group_id).map(|kind| {
+                    let tier = crate::effective_context::group_kind_tier(kind.as_deref());
                     (tier, m.group_id)
                 })
             })

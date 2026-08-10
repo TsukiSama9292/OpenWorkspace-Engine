@@ -202,6 +202,9 @@ async fn test_me_reflects_group_flag_flip_without_relogin() {
     user_group::ActiveModel {
         user_id: Set(user_uuid),
         group_id: Set(group_id),
+        cpu_quota: Set(-1),
+        memory_quota: Set(-1),
+        gpu_quota: Set(-1),
     }
     .insert(&db)
     .await

@@ -221,6 +221,9 @@ impl MonitorContext {
         user_group::ActiveModel {
             user_id: Set(user_id.parse().unwrap()),
             group_id: Set(group_id.parse().unwrap()),
+            cpu_quota: Set(-1),
+            memory_quota: Set(-1),
+            gpu_quota: Set(-1),
         }
         .insert(&self.db)
         .await

@@ -3282,6 +3282,11 @@ async fn add_group_member(ctx: &MockContext, user_id: &str, group_id: &str) {
     user_group::ActiveModel {
         user_id: Set(user_id.parse().unwrap()),
         group_id: Set(group_id.parse().unwrap()),
+        // A plain "member of the group" with no personal cap: unlimited, so
+        // RBAC/pool tests exercise the layer they name, not the member cap.
+        cpu_quota: Set(-1),
+        memory_quota: Set(-1),
+        gpu_quota: Set(-1),
     }
     .insert(&ctx.db)
     .await

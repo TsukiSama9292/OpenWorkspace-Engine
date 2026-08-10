@@ -712,6 +712,26 @@ fn preflight_rejection_json(reject: &PreflightReject) -> serde_json::Value {
                 "group_id": group_id,
             },
         }),
+        PreflightReject::MemberResourceExceeded {
+            resource,
+            current,
+            limit,
+            group_id,
+        } => serde_json::json!({
+            "error": format!(
+                "Personal {} quota reached in group (used: {}, quota: {})",
+                resource.as_str(),
+                current,
+                limit
+            ),
+            "rejection": {
+                "scope": format!("member_quota_{}", resource.as_str()),
+                "current": current,
+                "limit": limit,
+                "requested": 1,
+                "group_id": group_id,
+            },
+        }),
     }
 }
 
@@ -725,7 +745,8 @@ fn reject_status(reject: &PreflightReject) -> StatusCode {
         PreflightReject::InstanceCeilingExceeded { .. }
         | PreflightReject::HostCeilingExceeded { .. }
         | PreflightReject::HostResourceExceeded { .. }
-        | PreflightReject::PoolResourceExceeded { .. } => StatusCode::CONFLICT,
+        | PreflightReject::PoolResourceExceeded { .. }
+        | PreflightReject::MemberResourceExceeded { .. } => StatusCode::CONFLICT,
     }
 }
 
