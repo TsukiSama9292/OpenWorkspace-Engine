@@ -2704,14 +2704,28 @@ async fn create_quota_user(
     username: &str,
     direct_max_instances: i32,
 ) -> String {
-    // Give the user exactly one unlimited group so a launch without a billing
-    // group auto-attributes (spec User Story 5): these tests exercise the
+    // Give the user exactly one group so a launch without a billing group
+    // auto-attributes (spec User Story 5): these tests exercise the
     // ceiling/whitelist/host layers, not the billing resolution. The group is
     // fresh and pool-unlimited (-1), and the membership is unlimited (-1).
     // Seeding the group first and scoping the user to it (explicit
     // `group_ids`) skips the create route's default User system group — a
     // second membership would make the billing resolution 400 "several groups".
     let group_id = seed_pool_group(ctx, &format!("grp-{}", username), -1, -1, -1).await;
+    // Pin the group ceiling to the direct ceiling: `effective_max_instances`
+    // is the max of the personal and every group ceiling (spec Decision 4), so
+    // a seeded group left at `seed_pool_group`'s default (4) would silently
+    // lift the intended limit and the user gate would never fire. With the
+    // group ceiling equal to the direct one, the effective limit is exactly
+    // `direct_max_instances`.
+    use sea_orm::ConnectionTrait;
+    ctx.db
+        .execute_unprepared(&format!(
+            "UPDATE groups SET max_instances = {} WHERE id = '{}'",
+            direct_max_instances, group_id
+        ))
+        .await
+        .unwrap();
     let (user_id, _token) = create_user_in_group_and_token(
         ctx,
         admin_token,
@@ -3938,8 +3952,16 @@ async fn test_group_delete_allowed_when_only_stopped_instances() {
 async fn test_restart_reattributes_null_attributed_instance() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()
-            .times(2)
+            .times(1)
             .returning(|_, _, _, _, _| Box::pin(async { Ok("fake-container-id".to_string()) }));
+        // The restart reuses the existing stopped container: it inspects and
+        // starts it rather than creating a new one.
+        m.expect_inspect_container_state()
+            .returning(|_| Box::pin(async { Ok(Some("exited".to_string())) }));
+        m.expect_start_container_by_id()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        m.expect_apply_bandwidth_limit()
+            .never();
     }).await;
     let admin_token = ctx.login_admin().await;
 
