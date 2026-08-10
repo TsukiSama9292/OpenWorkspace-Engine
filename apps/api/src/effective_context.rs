@@ -952,20 +952,6 @@ mod tests {
         }
     }
 
-    /// A finite group-billed quota context: member cap and pool both `limit`,
-    /// host caps disabled.
-    fn quota_finite(limit: i64) -> QuotaContext {
-        QuotaContext {
-            pool: res(limit, limit, limit),
-            billed: res(0, 0, 0),
-            member_quota: res(limit, limit, limit),
-            member_used: res(0, 0, 0),
-            host_capacity: res(-1, -1, -1),
-            host_used: res(0, 0, 0),
-            target_group_id: Some(uuid(300)),
-        }
-    }
-
     #[test]
     fn memory_bytes_to_mb_rounds_up_and_preserves_unlimited() {
         // 4 GiB exactly → 4096 MB.
