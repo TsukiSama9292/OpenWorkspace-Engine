@@ -5,9 +5,13 @@
   import { auth } from '$lib/stores/auth';
   import { mayManageUsers, mayManageUser, userTier, assignableGroups } from '$lib/permissions';
   import {
+    BLOCKED_CEILING,
+    INHERIT_CEILING,
+    UNLIMITED_CEILING,
     createInitialUserPolicyForm,
     userPolicyFormFromRow,
     submitUserPolicy,
+    type CeilingMode,
     type UserPolicyFormState
   } from '$lib/users/user-policy-form';
   import type { EffectiveContext, Group } from '$lib/types';
@@ -103,6 +107,13 @@
     policyForm.group_ids = policyForm.group_ids.includes(id)
       ? policyForm.group_ids.filter((g) => g !== id)
       : [...policyForm.group_ids, id];
+  }
+
+  function setCeilingMode(mode: CeilingMode) {
+    if (mode === 'inherit') policyForm.ceiling = { ...INHERIT_CEILING };
+    else if (mode === 'unlimited') policyForm.ceiling = { ...UNLIMITED_CEILING };
+    else if (mode === 'disabled') policyForm.ceiling = { ...BLOCKED_CEILING };
+    else policyForm.ceiling = { mode: 'custom', value: 1 };
   }
 
   function toggleCreateGroup(id: string) {
@@ -267,8 +278,12 @@
                 <td>
                   {#if user.direct_max_instances == null}
                     <span class="ceiling-inherit">Inherit</span>
+                  {:else if user.direct_max_instances === -1}
+                    <span class="ceiling-set">Unlimited</span>
+                  {:else if user.direct_max_instances === 0}
+                    <span class="ceiling-set">Blocked</span>
                   {:else}
-                    <span class="ceiling-set">{user.direct_max_instances}{user.direct_max_instances === 0 ? ' (unlimited)' : ''}</span>
+                    <span class="ceiling-set">{user.direct_max_instances}</span>
                   {/if}
                 </td>
                 <td class="td-date">{new Date(user.created_at).toLocaleDateString()}</td>
@@ -360,15 +375,30 @@
         {/if}
       </div>
       <div class="modal-field">
-        <label for="user-policy-ceiling" class="modal-label">Personal Max Instances (blank = inherit)</label>
-        <input
-          id="user-policy-ceiling"
-          class="modal-input"
-          type="text"
-          inputmode="numeric"
-          placeholder="inherit"
-          bind:value={policyForm.direct_max_instances}
-        />
+        <span class="modal-label">Personal Max Instances</span>
+        <div class="ceiling-row">
+          <select
+            class="modal-input"
+            aria-label="Personal Max Instances"
+            value={policyForm.ceiling.mode}
+            onchange={(e) => setCeilingMode(e.currentTarget.value as CeilingMode)}
+          >
+            <option value="inherit">Inherit (group ceiling)</option>
+            <option value="unlimited">Unlimited (-1)</option>
+            <option value="disabled">Blocked (0)</option>
+            <option value="custom">Custom value</option>
+          </select>
+          {#if policyForm.ceiling.mode === 'custom'}
+            <input
+              class="modal-input ceiling-value"
+              type="number"
+              min="1"
+              step="1"
+              aria-label="Personal Max Instances value"
+              bind:value={policyForm.ceiling.value}
+            />
+          {/if}
+        </div>
       </div>
       {#if policyError}
         <div class="error-badge">{policyError}</div>
@@ -506,6 +536,19 @@
 
   .modal-input:focus {
     border-color: #818cf8;
+  }
+
+  .ceiling-row {
+    display: flex;
+    gap: 8px;
+  }
+
+  .ceiling-row .modal-input {
+    flex: 1;
+  }
+
+  .ceiling-row .ceiling-value {
+    flex: 0 0 7rem;
   }
 
   .policy-toggle-row {

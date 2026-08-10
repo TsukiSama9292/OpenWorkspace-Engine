@@ -243,7 +243,7 @@ describe('UserManagementPanel', () => {
       expect(screen.getByTestId('user-policy-groups')).toBeTruthy();
       expect(screen.getByTestId('user-policy-group-g-user')).toBeTruthy();
       expect(screen.getByTestId('user-policy-group-g1')).toBeTruthy();
-      expect(screen.getByLabelText(/Personal Max Instances/) as HTMLInputElement).toBeTruthy();
+      expect(screen.getByLabelText(/Personal Max Instances/, { selector: 'select' })).toBeTruthy();
     });
     expect(screen.queryByTestId('user-policy-group-g-manager')).toBeNull();
     expect(screen.queryByTestId('user-policy-group-g-admin')).toBeNull();
@@ -265,8 +265,8 @@ describe('UserManagementPanel', () => {
       expect(screen.getByTestId('user-policy-groups')).toBeTruthy();
     });
 
-    const ceiling = screen.getByLabelText(/Personal Max Instances/) as HTMLInputElement;
-    await fireEvent.input(ceiling, { target: { value: '' } });
+    const ceiling = screen.getByLabelText(/Personal Max Instances/, { selector: 'select' }) as HTMLSelectElement;
+    await fireEvent.change(ceiling, { target: { value: 'inherit' } });
 
     await fireEvent.click(screen.getByTestId('user-policy-group-g-user'));
     await fireEvent.click(screen.getByText('Save Policy'));
