@@ -37,3 +37,21 @@ export function parsePositiveInt(raw: string): number | null {
 export function isTriStateValid(t: TriState): boolean {
   return t.mode !== 'custom' || t.value > 0;
 }
+
+export function describeTriState(t: TriState): string {
+  if (t.mode === 'unlimited') return 'unlimited';
+  if (t.mode === 'disabled') return 'blocked';
+  return String(t.value);
+}
+
+/** Memory caps are stored in MB but edited in whole GB: -1/0 pass through. */
+export function memoryMbToTriState(mb: number | undefined): TriState {
+  const t = triStateFromValue(mb);
+  if (t.mode !== 'custom') return t;
+  return { mode: 'custom', value: Math.max(1, Math.round(t.value / 1024)) };
+}
+
+export function memoryMbFromTriState(t: TriState): number {
+  const value = valueFromTriState(t);
+  return value <= 0 ? value : value * 1024;
+}

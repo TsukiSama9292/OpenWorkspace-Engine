@@ -1,9 +1,17 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '$lib/api/client';
-  import type { SystemSettingsValue } from '$lib/system-settings';
+  import {
+    settingsFormFromValue,
+    settingsValueFromForm,
+    type AdminSettingsFormState,
+    type SystemSettingsValue
+  } from '$lib/system-settings';
+  import { describeTriState } from '$lib/tri-state';
+  import TriStateInput from '$lib/components/forms/TriStateInput.svelte';
 
   let settings = $state<SystemSettingsValue | null>(null);
+  let form = $state<AdminSettingsFormState | null>(null);
   let loading = $state(true);
   let error = $state('');
   let saved = $state(false);
@@ -15,6 +23,7 @@
     const res = await api.get<{ settings: SystemSettingsValue }>('/admin/settings');
     if (res.data?.settings) {
       settings = res.data.settings;
+      form = settingsFormFromValue(res.data.settings);
     } else if (res.error) {
       error = res.error;
     } else {
@@ -24,13 +33,15 @@
   }
 
   async function save() {
-    if (!settings) return;
+    if (!settings || !form) return;
     saving = true;
     error = '';
     saved = false;
-    const res = await api.put<{ settings: SystemSettingsValue }>('/admin/settings', settings);
+    const body = settingsValueFromForm(form);
+    const res = await api.put<{ settings: SystemSettingsValue }>('/admin/settings', body);
     if (res.data?.settings) {
       settings = res.data.settings;
+      form = settingsFormFromValue(res.data.settings);
       saved = true;
     } else if (res.error) {
       error = res.error;
@@ -38,17 +49,6 @@
       error = 'Failed to save system settings';
     }
     saving = false;
-  }
-
-  function numeric(value: unknown): number {
-    const n = Number(value);
-    return Number.isFinite(n) ? n : 0;
-  }
-
-  function update(key: keyof SystemSettingsValue, value: unknown) {
-    if (settings) {
-      settings = { ...settings, [key]: numeric(value) };
-    }
   }
 
   onMount(load);
@@ -75,32 +75,33 @@
 
     {#if loading}
       <div class="field-loading">Loading settings&hellip;</div>
-    {:else if settings}
+    {:else if settings && form}
       <div class="field">
         <div class="field-label-row">
-          <label class="field-label" for="admin-instance-limit">Global Instance Limit</label>
-          <span class="field-current">
-            Current: {settings.host_instance_limit === 0 ? 'unlimited' : settings.host_instance_limit}
-          </span>
+          <span class="field-label">Global Instance Limit</span>
+          <span class="field-current">Current: {describeTriState(form.hostInstanceLimit)}</span>
         </div>
         <p class="field-desc">
           The maximum number of instances allowed to run at the same time across the entire host,
           all tiers and users combined.
         </p>
-        <div class="field-control">
-          <input
-            id="admin-instance-limit"
-            class="field-input"
-            type="number"
-            min="0"
-            step="1"
-            value={settings.host_instance_limit}
-            oninput={(e) => update('host_instance_limit', e.currentTarget.value)}
-            disabled={saving}
-          />
-          <span class="field-suffix">instances</span>
+        <TriStateInput label="Global instance limit" bind:value={form.hostInstanceLimit} unit="instances" placeholder="e.g. 20" />
+      </div>
+
+      <div class="field">
+        <div class="field-label-row">
+          <span class="field-label">Host Resource Caps</span>
+          <span class="field-current">CPU {describeTriState(form.hostCpu)} · Mem {describeTriState(form.hostMemory)} GB · GPU {describeTriState(form.hostGpu)}</span>
         </div>
-        <p class="field-hint">Set to 0 for no limit.</p>
+        <p class="field-desc">
+          Per-resource ceilings that apply to every launch on the host regardless of tier.
+          Unlimited (-1) disables the cap; Disabled (0) is a real zero cap that blocks the resource.
+        </p>
+        <div class="caps-grid">
+          <TriStateInput label="Host CPU (cores)" bind:value={form.hostCpu} unit="cores" placeholder="e.g. 32" />
+          <TriStateInput label="Host memory (GB)" bind:value={form.hostMemory} unit="GB" placeholder="e.g. 64" />
+          <TriStateInput label="Host GPU" bind:value={form.hostGpu} unit="GPUs" placeholder="e.g. 8" />
+        </div>
       </div>
 
       {#if error}
@@ -256,6 +257,13 @@
     align-items: center;
     gap: 0.5rem;
     margin-top: 0.4rem;
+  }
+
+  .caps-grid {
+    display: flex;
+    gap: 10px;
+    margin-top: 0.4rem;
+    align-items: flex-end;
   }
 
   .field-input {

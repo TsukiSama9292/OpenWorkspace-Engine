@@ -3,7 +3,10 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import AdminSettings from '$lib/components/AdminSettings.svelte';
 
 const MOCK_SETTINGS = {
-  host_instance_limit: 0,
+  host_instance_limit: 5,
+  host_cpu_cores: -1,
+  host_memory_mb: 16384,
+  host_gpu_count: 0
 };
 
 function mockFetch(ok: boolean, status: number, body: unknown) {
@@ -19,14 +22,18 @@ describe('AdminSettings', () => {
     vi.unstubAllGlobals();
   });
 
-  it('loads and displays the global instance limit', async () => {
+  it('loads and displays the host caps as tri-state inputs', async () => {
     mockFetch(true, 200, { settings: MOCK_SETTINGS });
 
     render(AdminSettings);
 
     await waitFor(() => {
-      expect((screen.getByLabelText('Global Instance Limit') as HTMLInputElement).value).toBe('0');
+      expect((screen.getByLabelText('Global instance limit value') as HTMLInputElement).value).toBe('5');
     });
+    expect((screen.getByLabelText('Global instance limit mode') as HTMLSelectElement).value).toBe('custom');
+    expect((screen.getByLabelText('Host CPU (cores) mode') as HTMLSelectElement).value).toBe('unlimited');
+    expect((screen.getByLabelText('Host memory (GB) value') as HTMLInputElement).value).toBe('16');
+    expect((screen.getByLabelText('Host GPU mode') as HTMLSelectElement).value).toBe('disabled');
   });
 
   it('surfaces a load error from the API', async () => {
@@ -39,7 +46,7 @@ describe('AdminSettings', () => {
     });
   });
 
-  it('round-trips updated values to the API on save', async () => {
+  it('round-trips updated host caps to the API on save', async () => {
     const fetchMock = vi.fn();
     fetchMock.mockResolvedValueOnce({
       ok: true,
@@ -50,7 +57,7 @@ describe('AdminSettings', () => {
       ok: true,
       status: 200,
       text: () => Promise.resolve(JSON.stringify({
-        settings: { host_instance_limit: 4 }
+        settings: { ...MOCK_SETTINGS, host_instance_limit: 4 }
       }))
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -58,11 +65,21 @@ describe('AdminSettings', () => {
     render(AdminSettings);
 
     await waitFor(() => {
-      expect((screen.getByLabelText('Global Instance Limit') as HTMLInputElement).value).toBe('0');
+      expect((screen.getByLabelText('Global instance limit value') as HTMLInputElement).value).toBe('5');
     });
 
-    const limit = screen.getByLabelText('Global Instance Limit') as HTMLInputElement;
+    const limit = screen.getByLabelText('Global instance limit value') as HTMLInputElement;
     await fireEvent.input(limit, { target: { value: '4' } });
+
+    const cpuMode = screen.getByLabelText('Host CPU (cores) mode') as HTMLSelectElement;
+    await fireEvent.change(cpuMode, { target: { value: 'custom' } });
+    const cpuValue = screen.getByLabelText('Host CPU (cores) value') as HTMLInputElement;
+    await fireEvent.input(cpuValue, { target: { value: '8' } });
+
+    const gpuMode = screen.getByLabelText('Host GPU mode') as HTMLSelectElement;
+    await fireEvent.change(gpuMode, { target: { value: 'custom' } });
+    const gpuValue = screen.getByLabelText('Host GPU value') as HTMLInputElement;
+    await fireEvent.input(gpuValue, { target: { value: '2' } });
 
     await fireEvent.click(screen.getByText('Save Changes'));
 
@@ -74,12 +91,15 @@ describe('AdminSettings', () => {
       const [, options] = putCall as [string, RequestInit];
       expect(options.method).toBe('PUT');
       expect(JSON.parse(options.body as string)).toEqual({
-        host_instance_limit: 4
+        host_instance_limit: 4,
+        host_cpu_cores: 8,
+        host_memory_mb: 16384,
+        host_gpu_count: 2
       });
     });
 
     await waitFor(() => {
-      expect((screen.getByLabelText('Global Instance Limit') as HTMLInputElement).value).toBe('4');
+      expect((screen.getByLabelText('Global instance limit value') as HTMLInputElement).value).toBe('4');
       expect(screen.getByText('Saved')).toBeTruthy();
     });
   });
@@ -101,7 +121,7 @@ describe('AdminSettings', () => {
     render(AdminSettings);
 
     await waitFor(() => {
-      expect((screen.getByLabelText('Global Instance Limit') as HTMLInputElement).value).toBe('0');
+      expect((screen.getByLabelText('Global instance limit value') as HTMLInputElement).value).toBe('5');
     });
 
     await fireEvent.click(screen.getByText('Save Changes'));

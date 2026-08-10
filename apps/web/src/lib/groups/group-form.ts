@@ -1,17 +1,8 @@
 import { createGroup, updateGroup } from '$lib/api/rbac-actions';
-import { UNLIMITED, isTriStateValid, triStateFromValue, valueFromTriState, type TriState } from '$lib/tri-state';
+import { UNLIMITED, isTriStateValid, memoryMbFromTriState, memoryMbToTriState, triStateFromValue, valueFromTriState, type TriState } from '$lib/tri-state';
 import type { Group, GroupInput } from '$lib/types';
 
 export type BillingModel = 'shared' | 'dedicated';
-
-/** UI pool inputs are expressed in GB; the API uses MB. */
-const GB_TO_MB = 1024;
-
-export function gbToTriState(mb: number | undefined): TriState {
-  const t = triStateFromValue(mb);
-  if (t.mode !== 'custom') return t;
-  return { mode: 'custom', value: Math.max(1, Math.round(t.value / GB_TO_MB)) };
-}
 
 export const GROUP_FLAGS = [
   'can_create_template',
@@ -101,7 +92,7 @@ export function groupFormFromGroup(group: Group): GroupFormState {
     max_instances: group.max_instances == null ? '' : String(group.max_instances),
     billing_model: group.billing_model ?? 'shared',
     poolCpu: triStateFromValue(group.pool_cpu_cores),
-    poolMemory: gbToTriState(group.pool_memory_mb),
+    poolMemory: memoryMbToTriState(group.pool_memory_mb),
     poolGpu: triStateFromValue(group.pool_gpu_count),
     template_ids: [...group.template_ids],
     loading: false,
@@ -124,15 +115,10 @@ export function buildGroupInput(state: GroupFormState): GroupInput {
     max_instances: Number(state.max_instances) || 0,
     billing_model: state.billing_model,
     pool_cpu_cores: valueFromTriState(state.poolCpu),
-    pool_memory_mb: toMemoryMb(state.poolMemory),
+    pool_memory_mb: memoryMbFromTriState(state.poolMemory),
     pool_gpu_count: valueFromTriState(state.poolGpu),
     template_ids: [...state.template_ids]
   };
-}
-
-function toMemoryMb(pool: TriState): number {
-  const value = valueFromTriState(pool);
-  return value <= 0 ? value : value * GB_TO_MB;
 }
 
 export function systemGroupFlags(kind: Group['kind']): {
