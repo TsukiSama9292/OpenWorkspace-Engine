@@ -16,17 +16,19 @@ from ticket 01.
 **Blocked by:** 01 — Backend: resource quotas, attribution, and the `-1`
 convention
 
-**Status:** ready-for-agent (blocked — ticket 01 revision round in progress)
+**Status:** ready-for-agent (unblocked — ticket 01 is closed green: `check.sh`
+silent, `run_tests.sh` **734/734**)
 
 ## Status — 2026-08-10
 
 Not started. No `apps/web/` changes exist in the working tree; all backend work
-is in ticket 01. Ticket 01's base delivery is committed; its 2026-08-10
-revision round (billing attribution + member-quota editing) is committed but
-its test suite is not yet green (18 `instances_mock_test` failures in flight),
-so 02 must not start until 01 closes green.
+is in ticket 01. Ticket 01 is **complete and green** — its revision round
+(billing attribution + member-quota editing) is committed and the full suite
+passes (`check.sh` silent, `run_tests.sh` 734/734) — so this ticket is
+unblocked and can begin.
 
-Backend contract confirmed for this ticket to build against (from the 01 audit):
+Backend contract confirmed for this ticket to build against (from the 01
+audit + revision round):
 
 - Template `max_run_seconds` / `keep_time_seconds` are now non-nullable `i64` in
   the JSON (`-1` = disabled; `0` = real value for keep-time/auto-sleep is still
@@ -48,9 +50,11 @@ Backend contract confirmed for this ticket to build against (from the 01 audit):
   one membership → auto-attribute; absent with several → `400`; zero
   memberships → `403`. `Instance` JSON exposes `owner_group_id` plus the
   resource snapshot; `Group` JSON includes a `members` array with per-membership
-  quotas; managers (not just admins) can edit a member's quota via the member
-  quota endpoint. The frontend picker (multi-group only, default highest-cap
-  membership) and the manager Groups-tab quota editing build against these.
+  quotas; `GET /api/groups` is readable by any `can_manage_users` holder
+  (manager included); managers (not just admins) can edit a member's quota via
+  the member quota endpoint. The frontend picker (multi-group only, default
+  highest-cap membership) and the manager Groups-tab quota editing build
+  against these.
 
 ## Acceptance criteria
 

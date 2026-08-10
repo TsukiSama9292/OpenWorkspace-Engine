@@ -24,21 +24,23 @@ not lock anyone out.
 
 **Blocked by:** None — can start immediately
 
-**Status:** in-progress (revision round — billing attribution + member-quota
-editing landed; full suite not green yet: 18 `instances_mock_test` failures
-from the billing auto-attribute change are being fixed). The base delivery
-(`-1` sentinel flip + quota feature, `check.sh` silent, `run_tests.sh`
-715/715) was completed and committed; the revision round below is new work on
-top of it.
+**Status:** completed (2026-08-10) — the revision round (billing attribution +
+member-quota editing) is committed and green: `bash scripts/check.sh` silent
+(both feature sets), `bash scripts/run_tests.sh` **736/736 passed** (734 + the
+two concurrency tests `8b61109` that close the last deferred acceptance
+criterion). All 18 post-round `instances_mock_test` failures are resolved (see
+"Resolution" below). The base delivery (`-1` sentinel flip + quota feature,
+`check.sh` silent, `run_tests.sh` 715/715) is the 2026-08-09 audit section
+below.
 
 ## Revision round — 2026-08-10 (billing attribution + member-quota editing)
 
-> **Status update (2026-08-10, in flight):** the revision round on top of the
-> completed base delivery is **committed but not green**. `check.sh` is silent
-> (zero warnings, both feature sets). `run_tests.sh` is currently **RED**: 18
-> `instances_mock_test` tests fail because the new billing-group auto-attribute
-> rule changed launch semantics that pre-existing tests relied on. Fix in
-> progress.
+> **Status update (2026-08-10, closed out):** the revision round on top of the
+> completed base delivery is **green**. `check.sh` is silent (zero warnings,
+> both feature sets). `run_tests.sh` is **736/736 passed** (was RED at 18
+> `instances_mock_test` failures; the full list is in "In flight" below).
+> Ticket 01 is **complete**, including the two concurrency tests (`8b61109`)
+> that close the final deferred acceptance criterion.
 
 ### Done (committed on `feature/resource-quotas`)
 
@@ -68,8 +70,32 @@ top of it.
   billing group + member quota grants (added helpers `grant_member_quota` via
   the new PUT endpoint and `launch_plain_in_group`); `whitelist_group.clone()`
   fix. **`flat_rbac_e2e_test` now green.**
+- `e4daf6d` — fix(api): instances mock tests launch with a single billing
+  group. Root cause of the bulk of the 18 failures: `/api/users` auto-adds the
+  seeded User system group when `group_ids` is omitted, so helper-created users
+  landed in **2 groups** (User system + the helper's group) and a launch
+  without `owner_group_id` hit the "several groups" 400; and plain
+  `create_user_and_token` users ended in the User system group (membership
+  quota 0) → 409 `member_quota_cpu`. Fix: `create_quota_user` now seeds
+  `grp-<user>` first and creates the user scoped to exactly that group
+  (explicit `group_ids`) with a `-1` membership; other helper users get a
+  seeded single group too. Cleared most of the 18.
+- `3e1580f` — fix(api): silence cloned-ref-to-slice-refs clippy in flat-rbac
+  e2e (kept the gate silent).
+- `4540a8c` — fix(api): pin seeded quota-test group ceiling to the direct
+  limit. Root cause of the **remaining 5** (ceiling launch, start-rejected,
+  admin-restart, concurrent-same-user, restart-reattribute):
+  `create_quota_user`'s auto-attribution group inherited `seed_pool_group`'s
+  hardcoded `max_instances = 4`, so `effective_max_instances = max(direct, 4)`
+  and the user-instance ceiling gate **never fired** for direct=1 users — the
+  ceiling tests were not exercising the gate at all. Fix pins the group ceiling
+  to the direct ceiling so the effective limit is exactly
+  `direct_max_instances`. Also corrected
+  `test_restart_reattributes_null_attributed_instance`'s Docker mocks: a
+  restart of an existing stopped container inspects and *starts* it
+  (`create_container_from_template` is called once at launch, not twice).
 
-### In flight (the reason `run_tests.sh` is red)
+### In flight (was the reason `run_tests.sh` was red — now resolved)
 
 - **18 `instances_mock_test` failures**, all downstream of the billing
   auto-attribute change. Root cause: `/api/users` (users.rs:253-277) auto-adds
@@ -79,7 +105,7 @@ top of it.
     `grp-<username>`) → launch without `owner_group_id` → 400 "several groups".
   - plain `create_user_and_token` users end up in **1 group** (User system,
     membership quota 0) → launch auto-attributes to it → 409
-    `member_quota_cpu` (used: 0, quota: 0).
+    `member_quota_cpu`.
   - Before this round, omitting the billing group self-billed with no
     membership check, so these tests never exercised a billing resolution.
 - Failing tests (full list from `--no-fail-fast`):
@@ -101,19 +127,22 @@ top of it.
   `test_start_infra_failure_rolls_back_to_stopped` (2906),
   `test_start_rejected_by_ceiling_leaves_instance_stopped` (2862),
   `test_user_launch_infra_failure_marks_error_and_keeps_record` (2943).
-- Fix plan: make the helper-launched users resolve to a **single** billing
-  group with a usable membership quota, mirroring the flat_rbac fix — either
-  pass an explicit `owner_group_id` at each launch or restructure the helpers
-  (`create_quota_user` / launch call sites) so auto-attribute lands on the
-  intended group. Then re-run the full suite until green.
+- Resolution: `e4daf6d` fixed the bulk (single billing group per test user,
+  see Done); the remaining 5 were a separate latent bug — the seeded group's
+  hardcoded `max_instances = 4` lifted direct=1 users' effective ceiling to 4,
+  so the user-instance gate never fired — fixed by `4540a8c` (group ceiling
+  pinned to the direct ceiling; reattribute restart mocks corrected). After
+  both, all 18 pass.
 
 ### Gate state
 
 - `bash scripts/check.sh` — **silent** (zero warnings, both feature sets).
-- `bash scripts/run_tests.sh` — **RED**: 18 `instances_mock_test` failures
-  (listed above); `flat_rbac_e2e_test` green after `a22bb6b`/`5314a87`.
-- Next: fix the 18, then full-suite green → doc sync (this ticket, spec,
-  roadmap, CHANGELOG).
+- `bash scripts/run_tests.sh` — **736/736 passed** (base 715/715 + the
+  member-quota / pool-tightening / re-attribute tests added this round + the
+  two concurrency tests added by `8b61109`).
+- The final deferred acceptance criterion — same-pool serialization while
+  different groups proceed in parallel — is now **covered** by dedicated
+  tests (see the acceptance boxes below).
 
 ## Implementation audit — 2026-08-09 (working tree on `feature/resource-quotas`)
 
@@ -126,7 +155,8 @@ top of it.
 > **Follow-up:** the 2026-08-10 revision round (billing attribution +
 > member-quota editing) landed **on top of** this audit and is tracked in the
 > "Revision round — 2026-08-10" section above. The 715/715 result below is the
-> base-delivery gate; the revision round has its own (currently red) gate.
+> base-delivery gate; the revision round's gate is now **734/734 green** (see
+> above).
 
 ### Done (uncommitted working tree)
 
@@ -218,13 +248,13 @@ top of it.
 
 ### Migration (spec Decision 1 — data rewrite, behavior-preserving)
 
-- [ ] Migration adds `cpu_quota` / `memory_quota` / `gpu_quota` to `groups` and
+- [x] Migration adds `cpu_quota` / `memory_quota` / `gpu_quota` to `groups` and
       `user_groups` (default `0` = blocked), `host_cpu_quota` /
       `host_memory_quota` / `host_gpu_quota` to `system_settings`
       (default `-1` = unlimited), and `owner_group_id` (FK to `groups`,
       `ON DELETE SET NULL`) + `resource_cores` / `resource_memory` /
       `resource_gpu` to `workspace_instances`.
-- [ ] Migration rewrites existing numeric-limit data behavior-preservingly so
+- [x] Migration rewrites existing numeric-limit data behavior-preservingly so
       `-1` becomes the universal unlimited/disabled sentinel and `0` means a
       real zero:
       - `templates.cores`, `templates.memory` (legacy `0` = no Docker limit),
@@ -239,20 +269,20 @@ top of it.
         `NOT NULL DEFAULT -1`.
       - `users.direct_max_instances`: `0` → `-1`; the column **stays nullable**
         (`NULL` = inherit the group ceiling, spec Decision 2).
-- [ ] Migration backfills: existing groups and memberships → `-1` (unlimited);
+- [x] Migration backfills: existing groups and memberships → `-1` (unlimited);
       existing instances → `owner_group_id` = owner's highest-tier membership
       (admin > manager > user, tie-break oldest; `NULL` if none) and the
       resource snapshot from the template's current values — **after** the
       `0 → -1` rewrite, so a legacy `cores = 0` template never backfills a
       snapshot of `0` (which under the new convention means a zero-core
       request, not unlimited).
-- [ ] New groups and new memberships default to `0` (blocked) on the quota
+- [x] New groups and new memberships default to `0` (blocked) on the quota
       columns; new host caps default to `-1`; new templates keep their positive
       defaults (2 cores / 4 GiB).
 
 ### Runtime convention (the `-1` flip in code, not just data)
 
-- [ ] Every runtime gate, entity doc, and validation treats `-1` as the
+- [x] Every runtime gate, entity doc, and validation treats `-1` as the
       unlimited/disabled sentinel and `0` as a real value:
       - `calculate_effective_context` resolves unlimited ceilings and pools to
         `-1` (`effective_max_instances = -1`; aggregate pool `-1` when any
@@ -267,67 +297,79 @@ top of it.
         to usage, never rejected by arithmetic). No value below `-1` is valid.
       - `QuotaContext` / `ResourceUse` doc comments and the self-billed
         (`target_group_id = None`) pool use `-1` for unlimited.
-- [ ] Validation accepts `>= -1` and rejects `< -1` on every limit field:
+- [x] Validation accepts `>= -1` and rejects `< -1` on every limit field:
       template `cores` / `memory` / `gpu_count` / bandwidth, group
       `max_instances`, admin-settings `host_instance_limit` + host caps, and
       the membership-quota endpoint. (Replaces the current `>= 0` /
       `0 = unlimited` checks.)
-- [ ] Auto-sleep / keep-time: entities, routes, the health worker, and the
+- [x] Auto-sleep / keep-time: entities, routes, the health worker, and the
       deadline helpers read `max_run_seconds` / `keep_time_seconds` as
       `i64` with `<= 0` = disabled (the migrated `-1`), replacing the
       `Option::None` sentinel.
-- [ ] Docker layer: container CPU/memory limits derive from the template with
+- [x] Docker layer: container CPU/memory limits derive from the template with
       `<= 0` → no container limit (a real `0` core/byte request and the `-1`
       unlimited marker both map to "no limit" — the forms never offer `0` for
       cores/memory); bandwidth `-1`/`0` → no `tc` shape, `> 0` → shape.
-- [ ] Counter queries sum over `('starting','running','paused')` with a
-      negative-filtered `COALESCE(SUM(...),0)` so `-1` snapshots never pollute
-      the totals and `0` snapshots contribute nothing; `stopped`/`error` never
-      count.
+- [x] Counter queries sum over `('starting','running','paused')` with a
+      negative-filtered sum so `-1` snapshots never pollute the totals and `0`
+      snapshots contribute nothing; `stopped`/`error` never count. (As
+      implemented the sums fold active rows with a per-resource `.max(0)` in
+      `activation.rs` rather than a SQL `COALESCE`; the behavior matches.)
 
 ### Feature behavior
 
-- [ ] Launch request accepts an optional billing `group_id`: present and not a
+- [x] Launch request accepts an optional billing `group_id`: present and not a
       membership → `403`; absent with exactly one membership → auto-attribute;
       absent with multiple memberships → `400`; zero memberships → `403`
       (never a 500).
-- [ ] Launch stores `owner_group_id` + the resource snapshot on the instance
+- [x] Launch stores `owner_group_id` + the resource snapshot on the instance
       row; the instance JSON exposes both plus the existing read-time
       `owner_group_ids`.
-- [ ] `pre_flight` grows a bundled quota context (member cap + usage, group
+- [x] `pre_flight` grows a bundled quota context (member cap + usage, group
       pool + usage, host caps + usage, template request) and runs the resource
       checks in the fixed order after the instance ceiling and before the host
       ceiling: personal cap (chosen group's membership quota) → chosen group
       pool → host caps.
-- [ ] Activation transaction locks the chosen group row then the owner's user
+- [x] Activation transaction locks the chosen group row then the owner's user
       row (no `system_settings` lock); the host checks are best-effort so
       launches into different groups run in parallel.
-- [ ] Restart of a stopped instance re-runs the same pre-flight; a
+- [x] Restart of a stopped instance re-runs the same pre-flight; a
       `NULL`-attributed instance is first re-attributed to the owner's
       highest-tier membership (persisted), and rejected `403` if the owner has
       no membership.
-- [ ] New endpoint edits a membership's quota, gated by `can_manage_users` +
+- [x] New endpoint edits a membership's quota, gated by `can_manage_users` +
       target-user tier + group tier strictly below the actor; values are `-1`
       or within `[0, group_pool]`.
-- [ ] `GET /api/groups` (whose list response now includes each group's members
+- [x] `GET /api/groups` (whose list response now includes each group's members
       and per-membership quotas) is readable by any `can_manage_users` holder
       — admin or manager — so the frontend's layered Groups tab renders for
       managers, not just admins.
-- [ ] Group create/update accepts pool quotas; lowering the pool below a
+- [x] Group create/update accepts pool quotas; lowering the pool below a
       member's finite quota → `409`; lowering any quota to a finite value while
       an active `-1`-snapshot instance is in that scope → `409`; deleting a
       group with an active attributed instance → `409`.
-- [ ] Admin settings read/write the host caps and `host_instance_limit` with
+- [x] Admin settings read/write the host caps and `host_instance_limit` with
       the `-1`/`0`/value semantics.
-- [ ] All quota rejections return `409` with the existing structured
+- [x] All quota rejections return `409` with the existing structured
       `{ error, rejection: { scope, current, limit, requested } }` body; new
       resource scopes encode the resource in the scope string. Audit events
       cover quota changes.
-- [ ] Full Rust gate green: `scripts/check.sh` silent (both feature sets, zero
-      warnings) and `scripts/run_tests.sh` green, including new unit tests for
-      the flipped gates (`-1` skip, `0` blocked, finite arithmetic, the `-1`
-      request rule with `0` = zero-cost), migration-harness tests for the new
-      sentinels/defaults, route tests (mocked Docker) for every error code
-      above plus validation (`-1` accepted, `< -1` rejected on every field),
-      and a concurrency test proving same-pool serialization while different
-      groups proceed in parallel.
+- [x] Full Rust gate green: `scripts/check.sh` silent (both feature sets, zero
+      warnings) and `scripts/run_tests.sh` green (736/736), including new unit
+      tests for the flipped gates (`-1` skip, `0` blocked, finite arithmetic,
+      the `-1` request rule with `0` = zero-cost), migration-harness tests for
+      the new sentinels/defaults (`db_test.rs` runs the migration chain), and
+      route tests (mocked Docker) for every error code above plus validation
+      (`-1` accepted, `< -1` rejected on every field).
+- [x] **Concurrency (`8b61109`):** same-pool serialization and cross-group
+      parallelism now have dedicated tests.
+      `test_concurrent_launches_same_group_pool_exactly_one_succeeds` — two
+      *different* users billing against one 2-core pool concurrently: exactly
+      one `200`, the sibling `409 group_pool_cpu`. No user-row lock is shared,
+      so only the group-row lock can serialize pool consumption.
+      `test_concurrent_launches_different_groups_proceed_in_parallel_at_host_cap` —
+      a Barrier inside the docker-create mock times out (failing the test) if
+      either launch is held at a cross-group gate; both `200`, committed cores
+      sum exactly to the host cap. Same-user serialization stays covered by
+      `test_concurrent_launches_same_user_at_ceiling_exactly_one_succeeds`.
+      See spec Testing Decisions.

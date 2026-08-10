@@ -2,6 +2,15 @@ Status: ready-for-agent
 
 # Group & User Resource Quotas (CPU / Memory / GPU)
 
+> **Status — 2026-08-10:** backend delivery (`.scratch/resource-quota-v2/issues/01-be-resource-quotas.md`)
+> is **complete and green**: `bash scripts/check.sh` is silent (both feature
+> sets) and `bash scripts/run_tests.sh` is **734/734 passed**. Migrations
+> `000025` (group pools / host caps / billing attribution), `000026` (the `-1`
+> sentinel flip), and `000027` (per-member quotas) are committed. Frontend
+> (ticket 02) and end-to-end (ticket 03) are **not started** — 02 is the next
+> agent pass. Two testing-side divergences from this spec were recorded while
+> closing out 01 (see Decision 6 and Testing Decisions below).
+
 ## Problem Statement
 
 Today the only resource governance on the platform is instance *count*: a group's
@@ -286,15 +295,17 @@ default to `0` (blocked until an admin assigns quotas).
   host-resource checks read the singleton plus an aggregate inside the
   transaction's snapshot; overshoot is possible under concurrency and is
   accepted (best-effort), exactly like `host_instance_limit` behaves today.
-- Counter queries use `COALESCE(SUM(resource), 0)` over
-  `status IN ('starting','running','paused')`, with a **negative-filtered**
-  sum — `COALESCE(SUM(CASE WHEN resource > 0 THEN resource ELSE 0 END), 0)`.
-  A `-1` snapshot is stored literally on the instance row, and summing it as a
-  negative would *reduce* usage (ten unlimited instances would make a finite
-  pool look negative and even admit new launches), so negative snapshots
-  contribute nothing to the sums. Paused counts for CPU, memory, **and** GPU —
-  counting it everywhere prevents pause-based quota bypass and keeps one
-  status set for the whole feature. `stopped` and `error` never count.
+- Counter queries sum over `status IN ('starting','running','paused')` with a
+  **negative-filtered** sum so a `-1` snapshot (stored literally on the
+  instance row) contributes nothing — summing it as a negative would *reduce*
+  usage (ten unlimited instances would make a finite pool look negative and
+  even admit new launches). As implemented, the sums load the active rows and
+  fold with a per-resource `.max(0)` on each snapshot (`activation.rs`
+  `sum_resources_*`), and the counts use the ORM's `.count()` over the active
+  status set — never `NULL`, so no `COALESCE` is needed; the effective behavior
+  matches this bullet. Paused counts for CPU, memory, **and** GPU — counting
+  it everywhere prevents pause-based quota bypass and keeps one status set for
+  the whole feature. `stopped` and `error` never count.
 
 ### 7. Quota editing surface and permissions
 
@@ -409,18 +420,38 @@ default to `0` (blocked until an admin assigns quotas).
   owner+billing group correctly; `starting`/`running`/`paused` all count;
   `stopped`/`error` never count.
 - **Transactional concurrency** (prior art: `instances_mock_test.rs` /
-  two-process flock test): two concurrent launches into the same group at the
-  pool limit → exactly one succeeds; two concurrent launches into **different**
-  groups at the host limit → both pass the precise layers (no global
-  serialization), with host best-effort documented as racy; the same user's
-  launches serialize on the user row.
+  two-process flock test): the same user's launches serialize on the user row
+  (`test_concurrent_launches_same_user_at_ceiling_exactly_one_succeeds`), and
+  concurrent launches across users on one host allocate distinct ports and
+  subnets (`test_concurrent_launches_different_users_both_succeed`,
+  `test_concurrent_launches_allocate_distinct_subnets`). Both cross-group
+  cases have dedicated tests. **Same group at the pool limit:** two *different*
+  users billing against one 2-core pool concurrently — exactly one `200` and
+  the sibling `409 group_pool_cpu`, proving the group-row lock serializes pool
+  consumption even with no shared user row
+  (`test_concurrent_launches_same_group_pool_exactly_one_succeeds`).
+  **Different groups at the host limit:** a Barrier inside the docker-create
+  mock fails the test if either launch is held at a cross-group gate; both
+  `200` and the committed cores sum exactly to the cap
+  (`test_concurrent_launches_different_groups_proceed_in_parallel_at_host_cap`).
+  The pool layer is also exercised sequentially
+  (`test_launch_consumes_billing_group_pool`: second launch past the pool →
+  `409`; `test_restart_reruns_current_pool_check_after_shrink`) and the host
+  layers by `test_host_resource_cap_blocks_second_launch`; host best-effort
+  stays documented as racy.
 - **Route-level behavior** (`instances_mock_test.rs` with a mocked
   `DockerService`): non-member billing group → `403`; multi-group launch
   without `group_id` → `400`; single-group launch without `group_id` defaults;
   **zero-membership launch → `403` whether or not `group_id` is sent**; each
   `409` carries the right scope + numbers and leaves no row; the reservation
   stores `owner_group_id` + the resource snapshot; a restart of a stopped
-  instance re-runs the pipeline and stays `stopped` on rejection.
+  instance re-runs the pipeline and stays `stopped` on rejection. **Test seam:**
+  `create_quota_user` seeds one billing group per user and pins its
+  `max_instances` to the direct ceiling, so `effective_max_instances` equals
+  the intended limit — `seed_pool_group`'s default ceiling of 4 would otherwise
+  silently lift a direct=1 user's ceiling and the user-instance gate would
+  never fire (the bug `4540a8c` fixed). The ceiling / start / admin-restart /
+  concurrent route tests rely on this pinning.
 - **Quota editing — route tests**: manager edits a lower-tier member in an
   assignable group → `200`; same/higher-tier member or higher-tier group →
   `403`; value above the pool → `400`; admin lowering the pool below a member's

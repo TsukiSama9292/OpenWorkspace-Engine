@@ -13,17 +13,16 @@ exhausted.
 **Blocked by:** 02 — Frontend: quota UI (billing-group picker, layered Groups
 tab, `-1` convention forms)
 
-**Status:** ready-for-agent (blocked — 01 not green, 02 not started)
+**Status:** ready-for-agent (blocked — 01 green, 02 not started)
 
 ## Status — 2026-08-10
 
 Not started. No E2E work has been done and no dev stack has been booted this
-session. Backend (01) is mid-flight: its base delivery is committed but the
-revision round (billing attribution + member-quota editing) has 18
-`instances_mock_test` failures in flight, so the API surface the E2E suite
-would test is not yet stable. Frontend (02) is untouched. The full Playwright
-suite will run against the running dev stack only once both tickets land (per
-the AGENTS.md `test:e2e:full` flow).
+session. Backend (01) is **complete and green** (`check.sh` silent,
+`run_tests.sh` 734/734), so the API surface the E2E suite will test is stable;
+frontend (02) is untouched and must land first, since this suite drives the
+browser UI. The full Playwright suite will run against the running dev stack
+only once both tickets land (per the AGENTS.md `test:e2e:full` flow).
 
 ## Acceptance criteria
 
