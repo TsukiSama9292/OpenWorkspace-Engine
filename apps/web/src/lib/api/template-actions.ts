@@ -5,13 +5,15 @@ export type LaunchPersistence = 'use_persistent' | 'no_persistent' | 'reset_pers
 
 export async function launchInstance(
   templateId: string,
-  persistence: LaunchPersistence = 'no_persistent'
+  persistence: LaunchPersistence = 'no_persistent',
+  groupId?: string
 ): Promise<{ error?: string; instance?: Instance; rejection?: PreflightRejection }> {
   const wantsPersistent = persistence !== 'no_persistent';
   const res = await api.post<{ instance: Instance }>('/instances', {
     template_id: templateId,
     persistence,
-    mount_persistent: wantsPersistent
+    mount_persistent: wantsPersistent,
+    ...(groupId ? { owner_group_id: groupId } : {})
   });
   if (res.error) return { error: res.error, rejection: res.rejection };
   if (res.data?.instance) return { instance: res.data.instance };

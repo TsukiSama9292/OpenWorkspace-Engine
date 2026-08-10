@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listGroups, deleteGroup } from '$lib/api/rbac-actions';
+  import { listGroups, deleteGroup, updateMemberQuota } from '$lib/api/rbac-actions';
   import { auth } from '$lib/stores/auth';
   import {
     GROUP_FLAGS,
@@ -14,7 +14,14 @@
     type GroupFormState
   } from '$lib/groups/group-form';
   import TriStateInput from '$lib/components/forms/TriStateInput.svelte';
-  import type { EffectiveContext, Group, Template } from '$lib/types';
+  import {
+    memoryMbFromTriState,
+    memoryMbToTriState,
+    triStateFromValue,
+    valueFromTriState,
+    type TriState
+  } from '$lib/tri-state';
+  import type { EffectiveContext, Group, GroupMember, Template } from '$lib/types';
 
   let {
     ctx = null,
@@ -32,7 +39,19 @@
   let form = $state<GroupFormState>(createInitialGroupForm());
   let search = $state('');
   let flagFilter = $state<'all' | GroupFlag>('all');
+  let membersOpen = $state<string[]>([]);
+  let showQuotaModal = $state(false);
+  let quotaGroup = $state<Group | null>(null);
+  let quotaMember = $state<GroupMember | null>(null);
+  let quotaForm = $state<{ cpu: TriState; memory: TriState; gpu: TriState }>({
+    cpu: { mode: 'unlimited', value: 1 },
+    memory: { mode: 'unlimited', value: 1 },
+    gpu: { mode: 'unlimited', value: 1 }
+  });
+  let quotaError = $state('');
+  let quotaSaving = $state(false);
 
+  const canManageUsers = $derived(ctx?.can_manage_users === true || ctx?.is_admin === true);
   const isAdmin = $derived(ctx?.is_admin === true);
 
   const editingSystemKind = $derived(editing?.kind ?? null);
@@ -67,8 +86,26 @@
     can_view_audit_logs: 'View audit logs'
   };
 
+  function describeMaxInstances(v: number | null | undefined): string {
+    if (v == null || v < 0) return 'Unlimited';
+    if (v === 0) return 'Disabled (0)';
+    return String(v);
+  }
+
+  function describeQuota(v: number): string {
+    if (v < 0) return 'unlimited';
+    if (v === 0) return 'blocked';
+    return String(v);
+  }
+
+  function describeMemQuota(mb: number): string {
+    if (mb < 0) return 'unlimited';
+    if (mb === 0) return 'blocked';
+    return `${Math.round(mb / 1024)} GB`;
+  }
+
   async function load() {
-    if (!isAdmin) return;
+    if (!canManageUsers) return;
     loading = true;
     loadError = '';
     const res = await listGroups();
@@ -81,16 +118,18 @@
   }
 
   onMount(() => {
-    if (isAdmin) load();
+    if (canManageUsers) load();
   });
 
   function openCreate() {
+    if (!isAdmin) return;
     editing = null;
     form = createInitialGroupForm();
     showModal = true;
   }
 
   function openEdit(group: Group) {
+    if (!isAdmin) return;
     editing = group;
     form = groupFormFromGroup(group);
     showModal = true;
@@ -133,16 +172,80 @@
       await auth.check();
     }
   }
+
+  function toggleMembers(groupId: string) {
+    membersOpen = membersOpen.includes(groupId)
+      ? membersOpen.filter((id) => id !== groupId)
+      : [...membersOpen, groupId];
+  }
+
+  function openQuotaEditor(group: Group, member: GroupMember) {
+    quotaGroup = group;
+    quotaMember = member;
+    quotaForm = {
+      cpu: triStateFromValue(member.cpu_quota),
+      memory: memoryMbToTriState(member.memory_quota),
+      gpu: triStateFromValue(member.gpu_quota)
+    };
+    quotaError = '';
+    quotaSaving = false;
+    showQuotaModal = true;
+  }
+
+  function closeQuotaModal() {
+    showQuotaModal = false;
+    quotaGroup = null;
+    quotaMember = null;
+  }
+
+  async function onSaveQuota() {
+    if (!quotaGroup || !quotaMember) return;
+    quotaSaving = true;
+    quotaError = '';
+    const res = await updateMemberQuota(quotaGroup.id, quotaMember.user_id, {
+      cpu_quota: valueFromTriState(quotaForm.cpu),
+      memory_quota: memoryMbFromTriState(quotaForm.memory),
+      gpu_quota: valueFromTriState(quotaForm.gpu)
+    });
+    quotaSaving = false;
+    if (res.error) {
+      quotaError = res.error;
+      return;
+    }
+    closeQuotaModal();
+    await load();
+  }
+
+  async function onResetAllQuotas(group: Group) {
+    if (!isAdmin) return;
+    const members = group.members ?? [];
+    if (members.length === 0) return;
+    if (!confirm(`Reset all ${members.length} member quotas in "${group.name}" to 0 (blocked)?`)) return;
+    for (const member of members) {
+      const res = await updateMemberQuota(group.id, member.user_id, {
+        cpu_quota: 0,
+        memory_quota: 0,
+        gpu_quota: 0
+      });
+      if (res.error) {
+        loadError = res.error;
+        return;
+      }
+    }
+    await load();
+  }
 </script>
 
-{#if isAdmin}
+{#if canManageUsers}
   <section class="ws-section panel-card">
     <div class="panel-head">
       <div>
         <h2 class="panel-head-title">Group Management</h2>
         <p class="panel-head-desc">Permission groups control what their members can do.</p>
       </div>
-      <button class="btn-create" onclick={openCreate}>+ New Group</button>
+      {#if isAdmin}
+        <button class="btn-create" onclick={openCreate}>+ New Group</button>
+      {/if}
     </div>
 
     {#if loading}
@@ -190,6 +293,7 @@
                 <th>Permissions</th>
                 <th>Max Instances</th>
                 <th>Resource Pool</th>
+                <th>Members</th>
                 <th>Templates</th>
                 <th>Actions</th>
               </tr>
@@ -211,8 +315,17 @@
                       <span class="group-flag-badge" class:on={group[flag]}>{FLAG_LABELS[flag]}</span>
                     {/each}
                   </td>
-                  <td>{group.max_instances == null || group.max_instances === 0 ? 'Unlimited' : group.max_instances}</td>
+                  <td>{describeMaxInstances(group.max_instances)}</td>
                   <td class="td-id">{describeGroupPool(group)}</td>
+                  <td class="td-groups">
+                    {#if (group.members?.length ?? 0) === 0}
+                      <span class="td-id">None</span>
+                    {:else}
+                      <button class="link-btn" onclick={() => toggleMembers(group.id)}>
+                        {(group.members?.length ?? 0)} member{(group.members?.length ?? 0) !== 1 ? 's' : ''}
+                      </button>
+                    {/if}
+                  </td>
                   <td class="td-groups">
                     {#if group.template_ids.length === 0}
                       <span class="td-id">None</span>
@@ -222,13 +335,41 @@
                   </td>
                   <td class="td-actions">
                     <div class="action-buttons">
-                      <button class="launch-btn edit" onclick={() => openEdit(group)}>Edit</button>
-                      {#if !isSystemGroup(group)}
-                        <button class="launch-btn remove" onclick={() => onDelete(group)}>Delete</button>
+                      {#if isAdmin}
+                        <button class="launch-btn edit" onclick={() => openEdit(group)}>Edit</button>
+                        {#if !isSystemGroup(group)}
+                          <button class="launch-btn remove" onclick={() => onDelete(group)}>Delete</button>
+                        {/if}
                       {/if}
                     </div>
                   </td>
                 </tr>
+                {#if membersOpen.includes(group.id)}
+                  <tr class="member-expand-row">
+                    <td colspan="7">
+                      <div class="member-panel">
+                        {#if (group.members?.length ?? 0) === 0}
+                          <p class="empty-text">No members in this group.</p>
+                        {:else}
+                          {#each group.members ?? [] as member (member.user_id)}
+                            <div class="member-row">
+                              <span class="member-name">{member.username}</span>
+                              <span class="member-quota">
+                                CPU {describeQuota(member.cpu_quota)} · Mem {describeMemQuota(member.memory_quota)} · GPU {describeQuota(member.gpu_quota)}
+                              </span>
+                              <button class="launch-btn edit" onclick={() => openQuotaEditor(group, member)}>Edit quotas</button>
+                            </div>
+                          {/each}
+                          {#if isAdmin}
+                            <div class="member-reset-row">
+                              <button class="launch-btn remove" onclick={() => onResetAllQuotas(group)}>Reset all quotas to 0</button>
+                            </div>
+                          {/if}
+                        {/if}
+                      </div>
+                    </td>
+                  </tr>
+                {/if}
               {/each}
             </tbody>
           </table>
@@ -266,8 +407,8 @@
           {/each}
         </div>
         <div class="modal-field">
-          <label for="group-max-instances" class="modal-label">Max Instances (0 = unlimited)</label>
-          <input id="group-max-instances" class="modal-input" type="number" min="0" bind:value={form.max_instances} />
+          <TriStateInput label="Max Instances" bind:value={form.max_instances} unit="instances" placeholder="e.g. 5" />
+          <p class="modal-hint">Unlimited (-1) means no instance ceiling; Disabled (0) blocks new launches; Custom sets an exact cap.</p>
         </div>
         <div class="modal-field">
           <span class="modal-label">Resource Pool</span>
@@ -319,6 +460,30 @@
       </form>
     </div>
   {/if}
+
+  {#if showQuotaModal && quotaGroup && quotaMember}
+    <div class="modal-overlay" onclick={closeQuotaModal} role="presentation"></div>
+    <div class="modal-card">
+      <h3 class="modal-title">Edit quotas — {quotaMember.username}</h3>
+      <p class="modal-hint">Group "{quotaGroup.name}". -1 = unlimited (bounded by the pool), 0 = blocked, custom = exact cap.</p>
+      <form onsubmit={(e) => { e.preventDefault(); onSaveQuota(); }}>
+        <div class="modal-field">
+          <div class="pool-grid">
+            <TriStateInput label="CPU Quota (cores)" bind:value={quotaForm.cpu} unit="cores" placeholder="e.g. 4" />
+            <TriStateInput label="Memory Quota (GB)" bind:value={quotaForm.memory} unit="GB" placeholder="e.g. 8" />
+            <TriStateInput label="GPU Quota" bind:value={quotaForm.gpu} unit="GPUs" placeholder="e.g. 1" />
+          </div>
+        </div>
+        {#if quotaError}
+          <div class="error-badge">{quotaError}</div>
+        {/if}
+        <div class="modal-actions">
+          <button type="button" class="modal-cancel" onclick={closeQuotaModal}>Cancel</button>
+          <button type="submit" class="modal-confirm" disabled={quotaSaving}>Save Quotas</button>
+        </div>
+      </form>
+    </div>
+  {/if}
 {/if}
 
 <style>
@@ -363,6 +528,59 @@
     color: #a5b4fc;
     background: rgba(99, 102, 241, 0.12);
     border: 1px solid rgba(129, 140, 248, 0.25);
+  }
+
+  .link-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    color: #818cf8;
+    font-size: 0.8rem;
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  .link-btn:hover {
+    text-decoration: underline;
+  }
+
+  .member-expand-row td {
+    background: rgba(255, 255, 255, 0.02);
+    padding: 0.75rem 1rem;
+  }
+
+  .member-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .member-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0.4rem 0.6rem;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.25);
+  }
+
+  .member-name {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #e4e4e7;
+    min-width: 140px;
+  }
+
+  .member-quota {
+    font-size: 0.76rem;
+    color: #a1a1aa;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .member-reset-row {
+    display: flex;
+    justify-content: flex-end;
   }
 
   .modal-overlay {

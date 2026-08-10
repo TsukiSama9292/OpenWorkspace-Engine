@@ -27,7 +27,7 @@ export interface GroupFormState {
   can_manage_registry: boolean;
   can_view_monitoring: boolean;
   can_view_audit_logs: boolean;
-  max_instances: string;
+  max_instances: TriState;
   billing_model: BillingModel;
   poolCpu: TriState;
   poolMemory: TriState;
@@ -66,7 +66,7 @@ export function createInitialGroupForm(): GroupFormState {
     can_manage_registry: false,
     can_view_monitoring: false,
     can_view_audit_logs: false,
-    max_instances: '2',
+    max_instances: { ...UNLIMITED },
     billing_model: 'shared',
     poolCpu: { ...UNLIMITED },
     poolMemory: { ...UNLIMITED },
@@ -89,7 +89,7 @@ export function groupFormFromGroup(group: Group): GroupFormState {
     can_manage_registry: group.can_manage_registry,
     can_view_monitoring: group.can_view_monitoring,
     can_view_audit_logs: group.can_view_audit_logs,
-    max_instances: group.max_instances == null ? '' : String(group.max_instances),
+    max_instances: triStateFromValue(group.max_instances, -1),
     billing_model: group.billing_model ?? 'shared',
     poolCpu: triStateFromValue(group.pool_cpu_cores),
     poolMemory: memoryMbToTriState(group.pool_memory_mb),
@@ -112,7 +112,7 @@ export function buildGroupInput(state: GroupFormState): GroupInput {
     can_manage_registry: systemFlags.can_manage_registry ?? state.can_manage_registry,
     can_view_monitoring: systemFlags.can_view_monitoring ?? state.can_view_monitoring,
     can_view_audit_logs: systemFlags.can_view_audit_logs ?? state.can_view_audit_logs,
-    max_instances: Number(state.max_instances) || 0,
+    max_instances: valueFromTriState(state.max_instances),
     billing_model: state.billing_model,
     pool_cpu_cores: valueFromTriState(state.poolCpu),
     pool_memory_mb: memoryMbFromTriState(state.poolMemory),
@@ -137,8 +137,8 @@ export function systemGroupFlags(kind: Group['kind']): {
 
 function validate(state: GroupFormState): string | undefined {
   if (!state.name.trim()) return 'Name is required';
-  if (Number.isNaN(Number(state.max_instances)) || Number(state.max_instances) < 0) {
-    return 'Max instances must be >= 0 (0 = unlimited)';
+  if (!isTriStateValid(state.max_instances)) {
+    return 'Max instances must be -1 (unlimited), 0 (disabled), or a positive number';
   }
   if (!isTriStateValid(state.poolCpu)) return 'Pool CPU must be -1 (unlimited), 0 (disabled), or a positive number';
   if (!isTriStateValid(state.poolMemory)) return 'Pool memory must be -1 (unlimited), 0 (disabled), or a positive number';

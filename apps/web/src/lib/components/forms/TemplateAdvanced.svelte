@@ -85,15 +85,27 @@
   </div>
 
   <h2 class="text-base font-semibold text-surface-200">Network Bandwidth (Mbps)</h2>
-  <p class="text-sm text-zinc-500 -mt-2">0 = unlimited. Applied per container via kernel traffic shaping (tc/HTB) on the host.</p>
+  <p class="text-sm text-zinc-500 -mt-2">Unlimited (0) = no cap. Set a finite limit to shape traffic via kernel shaping (tc/HTB) on the host.</p>
   <div class="grid grid-cols-2 gap-3">
-    <label class={labelClass}>
+    <label class="flex flex-col gap-1">
       <span class={spanClass}>Upload Limit (Mbps)</span>
-      <input type="number" min="0" step="1" bind:value={bandwidthUpMbps} placeholder="0" class={inputClass} />
+      <div class="flex items-center gap-3">
+        <input type="number" class={inputClass} min="0" bind:value={bandwidthUpMbps} disabled={bandwidthUpMbps === 0} data-testid="bw-up-input" />
+        <label class="flex items-center gap-1.5 text-sm text-zinc-400 whitespace-nowrap cursor-pointer">
+          <input type="checkbox" data-testid="bw-up-unlimited" checked={bandwidthUpMbps === 0} onchange={(e) => (bandwidthUpMbps = (e.currentTarget as HTMLInputElement).checked ? 0 : 100)} class="w-4 h-4 accent-indigo-500" />
+          Unlimited
+        </label>
+      </div>
     </label>
-    <label class={labelClass}>
+    <label class="flex flex-col gap-1">
       <span class={spanClass}>Download Limit (Mbps)</span>
-      <input type="number" min="0" step="1" bind:value={bandwidthDownMbps} placeholder="0" class={inputClass} />
+      <div class="flex items-center gap-3">
+        <input type="number" class={inputClass} min="0" bind:value={bandwidthDownMbps} disabled={bandwidthDownMbps === 0} data-testid="bw-down-input" />
+        <label class="flex items-center gap-1.5 text-sm text-zinc-400 whitespace-nowrap cursor-pointer">
+          <input type="checkbox" data-testid="bw-down-unlimited" checked={bandwidthDownMbps === 0} onchange={(e) => (bandwidthDownMbps = (e.currentTarget as HTMLInputElement).checked ? 0 : 100)} class="w-4 h-4 accent-indigo-500" />
+          Unlimited
+        </label>
+      </div>
     </label>
   </div>
 

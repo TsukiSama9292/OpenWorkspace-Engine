@@ -345,6 +345,7 @@ pub async fn activate(
             // *current* pool from the locked row above.
             let snapshot = Some(serde_json::json!({
                 "group_id": group.id,
+                "group_name": group.name,
                 "billing_model": group.billing_model,
                 "pool_cpu_cores": group.pool_cpu_cores,
                 "pool_memory_mb": group.pool_memory_mb,

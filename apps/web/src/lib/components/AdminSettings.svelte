@@ -252,61 +252,11 @@
     margin: 0;
   }
 
-  .field-control {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-top: 0.4rem;
-  }
-
   .caps-grid {
     display: flex;
     gap: 10px;
     margin-top: 0.4rem;
     align-items: flex-end;
-  }
-
-  .field-input {
-    width: 160px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.95rem;
-    font-weight: 500;
-    color: #f4f4f5;
-    background: #0d0d10;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 8px;
-    padding: 0.55rem 0.75rem;
-    outline: none;
-    transition: border-color 0.2s, box-shadow 0.2s;
-    -moz-appearance: textfield;
-    appearance: textfield;
-  }
-
-  .field-input::-webkit-outer-spin-button,
-  .field-input::-webkit-inner-spin-button {
-    -webkit-appearance: none;
-    margin: 0;
-  }
-
-  .field-input:focus {
-    border-color: #6366f1;
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
-  }
-
-  .field-input:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .field-suffix {
-    font-size: 0.8rem;
-    color: #71717a;
-  }
-
-  .field-hint {
-    font-size: 0.75rem;
-    color: #71717a;
-    margin: 0;
   }
 
   .error-banner {

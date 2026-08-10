@@ -1,4 +1,8 @@
 <script lang="ts">
+  import UnlimitedInput from './UnlimitedInput.svelte';
+  import TriStateInput from './TriStateInput.svelte';
+  import { triStateFromValue, valueFromTriState } from '$lib/tri-state';
+  import type { TriState } from '$lib/tri-state';
   import type { TimeoutAction } from '$lib/templates/template-form';
 
   interface Props {
@@ -32,10 +36,15 @@
 
   const DEFAULT_SECONDS = 3600;
 
+  let gpuTri = $state<TriState>(triStateFromValue(gpuCount, 0));
   let usageEnabled = $state(maxRunSeconds > 0);
   let keepTimeEnabled = $state(keepTimeSeconds > 0);
   let maxRunSecondsInput = $state(String(maxRunSeconds > 0 ? maxRunSeconds : DEFAULT_SECONDS));
   let keepTimeSecondsInput = $state(String(keepTimeSeconds > 0 ? keepTimeSeconds : DEFAULT_SECONDS));
+
+  $effect(() => {
+    gpuCount = valueFromTriState(gpuTri);
+  });
 
   function parseSeconds(raw: string | null): number | null {
     if (raw === null || raw.trim() === '') return null;
@@ -85,19 +94,14 @@
 </script>
 
 <div class="grid grid-cols-3 gap-3">
-  <label class={labelClass}>
-    <span class={spanClass}>CPU Cores *</span>
-    <input type="number" bind:value={cores} min="1" max="64" class={inputClass} />
-  </label>
-  <label class={labelClass}>
-    <span class={spanClass}>RAM (GB) *</span>
-    <input type="number" bind:value={ramGb} min="1" max="256" class={inputClass} />
-  </label>
-  <label class={labelClass}>
-    <span class={spanClass}>GPU</span>
-    <input type="number" bind:value={gpuCount} min="0" max="8" class={inputClass} />
-  </label>
+  <UnlimitedInput label="CPU Cores *" bind:value={cores} unit="cores" placeholder="e.g. 8" />
+  <UnlimitedInput label="RAM (GB) *" bind:value={ramGb} unit="GB" placeholder="e.g. 16" />
+  <TriStateInput label="GPU" bind:value={gpuTri} unit="GPUs" placeholder="e.g. 2" />
 </div>
+
+{#if gpuTri.mode === 'unlimited'}
+  <span class="text-xs text-amber-400 -mt-1">Unlimited GPU allocates all host GPUs to the instance.</span>
+{/if}
 
 <label class={labelClass}>
   <span class={spanClass}>Docker Registry</span>

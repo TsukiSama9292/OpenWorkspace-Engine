@@ -87,7 +87,7 @@ describe('GroupPanel', () => {
     vi.clearAllMocks();
   });
 
-  it('hides group policy entirely from a non-admin', async () => {
+  it('hides group policy entirely from a user without can_manage_users', async () => {
     render(GroupPanel, { props: { ctx: context(), templates: [template()] } });
 
     await waitFor(() => {
@@ -98,15 +98,21 @@ describe('GroupPanel', () => {
     expect(mockApi.get).not.toHaveBeenCalled();
   });
 
-  it('renders a hidden group panel for a can_manage_users holder who is not an admin', async () => {
+  it('shows the panel for a can_manage_users holder who is not an admin, without group-structure actions', async () => {
+    mockApi.get.mockResolvedValue({ data: { groups: [group] } });
+
     render(GroupPanel, {
       props: { ctx: context({ can_manage_users: true }), templates: [template()] }
     });
 
     await waitFor(() => {
-      expect(screen.queryByText('Group Management')).toBeNull();
-      expect(screen.queryByText('+ New Group')).toBeNull();
+      expect(screen.getByText('Group Management')).toBeTruthy();
+      expect(screen.getByText('Managers')).toBeTruthy();
     });
+    expect(screen.queryByText('+ New Group')).toBeNull();
+    expect(screen.queryByText('Edit')).toBeNull();
+    expect(screen.queryByText('Delete')).toBeNull();
+    expect(mockApi.get).toHaveBeenCalledWith('/groups');
   });
 
   it('lists groups for an admin', async () => {
@@ -147,7 +153,9 @@ describe('GroupPanel', () => {
     await fireEvent.click(screen.getByTestId('group-template-t1'));
     await fireEvent.click(screen.getByTestId('group-template-t2'));
 
-    const maxInput = screen.getByLabelText(/Max Instances/) as HTMLInputElement;
+    const maxMode = screen.getByLabelText('Max Instances mode') as HTMLSelectElement;
+    await fireEvent.change(maxMode, { target: { value: 'custom' } });
+    const maxInput = screen.getByLabelText('Max Instances value') as HTMLInputElement;
     await fireEvent.input(maxInput, { target: { value: '5' } });
 
     const billingSelect = screen.getByLabelText('Billing model') as HTMLSelectElement;
@@ -285,5 +293,80 @@ describe('GroupPanel', () => {
       expect(screen.getByText('Managers')).toBeTruthy();
       expect(screen.queryByText('Devs')).toBeNull();
     });
+  });
+
+  it('edits a member quota and sends the tri-state values to the quota endpoint', async () => {
+    const withMembers: Group = {
+      ...group,
+      members: [{ user_id: 'u1', username: 'alice', tier: 0, cpu_quota: -1, memory_quota: -1, gpu_quota: -1 }]
+    };
+    mockApi.get.mockResolvedValue({ data: { groups: [withMembers] } });
+    mockApi.put.mockResolvedValue({ data: null });
+
+    render(GroupPanel, { props: { ctx: context({ is_admin: true, tier: 2 }), templates: [template()] } });
+
+    await waitFor(() => {
+      expect(screen.getByText('1 member')).toBeTruthy();
+    });
+
+    await fireEvent.click(screen.getByText('1 member'));
+    await fireEvent.click(screen.getByText('Edit quotas'));
+    await waitFor(() => {
+      expect(screen.getByText(/Edit quotas — alice/)).toBeTruthy();
+    });
+
+    const cpuMode = screen.getByLabelText('CPU Quota (cores) mode') as HTMLSelectElement;
+    await fireEvent.change(cpuMode, { target: { value: 'custom' } });
+    const cpuValue = screen.getByLabelText('CPU Quota (cores) value') as HTMLInputElement;
+    await fireEvent.input(cpuValue, { target: { value: '4' } });
+
+    const memMode = screen.getByLabelText('Memory Quota (GB) mode') as HTMLSelectElement;
+    await fireEvent.change(memMode, { target: { value: 'disabled' } });
+
+    await fireEvent.click(screen.getByText('Save Quotas'));
+
+    await waitFor(() => {
+      expect(mockApi.put).toHaveBeenCalledWith('/groups/g1/members/u1/quota', {
+        cpu_quota: 4,
+        memory_quota: 0,
+        gpu_quota: -1
+      });
+    });
+  });
+
+  it('resets every member quota to zero after confirmation', async () => {
+    const withMembers: Group = {
+      ...group,
+      members: [
+        { user_id: 'u1', username: 'alice', tier: 0, cpu_quota: -1, memory_quota: 4096, gpu_quota: 0 },
+        { user_id: 'u2', username: 'bob', tier: 0, cpu_quota: 4, memory_quota: -1, gpu_quota: 1 }
+      ]
+    };
+    mockApi.get.mockResolvedValue({ data: { groups: [withMembers] } });
+    mockApi.put.mockResolvedValue({ data: null });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    render(GroupPanel, { props: { ctx: context({ is_admin: true, tier: 2 }), templates: [template()] } });
+
+    await waitFor(() => {
+      expect(screen.getByText('2 members')).toBeTruthy();
+    });
+
+    await fireEvent.click(screen.getByText('2 members'));
+    await fireEvent.click(screen.getByText('Reset all quotas to 0'));
+
+    await waitFor(() => {
+      expect(mockApi.put).toHaveBeenCalledWith('/groups/g1/members/u1/quota', {
+        cpu_quota: 0,
+        memory_quota: 0,
+        gpu_quota: 0
+      });
+      expect(mockApi.put).toHaveBeenCalledWith('/groups/g1/members/u2/quota', {
+        cpu_quota: 0,
+        memory_quota: 0,
+        gpu_quota: 0
+      });
+    });
+    expect(window.confirm).toHaveBeenCalled();
   });
 });

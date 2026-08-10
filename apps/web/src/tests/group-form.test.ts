@@ -48,7 +48,7 @@ describe('group form', () => {
       const state = createInitialGroupForm();
       expect(state.name).toBe('');
       expect(state.description).toBe('');
-      expect(state.max_instances).toBe('2');
+      expect(state.max_instances).toEqual({ mode: 'unlimited', value: 1 });
       expect(state.billing_model).toBe('shared');
       expect(state.poolCpu).toEqual({ mode: 'unlimited', value: 1 });
       expect(state.poolMemory).toEqual({ mode: 'unlimited', value: 1 });
@@ -63,7 +63,7 @@ describe('group form', () => {
       const state = groupFormFromGroup(group);
       expect(state.name).toBe('Managers');
       expect(state.description).toBe('All flags');
-      expect(state.max_instances).toBe('2');
+      expect(state.max_instances).toEqual({ mode: 'custom', value: 2 });
       expect(state.billing_model).toBe('shared');
       expect(state.poolCpu).toEqual({ mode: 'unlimited', value: 1 });
       expect(state.template_ids).toEqual(['t1']);
@@ -72,7 +72,7 @@ describe('group form', () => {
 
     it('maps a null max_instances (unlimited) to a blank ceiling', () => {
       const state = groupFormFromGroup({ ...group, max_instances: null });
-      expect(state.max_instances).toBe('');
+      expect(state.max_instances).toEqual({ mode: 'unlimited', value: 1 });
     });
 
     it('maps pool caps into tri-state, converting memory MB to whole GB', () => {
@@ -134,7 +134,7 @@ describe('group form', () => {
       const state = createInitialGroupForm();
       state.can_create_template = true;
       state.can_manage_registry = true;
-      state.max_instances = '5';
+      state.max_instances = { mode: 'custom', value: 5 };
       state.template_ids = ['t1', 't3'];
       const input = buildGroupInput(state);
       expect(input.can_create_template).toBe(true);
@@ -207,9 +207,13 @@ describe('group form', () => {
       expect(mockCreateGroup).not.toHaveBeenCalled();
     });
 
-    it('rejects a negative max_instances without calling the API', async () => {
-      const result = await submitGroup({ ...createInitialGroupForm(), name: 'X', max_instances: '-1' });
-      expect(result.error).toBeTruthy();
+    it('rejects a non-positive custom max_instances without calling the API', async () => {
+      const result = await submitGroup({
+        ...createInitialGroupForm(),
+        name: 'X',
+        max_instances: { mode: 'custom', value: 0 }
+      });
+      expect(result.error).toBe('Max instances must be -1 (unlimited), 0 (disabled), or a positive number');
       expect(mockCreateGroup).not.toHaveBeenCalled();
     });
 

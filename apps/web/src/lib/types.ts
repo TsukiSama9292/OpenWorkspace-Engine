@@ -67,7 +67,8 @@ export interface Instance {
 /** The frozen pool caps of the billing group an instance is attributed to. */
 export interface BillingGroupSnapshot {
   group_id: string;
-  billing_model: 'shared' | 'dedicated';
+  group_name?: string;
+  billing_model: string;
   pool_cpu_cores: number;
   pool_memory_mb: number;
   pool_gpu_count: number;
@@ -158,10 +159,21 @@ export interface EffectiveContext {
 /** The resource pool a group offers, as serialized on `group_billing`. */
 export interface GroupBilling {
   group_id: string;
-  billing_model: 'shared' | 'dedicated';
+  group_name: string;
+  tier: number;
+  billing_model: string;
   pool_cpu_cores: number;
   pool_memory_mb: number;
   pool_gpu_count: number;
+  member_cpu_cores: number;
+  member_memory_mb: number;
+  member_gpu_count: number;
+}
+
+export interface MemberQuotaUpdate {
+  cpu_quota: number;
+  memory_quota: number;
+  gpu_quota: number;
 }
 
 /** A resource snapshot: used amounts and caps. `-1` = unlimited. */

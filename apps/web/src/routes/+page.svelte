@@ -29,6 +29,12 @@
   import LogsPanel from '$lib/components/logs/LogsPanel.svelte';
   import ContainerLogPanel from '$lib/components/instances/ContainerLogPanel.svelte';
   import type { Template, Instance, PreflightRejection } from '$lib/types';
+  import {
+    defaultBillingGroup,
+    billingGroupName,
+    instanceResourceLabel,
+    describeBillingOption
+  } from '$lib/launch-billing';
 
   let sidebarOpen = $state(false);
   let view = $state<DashboardView>({ tab: 'instances' });
@@ -46,6 +52,10 @@
   let launchPersistence = $state<'use_persistent' | 'no_persistent' | 'reset_persistent'>('use_persistent');
   let prevLaunchPersistence = $state<'use_persistent' | 'no_persistent' | 'reset_persistent'>('use_persistent');
   let showPersistenceSelect = $derived(!!launchModal.config?.persistent_storage_path);
+  let launchGroup = $state('');
+  let billingGroups = $derived($auth?.group_billing ?? []);
+  let defaultGroupId = $derived(defaultBillingGroup(billingGroups));
+  let showBillingPicker = $derived(billingGroups.length > 1);
 
   let filterUser = $state('');
   let filterStatus = $state('');
@@ -151,6 +161,7 @@
     launchTarget = 'current';
     launchPersistence = 'use_persistent';
     prevLaunchPersistence = 'use_persistent';
+    launchGroup = defaultGroupId;
   }
 
   function onLaunchPersistenceChange(event: Event) {
@@ -173,7 +184,7 @@
 
   async function confirmLaunch() {
     if (!launchModal.config) return;
-    const result = await launchInstance(launchModal.config.id, launchPersistence);
+    const result = await launchInstance(launchModal.config.id, launchPersistence, launchGroup || undefined);
     if (result.error) {
       if (result.rejection) {
         launchModal = { open: false, config: null };
@@ -332,7 +343,7 @@
           <span class="nav-section-label">RBAC</span>
         {/if}
 
-        {#if $isAdmin}
+        {#if $canManageUsers}
           <button
             class="nav-item"
             class:active={activeTab === 'groups'}
@@ -494,6 +505,17 @@
           </select>
         </div>
       {/if}
+      {#if showBillingPicker}
+        <div class="modal-field">
+          <label for="launch-billing" class="modal-label">Billing Group</label>
+          <select id="launch-billing" class="modal-select" bind:value={launchGroup}>
+            {#each billingGroups as bg (bg.group_id)}
+              <option value={bg.group_id}>{describeBillingOption(bg)}</option>
+            {/each}
+          </select>
+          <p class="modal-hint">The group billed for this instance's resources. Defaults to your highest-cap membership.</p>
+        </div>
+      {/if}
       <div class="modal-actions">
         <button class="modal-cancel" onclick={() => launchModal = { open: false, config: null }}>Cancel</button>
         <button class="modal-confirm" onclick={confirmLaunch}>Launch</button>
@@ -524,6 +546,8 @@
         {:else}
           <div class="instance-grid">
             {#each myInstances as inst (inst.id)}
+              {@const billingLabel = billingGroupName(inst, billingGroups)}
+              {@const resourceLabel = instanceResourceLabel(inst)}
               <div class="ws-card" class:dimmed={inst.status !== 'running'}>
                 <div class="ws-card-header">
                   <div>
@@ -537,6 +561,16 @@
                     <span class="ws-template">{inst.template_name || 'Unknown template'}</span>
                     {#if sleepLabel(inst)}
                       <span class="ws-sleep">{sleepLabel(inst)}</span>
+                    {/if}
+                    {#if billingLabel || resourceLabel}
+                      <div class="ws-billing-row">
+                        {#if billingLabel}
+                          <span class="ws-billing">Billed to: {billingLabel}</span>
+                        {/if}
+                        {#if resourceLabel}
+                          <span class="ws-billing">{resourceLabel}</span>
+                        {/if}
+                      </div>
                     {/if}
                   </div>
                   <span class="ws-id">{inst.id.slice(0, 8)}</span>
@@ -684,7 +718,7 @@
     {:else if activeTab === 'users' && $canManageUsers}
       <UserManagementPanel ctx={$auth} />
 
-    {:else if activeTab === 'groups' && $isAdmin}
+    {:else if activeTab === 'groups' && $canManageUsers}
       <GroupPanel ctx={$auth} templates={configs} />
 
     {:else if activeTab === 'volumes' && $canManageUsers}
@@ -1013,6 +1047,7 @@
 
   .modal-title { font-size: 1.1rem; font-weight: 600; margin: 0; }
   .modal-desc { font-size: 0.8rem; color: #71717a; margin: 0; }
+  .modal-hint { font-size: 0.72rem; color: #71717a; font-style: italic; margin: 0; }
 
   .modal-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 1rem; }
   .modal-label {
@@ -1216,6 +1251,19 @@
     font-weight: 600;
     color: #a1a1aa;
     margin-top: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .ws-billing-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    margin-top: 4px;
+  }
+
+  .ws-billing {
+    font-size: 0.72rem;
+    color: #71717a;
     font-variant-numeric: tabular-nums;
   }
 
