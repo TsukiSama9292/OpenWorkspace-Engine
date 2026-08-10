@@ -1785,16 +1785,16 @@ async fn test_heartbeat_forbidden_for_non_owner() {
     }).await;
 
     let admin_token = ctx.login_admin().await;
-    let owner = ctx.post_auth("/api/users", &serde_json::json!({
-        "username": "hb-owner", "password": "pass123"
-    }), &admin_token).await;
-    assert_eq!(owner.status(), 200);
-    let owner_id = owner.json::<serde_json::Value>().await.unwrap()["user"]["id"].as_str().unwrap().to_string();
+    // The owner must be in exactly one unlimited group so the launch without a
+    // billing group auto-attributes (a User system auto-membership alongside a
+    // seeded group would be a second membership → 400 "several groups").
+    let hb_group = seed_pool_group(&ctx, "hb-owner-grp", -1, -1, -1).await;
+    let (owner_id, owner_token) =
+        create_user_in_group_and_token(&ctx, &admin_token, "hb-owner", "pass123", &hb_group).await;
     ctx.post_auth("/api/users", &serde_json::json!({
         "username": "hb-intruder", "password": "pass123"
     }), &admin_token).await;
 
-    let owner_token = ctx.login_user("hb-owner", "pass123").await;
     let intruder_token = ctx.login_user("hb-intruder", "pass123").await;
 
     let config_resp = ctx.post_auth("/api/templates", &serde_json::json!({
@@ -2214,15 +2214,19 @@ async fn test_launch_persistent_conflict_is_per_owner() {
     }), &token).await;
     assert_eq!(first.status(), 200);
 
-    let other = ctx.post_auth("/api/users", &serde_json::json!({
-        "username": "other_persist_user",
-        "password": "password123",
-    }), &token).await;
-    assert_eq!(other.status(), 200);
-    let other_id = other.json::<serde_json::Value>().await.unwrap()["user"]["id"]
-        .as_str().unwrap().to_string();
+    // The other user launches persistently too: per-owner uniqueness means a
+    // different owner is allowed. They need exactly one unlimited group so the
+    // launch without a billing group auto-attributes.
+    let other_group = seed_pool_group(&ctx, "other-persist-grp", -1, -1, -1).await;
+    let (other_id, other_token) = create_user_in_group_and_token(
+        &ctx,
+        &token,
+        "other_persist_user",
+        "password123",
+        &other_group,
+    )
+    .await;
     grant_template_whitelist(&ctx, &other_id, &template_id).await;
-    let other_token = ctx.login_user("other_persist_user", "password123").await;
 
     let resp = ctx.post_auth("/api/instances", &serde_json::json!({
         "template_id": template_id,
@@ -2700,22 +2704,23 @@ async fn create_quota_user(
     username: &str,
     direct_max_instances: i32,
 ) -> String {
-    let create = ctx.post_auth("/api/users", &serde_json::json!({
-        "username": username,
-        "password": "password123",
-    }), admin_token).await;
-    assert_eq!(create.status(), 200, "failed to create quota user");
-    let user_id = create.json::<serde_json::Value>().await.unwrap()["user"]["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    seed_direct_max_instances(ctx, &user_id, direct_max_instances).await;
     // Give the user exactly one unlimited group so a launch without a billing
     // group auto-attributes (spec User Story 5): these tests exercise the
     // ceiling/whitelist/host layers, not the billing resolution. The group is
     // fresh and pool-unlimited (-1), and the membership is unlimited (-1).
+    // Seeding the group first and scoping the user to it (explicit
+    // `group_ids`) skips the create route's default User system group — a
+    // second membership would make the billing resolution 400 "several groups".
     let group_id = seed_pool_group(ctx, &format!("grp-{}", username), -1, -1, -1).await;
-    add_group_member(ctx, &user_id, &group_id).await;
+    let (user_id, _token) = create_user_in_group_and_token(
+        ctx,
+        admin_token,
+        username,
+        "password123",
+        &group_id,
+    )
+    .await;
+    seed_direct_max_instances(ctx, &user_id, direct_max_instances).await;
     user_id
 }
 
@@ -3224,6 +3229,37 @@ async fn create_user_and_token(
     (user_id, token)
 }
 
+/// Create a user via the admin API scoped to exactly `group_id` (its only
+/// membership) and log in as them. Scoping with an explicit `group_ids` list
+/// skips the create route's default User system group, so the user is in
+/// exactly one group and a launch without a billing group auto-attributes
+/// (spec User Story 5) instead of 400 "several groups". The create route
+/// leaves new memberships at `0` (blocked) per spec Decision 1, so the
+/// membership is granted unlimited to keep the focus on the named layer.
+/// Returns (user_id, auth token).
+async fn create_user_in_group_and_token(
+    ctx: &MockContext,
+    admin_token: &str,
+    username: &str,
+    password: &str,
+    group_id: &str,
+) -> (String, String) {
+    let create = ctx.post_auth("/api/users", &serde_json::json!({
+        "username": username, "password": password, "group_ids": [group_id],
+    }), admin_token).await;
+    assert_eq!(create.status(), 200, "failed to create user {}", username);
+    let user_id = create.json::<serde_json::Value>().await.unwrap()["user"]["id"]
+        .as_str().unwrap().to_string();
+    let grant = ctx.put_auth(
+        &format!("/api/groups/{}/members/{}/quota", group_id, user_id),
+        &serde_json::json!({ "cpu_quota": -1, "memory_quota": -1, "gpu_quota": -1 }),
+        admin_token,
+    ).await;
+    assert_eq!(grant.status(), 200, "grant quota failed: {:?}", grant.text().await);
+    let token = ctx.login_user(username, password).await;
+    (user_id, token)
+}
+
 /// Insert a `groups` row with exactly the given flag values and return its id.
 async fn seed_group(
     ctx: &MockContext,
@@ -3463,7 +3499,8 @@ async fn test_gate_instance_lifecycle_same_group_scope() {
     let template_id = create_template_only(&ctx, &owner_token, "gate-scope-template").await;
     grant_group_template(&ctx, &group_g, &template_id).await;
     let launch = ctx.post_auth("/api/instances", &serde_json::json!({
-        "template_id": template_id
+        "template_id": template_id,
+        "owner_group_id": group_g,
     }), &owner_token).await;
     assert_eq!(launch.status(), 200, "body: {:?}", launch.text().await);
     let instance_id = launch.json::<serde_json::Value>().await.unwrap()["instance"]["id"]
@@ -3520,7 +3557,8 @@ async fn test_gate_group_manager_list_includes_same_group_instances() {
     let template_id = create_template_only(&ctx, &owner_token, "gate-list-template").await;
     grant_group_template(&ctx, &group_g, &template_id).await;
     let launch = ctx.post_auth("/api/instances", &serde_json::json!({
-        "template_id": template_id
+        "template_id": template_id,
+        "owner_group_id": group_g,
     }), &owner_token).await;
     assert_eq!(launch.status(), 200, "body: {:?}", launch.text().await);
     let instance_id = launch.json::<serde_json::Value>().await.unwrap()["instance"]["id"]
@@ -3738,8 +3776,9 @@ async fn test_launch_auto_attributes_single_group() {
     // attributes to that group automatically (spec User Story 5).
     let group_id = seed_pool_group(&ctx, "solo-grp", -1, -1, -1).await;
     let template_id = create_template_only(&ctx, &admin_token, "solo-launch").await;
-    let (user_id, user_token) = create_user_and_token(&ctx, &admin_token, "solo_user").await;
-    add_group_member(&ctx, &user_id, &group_id).await;
+    let (user_id, user_token) = create_user_in_group_and_token(
+        &ctx, &admin_token, "solo_user", "password123", &group_id,
+    ).await;
     grant_group_template(&ctx, &group_id, &template_id).await;
     seed_direct_max_instances(&ctx, &user_id, 5).await;
 
@@ -3906,10 +3945,12 @@ async fn test_restart_reattributes_null_attributed_instance() {
 
     let group_id = seed_pool_group(&ctx, "reattribute-pool", -1, -1, -1).await;
     let template_id = create_template_only(&ctx, &admin_token, "reattribute-launch").await;
-    // Exactly one membership (no auto group from create_quota_user), so the
-    // re-attribution deterministically lands on this group.
-    let (user_id, user_token) = create_user_and_token(&ctx, &admin_token, "reattribute_user").await;
-    add_group_member(&ctx, &user_id, &group_id).await;
+    // Exactly one membership (scoped at creation, so there is no User system
+    // auto-membership either), so the re-attribution deterministically lands
+    // on this group.
+    let (user_id, user_token) = create_user_in_group_and_token(
+        &ctx, &admin_token, "reattribute_user", "password123", &group_id,
+    ).await;
     grant_group_template(&ctx, &group_id, &template_id).await;
     seed_direct_max_instances(&ctx, &user_id, 5).await;
 
@@ -3950,8 +3991,14 @@ async fn test_restart_without_membership_rejected_403() {
     let admin_token = ctx.login_admin().await;
 
     // A user with no group memberships at all cannot restart a NULL-attributed
-    // instance: there is no billing target to re-attribute to.
+    // instance: there is no billing target to re-attribute to. The create
+    // route auto-adds the User system group, so strip every membership.
     let (user_id, user_token) = create_user_and_token(&ctx, &admin_token, "no_member_restart").await;
+    use openworkspace_api::db::UserRepository;
+    UserRepository::new(&ctx.db)
+        .set_group_memberships(user_id.parse().unwrap(), &[])
+        .await
+        .unwrap();
     let template_id = create_template_only(&ctx, &admin_token, "no-member-restart-tpl").await;
     let stray_group = seed_pool_group(&ctx, "stray-deleted", -1, -1, -1).await;
     let instance_id = insert_unlimited_snapshot_instance(
