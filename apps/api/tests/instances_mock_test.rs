@@ -4413,6 +4413,41 @@ async fn test_group_pool_tightening_blocked_by_unlimited_snapshot() {
 }
 
 #[tokio::test]
+async fn test_host_cap_tightening_blocked_by_unlimited_snapshot() {
+    let ctx = MockContext::new(|_| {}).await;
+    let admin_token = ctx.login_admin().await;
+
+    let group_id = seed_pool_group(&ctx, "host-vs-unlim", -1, -1, -1).await;
+    let template_id = create_template_only(&ctx, &admin_token, "host-vs-unlim-tpl").await;
+    let user_id = create_quota_user(&ctx, &admin_token, "host_vs_unlim_user", 5).await;
+    add_group_member(&ctx, &user_id, &group_id).await;
+
+    // An active instance with a `-1` CPU snapshot — the host scope counts it
+    // (no owner/group filter), so lowering the host CPU cap must 409.
+    insert_unlimited_snapshot_instance(
+        &ctx, &template_id, &user_id, &group_id, "host-vs-unlim", -1, 4096, 0, "running",
+    ).await;
+
+    // Lowering the host CPU cap to a finite value → 409 (spec §7).
+    let shrink = ctx.put_auth("/api/admin/settings", &serde_json::json!({
+        "host_instance_limit": -1,
+        "host_cpu_cores": 8,
+        "host_memory_mb": -1,
+        "host_gpu_count": -1,
+    }), &admin_token).await;
+    assert_eq!(shrink.status(), 409, "body: {:?}", shrink.text().await);
+
+    // A cap on a resource without a -1 snapshot succeeds.
+    let ok = ctx.put_auth("/api/admin/settings", &serde_json::json!({
+        "host_instance_limit": -1,
+        "host_cpu_cores": -1,
+        "host_memory_mb": 16384,
+        "host_gpu_count": -1,
+    }), &admin_token).await;
+    assert_eq!(ok.status(), 200, "body: {:?}", ok.text().await);
+}
+
+#[tokio::test]
 async fn test_restart_reruns_current_pool_check_after_shrink() {
     let ctx = MockContext::new(|m| {
         m.expect_create_container_from_template()

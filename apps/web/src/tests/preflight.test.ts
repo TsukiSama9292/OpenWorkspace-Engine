@@ -47,11 +47,11 @@ describe('preflight rejection copy', () => {
 
   it('renders memory quota values as human-readable sizes, not raw MB', () => {
     expect(preflightTitle(MEMBER_QUOTA_MEMORY)).toBe('Personal memory quota reached');
-    expect(preflightNumbers(MEMBER_QUOTA_MEMORY)).toBe('Current 4 GB / limit 8 GB (requested 1)');
+    expect(preflightNumbers(MEMBER_QUOTA_MEMORY)).toBe('Current 4 GB / limit 8 GB (requested 1 MB)');
   });
 
   it('renders an unlimited (-1) memory cap as "unlimited"', () => {
-    expect(preflightNumbers(HOST_MEMORY_UNLIMITED)).toBe('Current 4 MB / limit unlimited (requested 1)');
+    expect(preflightNumbers(HOST_MEMORY_UNLIMITED)).toBe('Current 4 MB / limit unlimited (requested 1 MB)');
   });
 
   it('renders a user ceiling rejection (409) with the exact numbers', () => {

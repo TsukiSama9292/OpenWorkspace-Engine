@@ -42,7 +42,8 @@ export function preflightNumbers(rejection: PreflightRejection): string | null {
   if (NO_NUMBERS_SCOPES.has(rejection.scope)) return null;
   const current = formatValue(rejection.scope, rejection.current);
   const limit = formatValue(rejection.scope, rejection.limit);
-  return `Current ${current} / limit ${limit} (requested ${rejection.requested})`;
+  const requested = formatValue(rejection.scope, rejection.requested);
+  return `Current ${current} / limit ${limit} (requested ${requested})`;
 }
 
 export function preflightMessage(rejection: PreflightRejection, error: string): string {

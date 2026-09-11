@@ -4,6 +4,24 @@ Chronological, user-visible changes. Append, don't rewrite history.
 
 ## [Unreleased]
 
+### Group & user resource quotas (CPU / memory / GPU) — `feature/resource-quotas` (unmerged)
+
+`.scratch/resource-quota-v2/`. Beyond the instance-count ceiling: per-group
+resource pools, per-member personal caps inside the chosen billing group, and
+best-effort host-wide caps, under one numeric convention (`0` = blocked,
+`-1` = unlimited, replacing the old `0` = unlimited on template
+cores/memory/bandwidth/auto-sleep/keep-time, group ceilings, and the host
+instance limit). Every launch / restart runs a fixed-order pre-flight
+(member cap → group pool → host caps) and every instance is attributed to a
+billing group with a frozen resource snapshot; lowering any quota to a finite
+value while an unlimited (`-1`) instance is in scope is rejected (`409`).
+UI: billing-group picker for multi-group users (defaults to the highest-cap
+membership), per-instance "Billed to" labels, manager-visible Groups tab with
+a tier-gated per-member quota editor and one-click reset, tri-state
+(`-1`/`0`/custom) inputs on the template / group / settings / user-policy
+forms. Known gap tracked in the ticket: new groups default to unlimited
+pools, contradicting the spec's blocked-by-default.
+
 ### Docs: published images + platform support
 
 - Instance template images are now published to Docker Hub

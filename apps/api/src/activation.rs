@@ -177,9 +177,9 @@ where
             add_use(
                 &acc,
                 &ResourceUse {
-                    cpu_cores: r.host_cpu_cores as i64,
-                    memory_mb: r.host_memory_mb,
-                    gpu_count: r.host_gpu_count as i64,
+                    cpu_cores: r.host_cpu_cores.max(0) as i64,
+                    memory_mb: r.host_memory_mb.max(0),
+                    gpu_count: r.host_gpu_count.max(0) as i64,
                 },
             )
         }))

@@ -9,6 +9,7 @@ use serde::Deserialize;
 use super::AppState;
 use crate::audit::{action, diff_detail, target, AuditEvent};
 use crate::auth::AuthUser;
+use crate::db::WorkspaceInstanceRepository;
 use crate::openapi::SettingsEnvelope;
 use crate::system_settings::{SystemSettings, SystemSettingsRepository};
 
@@ -80,6 +81,22 @@ async fn update_settings(
     }
 
     input.validate()?;
+
+    // Whole-layer-consumer guard (spec §7, same as the group/member guards in
+    // `routes/groups.rs`): lowering a host cap to a *finite* value while an
+    // active instance with a `-1` snapshot on that resource exists would let
+    // it silently stop counting — reject `409` so the admin stops those
+    // instances before imposing limits.
+    let unlimited = WorkspaceInstanceRepository::new(&state.db)
+        .count_active_unlimited_snapshots(None, None)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let blocks_tightening = (input.host_cpu_cores >= 0 && unlimited.cpu_cores > 0)
+        || (input.host_memory_mb >= 0 && unlimited.memory_mb > 0)
+        || (input.host_gpu_count >= 0 && unlimited.gpu_count > 0);
+    if blocks_tightening {
+        return Err(StatusCode::CONFLICT);
+    }
 
     let repo = SystemSettingsRepository::new(&state.db);
     let old = repo

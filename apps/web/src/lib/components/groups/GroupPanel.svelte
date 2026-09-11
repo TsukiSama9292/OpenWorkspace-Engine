@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { listGroups, deleteGroup, updateMemberQuota } from '$lib/api/rbac-actions';
   import { auth } from '$lib/stores/auth';
+  import { mayEditMemberQuota } from '$lib/permissions';
   import {
     GROUP_FLAGS,
     createInitialGroupForm,
@@ -180,6 +181,7 @@
   }
 
   function openQuotaEditor(group: Group, member: GroupMember) {
+    if (!mayEditMemberQuota(ctx, group, member)) return;
     quotaGroup = group;
     quotaMember = member;
     quotaForm = {
@@ -357,7 +359,9 @@
                               <span class="member-quota">
                                 CPU {describeQuota(member.cpu_quota)} · Mem {describeMemQuota(member.memory_quota)} · GPU {describeQuota(member.gpu_quota)}
                               </span>
-                              <button class="launch-btn edit" onclick={() => openQuotaEditor(group, member)}>Edit quotas</button>
+                              {#if mayEditMemberQuota(ctx, group, member)}
+                                <button class="launch-btn edit" onclick={() => openQuotaEditor(group, member)}>Edit quotas</button>
+                              {/if}
                             </div>
                           {/each}
                           {#if isAdmin}

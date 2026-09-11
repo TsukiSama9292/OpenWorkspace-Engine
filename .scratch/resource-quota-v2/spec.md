@@ -1,5 +1,12 @@
 Status: ready-for-agent
 
+> **Status — 2026-09-11:** backend (01) and frontend (02) code complete
+> including code-review fixes (member-sum `.max(0)`, host tightening guard,
+> memory `requested` rendering); user-run gates pending (`check.sh`,
+> `run_tests.sh`, `pnpm check`/`pnpm test` — agent shell blocks cargo/pnpm).
+> E2E (03) not started. One OPEN spec gap tracked in 01: new-group pool
+> defaults (`-1` implemented vs `0` specified).
+
 # Group & User Resource Quotas (CPU / Memory / GPU)
 
 > **Status — 2026-08-10:** backend delivery (`.scratch/resource-quota-v2/issues/01-be-resource-quotas.md`)
@@ -509,3 +516,15 @@ default to `0` (blocked until an admin assigns quotas).
 - The `-1` request rule interacts with `gpu_count = 0`: requesting zero GPUs is
   a finite, zero-cost request and is always fine; only `-1` requests consume a
   whole layer.
+- **Code review 2026-09-11** (two-axis review, fixed point `main`; findings in
+  ticket 01): fixed — `sum_resources_for_user_in_group` missing `.max(0)`
+  (live member-quota bypass), host-cap tightening guard absent in
+  `update_settings`, memory-scope `requested` rendered raw in `preflight.ts`.
+  Accepted divergences (documented in ticket 01, not changed): the pre-flight
+  runs host-instance-count before the resource loop and iterates
+  resource-major rather than the layer-major order in Decision 5;
+  `billing_model` (`shared`/`dedicated`) is informational metadata carried on
+  `GroupBilling`/snapshot/UI with no behavioral branch; new groups default to
+  `-1` (unlimited) pools through the API serde defaults, migration `000026`
+  column defaults, and the web create form — contradicting Decision 1 /
+  Story 16's `0` (blocked), left OPEN for a follow-up ticket with a test run.

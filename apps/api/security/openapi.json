@@ -271,7 +271,7 @@
         "type": "object"
       },
       "GroupBilling": {
-        "description": "The resource pool a group offers its members, as serialized on\n`EffectiveContext.group_billing`.",
+        "description": "The resource pool a group offers its members, as serialized on\n`EffectiveContext.group_billing`. Carries the group's display name and\ntier plus the user's own per-membership cap so the launch form can offer a\nbilling target, show its pool, and default to the highest-cap membership.",
         "properties": {
           "billing_model": {
             "description": "`shared` | `dedicated`.",
@@ -280,6 +280,22 @@
           "group_id": {
             "format": "uuid",
             "type": "string"
+          },
+          "group_name": {
+            "type": "string"
+          },
+          "member_cpu_cores": {
+            "description": "The user's own per-member cap inside this group (`-1` = unlimited,\n`0` = blocked), so the picker can default to the highest-cap\nmembership. Mirrors the member layer of the quota pre-flight.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "member_gpu_count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "member_memory_mb": {
+            "format": "int64",
+            "type": "integer"
           },
           "pool_cpu_cores": {
             "description": "`-1` means \"unlimited\".",
@@ -293,14 +309,24 @@
           "pool_memory_mb": {
             "format": "int64",
             "type": "integer"
+          },
+          "tier": {
+            "description": "Derived from the group kind (Admin=2, Manager=1, else 0); used only for\npicker tie-breaks.",
+            "format": "int32",
+            "type": "integer"
           }
         },
         "required": [
           "group_id",
+          "group_name",
+          "tier",
           "billing_model",
           "pool_cpu_cores",
           "pool_memory_mb",
-          "pool_gpu_count"
+          "pool_gpu_count",
+          "member_cpu_cores",
+          "member_memory_mb",
+          "member_gpu_count"
         ],
         "type": "object"
       },

@@ -89,7 +89,7 @@
   }
 
   let canManage = $derived($canCreateTemplate || $canManageUsers || $canManageGroupInstances);
-  let effectiveLimitLabel = $derived($isAdmin || $effectiveMaxInstances === 0 ? 'Unlimited' : String($effectiveMaxInstances));
+  let effectiveLimitLabel = $derived($isAdmin || $effectiveMaxInstances === -1 ? 'Unlimited' : String($effectiveMaxInstances));
   let allowedTemplateLabel = $derived(String(configs.filter((c) => mayLaunchTemplate($auth, c)).length));
   // The session-launch surface only offers usable templates: hidden templates
   // are excluded here (they remain visible in the templates-management panel,

@@ -369,4 +369,56 @@ describe('GroupPanel', () => {
     });
     expect(window.confirm).toHaveBeenCalled();
   });
+
+  it('shows Edit quotas to a manager only for strictly lower-tier members', async () => {
+    const withMembers: Group = {
+      ...group,
+      members: [
+        { user_id: 'u1', username: 'alice', tier: 0, cpu_quota: -1, memory_quota: -1, gpu_quota: -1 },
+        { user_id: 'u2', username: 'mallory', tier: 1, cpu_quota: -1, memory_quota: -1, gpu_quota: -1 }
+      ]
+    };
+    mockApi.get.mockResolvedValue({ data: { groups: [withMembers] } });
+
+    render(GroupPanel, {
+      props: { ctx: context({ can_manage_users: true, tier: 1 }), templates: [template()] }
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('2 members')).toBeTruthy();
+    });
+
+    await fireEvent.click(screen.getByText('2 members'));
+
+    await waitFor(() => {
+      expect(screen.getByText('alice')).toBeTruthy();
+      expect(screen.getByText('mallory')).toBeTruthy();
+    });
+    // One Edit quotas button (alice, tier 0); the same-tier member gets none.
+    expect(screen.getAllByText('Edit quotas')).toHaveLength(1);
+  });
+
+  it('hides Edit quotas inside a same-tier group even for an outranking member tier', async () => {
+    const managerGroup: Group = {
+      ...group,
+      kind: 'manager',
+      members: [{ user_id: 'u1', username: 'alice', tier: 0, cpu_quota: -1, memory_quota: -1, gpu_quota: -1 }]
+    };
+    mockApi.get.mockResolvedValue({ data: { groups: [managerGroup] } });
+
+    render(GroupPanel, {
+      props: { ctx: context({ can_manage_users: true, tier: 1 }), templates: [template()] }
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('1 member')).toBeTruthy();
+    });
+
+    await fireEvent.click(screen.getByText('1 member'));
+
+    await waitFor(() => {
+      expect(screen.getByText('alice')).toBeTruthy();
+    });
+    expect(screen.queryByText('Edit quotas')).toBeNull();
+  });
 });

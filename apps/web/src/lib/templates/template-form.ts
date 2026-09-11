@@ -85,8 +85,8 @@ export function createInitialFormState(): TemplateFormState {
     timeoutAction: 'remove',
     keepTimeSeconds: -1,
     keepTimeAction: 'pause',
-    bandwidthUpMbps: 0,
-    bandwidthDownMbps: 0,
+    bandwidthUpMbps: -1,
+    bandwidthDownMbps: -1,
     dockerInInstance: false,
     visibility: 'private',
     envVars: [createEmptyEnvVar()],
@@ -131,8 +131,8 @@ function buildTemplateBody(state: TemplateFormState): Record<string, unknown> {
 }
 
 function validateBandwidth(state: TemplateFormState): string | undefined {
-  if (state.bandwidthUpMbps < 0) return 'Upload bandwidth must be >= 0 (0 = unlimited)';
-  if (state.bandwidthDownMbps < 0) return 'Download bandwidth must be >= 0 (0 = unlimited)';
+  if (state.bandwidthUpMbps < -1) return 'Upload bandwidth must be >= -1 (-1 = unlimited)';
+  if (state.bandwidthDownMbps < -1) return 'Download bandwidth must be >= -1 (-1 = unlimited)';
   return undefined;
 }
 
@@ -196,8 +196,8 @@ export function formStateFromTemplate(t: Template): TemplateFormState {
     timeoutAction: t.timeout_action ?? 'remove',
     keepTimeSeconds: t.keep_time_seconds,
     keepTimeAction: (t.keep_time_action ?? 'pause') as TimeoutAction,
-    bandwidthUpMbps: t.network_bandwidth_up_mbps ?? 0,
-    bandwidthDownMbps: t.network_bandwidth_down_mbps ?? 0,
+    bandwidthUpMbps: t.network_bandwidth_up_mbps ?? -1,
+    bandwidthDownMbps: t.network_bandwidth_down_mbps ?? -1,
     dockerInInstance: t.docker_in_instance ?? false,
     visibility: t.visibility ?? 'private',
     envVars: rc.envVars,

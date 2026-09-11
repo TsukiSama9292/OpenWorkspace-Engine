@@ -24,14 +24,52 @@ not lock anyone out.
 
 **Blocked by:** None — can start immediately
 
-**Status:** completed (2026-08-10) — the revision round (billing attribution +
-member-quota editing) is committed and green: `bash scripts/check.sh` silent
-(both feature sets), `bash scripts/run_tests.sh` **736/736 passed** (734 + the
-two concurrency tests `8b61109` that close the last deferred acceptance
-criterion). All 18 post-round `instances_mock_test` failures are resolved (see
-"Resolution" below). The base delivery (`-1` sentinel flip + quota feature,
-`check.sh` silent, `run_tests.sh` 715/715) is the 2026-08-09 audit section
-below.
+**Status:** completed (2026-09-11) — slice-F amendment closed: `security/openapi.json`
+`GroupBilling` schema hand-synced to the `9eb032b` struct (new `group_name` /
+`tier` / `member_*` fields; properties alphabetical, `required` in declaration
+order, matching the utoipa pattern of the neighboring schemas). The drift guard
+(`committed_spec_is_in_sync`) compares parsed JSON values, so the user must
+confirm with `cargo run --bin export_openapi` (no diff expected) + `bash
+scripts/check.sh` + `bash scripts/run_tests.sh` — the agent shell cannot run
+cargo in this environment. Prior green state (736/736) is the "Revision round
+— 2026-08-10" section below.
+
+## Slice F amendment — 2026-08-10 (picker contract)
+
+> The 02 ticket's billing-group picker needs per-group display name, tier, and
+> the user's own member cap — none of which the shipped `GroupBilling` carried.
+
+### Done (committed `9eb032b` on `feature/resource-quotas`)
+
+- `apps/api/src/effective_context.rs`:
+  - `GroupPolicy` gains `name: String` and the user's per-membership cap
+    (`member_cpu_cores` / `member_memory_mb` / `member_gpu_count`, `-1` =
+    unlimited, `0` = blocked).
+  - `GroupBilling` (serialized on `/auth/me` context) gains `group_name`,
+    `tier` (via `group_kind_tier`), and `member_cpu_cores` / `member_memory_mb`
+    / `member_gpu_count`.
+  - Test helper `group()` defaults the new fields; `group_billing_surfaces_each_group_pool`
+    now asserts name / tier / member cap.
+- `apps/api/src/db.rs` `load_effective_context`: builds a `member_quotas`
+  map from the already-loaded `user_group` membership rows and feeds each
+  `GroupPolicy` its `name` + per-membership quotas.
+
+### Remaining (for the user to run — agent shell blocks cargo)
+
+- [x] Regenerate `apps/api/security/openapi.json` — hand-synced 2026-09-11
+      (see Status); confirm with `cargo run --bin export_openapi` from
+      `apps/api` (expect no diff).
+- [ ] Re-run `bash scripts/check.sh` (expected silent) and
+      `bash scripts/run_tests.sh` (expect 736+ / green).
+- [x] Ticket 02's picker consumes the new fields (slice F web work — landed
+      in `25431f4`, verified in code 2026-09-11).
+
+### Gate state (before spec regen)
+
+- `bash scripts/check.sh` — **silent** (both feature sets) on `9eb032b`.
+- `bash scripts/run_tests.sh` — `committed_spec_is_in_sync` fails (stale spec);
+  everything else compiles and the pure tests pass. Not yet re-run green.
+
 
 ## Revision round — 2026-08-10 (billing attribution + member-quota editing)
 
@@ -276,9 +314,21 @@ below.
       `0 → -1` rewrite, so a legacy `cores = 0` template never backfills a
       snapshot of `0` (which under the new convention means a zero-core
       request, not unlimited).
-- [x] New groups and new memberships default to `0` (blocked) on the quota
-      columns; new host caps default to `-1`; new templates keep their positive
-      defaults (2 cores / 4 GiB).
+- [ ] New groups and new memberships default to `0` (blocked) on the quota
+      columns — **OPEN (code-review 2026-09-11, not fixed blind):** the
+      implementation does the opposite through every live path: `GroupInput`
+      serde defaults are `default_unlimited_*` (`-1`), migration `000026`
+      sets the pool columns `SET DEFAULT -1`, and the web create form defaults
+      to Unlimited. Only raw-SQL membership inserts (migration `000027`
+      `DEFAULT 0`) match the spec. Group creation is admin-only, which bounds
+      the exposure, but spec Decision 1 / Story 16 say `0`. Changing three
+      layers (serde, migration, web form + its tests, which explicitly assert
+      Unlimited defaults) without a test run was judged too risky here —
+      follow-up ticket with a green gate run must decide: either flip all
+      three layers to `0`, or amend the spec. New host caps (`-1`) and new
+      templates (2 cores / 4 GiB) match the spec. (Pre-existing, untouched:
+      `default_max_instances()` serde default `2` predates this feature —
+      commit `19ca5a5`, flat-RBAC revamp.)
 
 ### Runtime convention (the `-1` flip in code, not just data)
 
@@ -315,6 +365,11 @@ below.
       snapshots contribute nothing; `stopped`/`error` never count. (As
       implemented the sums fold active rows with a per-resource `.max(0)` in
       `activation.rs` rather than a SQL `COALESCE`; the behavior matches.)
+      **Code-review 2026-09-11:** `sum_resources_for_user_in_group` was missing
+      the `.max(0)` its three siblings had — an active `-1` instance *reduced*
+      the pre-flight member usage (quota bypass). Fixed (3 lines) — this is
+      the function that feeds `member_used` at `activation.rs` reservation
+      time, so the bypass was live.
 
 ### Feature behavior
 
@@ -347,7 +402,12 @@ below.
 - [x] Group create/update accepts pool quotas; lowering the pool below a
       member's finite quota → `409`; lowering any quota to a finite value while
       an active `-1`-snapshot instance is in that scope → `409`; deleting a
-      group with an active attributed instance → `409`.
+      group with an active attributed instance → `409`. **Host-cap tightening
+      added in code-review 2026-09-11** (`admin_settings.rs` + new
+      `test_host_cap_tightening_blocked_by_unlimited_snapshot`): lowering a
+      host cap to finite while an active `-1` snapshot exists → `409` (the
+      `count_active_unlimited_snapshots(None, None)` helper was already built
+      for this scope but never called).
 - [x] Admin settings read/write the host caps and `host_instance_limit` with
       the `-1`/`0`/value semantics.
 - [x] All quota rejections return `409` with the existing structured
@@ -373,3 +433,35 @@ below.
       sum exactly to the host cap. Same-user serialization stays covered by
       `test_concurrent_launches_same_user_at_ceiling_exactly_one_succeeds`.
       See spec Testing Decisions.
+
+## Code review — 2026-09-11 (two-axis, Standards + Spec subagents)
+
+Fixed point `main`; `git diff main` (67 files, committed + uncommitted).
+
+**Standards verdict: no documented-standard violations.** No `#[allow]` /
+`unsafe` in the diff, no gitignored paths, no `docs/` changes at all (so no
+user-guide API-ban risk), no `apps/vnc-ui` references. Judgement-call smells
+noted but not actioned (structural refactors without a test run): duplicated
+fold shapes in `activation.rs` (now consistent after the `.max(0)` fix),
+triplicated pool-tightening blocks in `update_group`, `TriStateInput` vs
+`UnlimitedInput` overlap + scattered `-1/0` describe helpers on web,
+`billing_model: String` + per-resource scope tables (Primitive Obsession /
+Repeated Switches), `GroupPolicy`/`GroupBilling` field clumps (Data Clumps).
+
+**Spec findings fixed this session** (see the amended checkboxes above):
+missing `.max(0)` on the member-usage sum (live bypass); missing host-cap
+tightening guard; memory-scope `requested` rendered raw in `preflight.ts`
+(now through the byte-format helper; `preflight.test.ts` updated).
+
+**Spec divergences accepted and documented (not fixed blind):**
+- *Pre-flight order* (Decision 5): code runs host-instance-count before the
+  resource loop and iterates resource-major (CPU member→pool→host, then
+  memory, then GPU) instead of layer-major. Observable only when several
+  layers bind at once (still a `409` either way); reordering risks 30+ unit
+  tests with no runner available. Spec Decision 5 should be amended to the
+  implemented order, or a follow-up ticket reorders with a green gate.
+- *`billing_model` label* (Decision 3 / Out of Scope): `shared|dedicated`
+  (migration `000025`, `GroupBilling`, snapshot, UI) never branches any
+  sum or check — informational metadata only, sums intentionally
+  model-agnostic. Kept; if the label must mean something, that is new scope.
+- *New-group defaults* (Decision 1 / Story 16): see the OPEN checkbox above.

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   mayControlInstance,
+  mayEditMemberQuota,
   mayLaunchTemplate,
   mayManageUsers,
   mayCreateTemplate,
@@ -228,5 +229,41 @@ describe('mayViewMonitoring', () => {
     expect(mayViewMonitoring(context({ is_admin: true, tier: 2 }))).toBe(true);
     expect(mayViewMonitoring(context())).toBe(false);
     expect(mayViewMonitoring(null)).toBe(false);
+  });
+});
+
+describe('mayEditMemberQuota', () => {
+  const userGroup = { kind: null as 'admin' | 'manager' | 'user' | null };
+  const managerGroup = { kind: 'manager' as const };
+  const adminGroup = { kind: 'admin' as const };
+
+  it('lets a manager edit a lower-tier member inside a lower-tier group', () => {
+    const manager = context({ can_manage_users: true, tier: 1 });
+    expect(mayEditMemberQuota(manager, userGroup, { tier: 0 })).toBe(true);
+  });
+
+  it('lets an admin edit a manager member inside a user group', () => {
+    const admin = context({ is_admin: true, can_manage_users: true, tier: 2 });
+    expect(mayEditMemberQuota(admin, userGroup, { tier: 1 })).toBe(true);
+  });
+
+  it('blocks editing a same-tier or higher-tier member', () => {
+    const manager = context({ can_manage_users: true, tier: 1 });
+    expect(mayEditMemberQuota(manager, userGroup, { tier: 1 })).toBe(false);
+    expect(mayEditMemberQuota(manager, userGroup, { tier: 2 })).toBe(false);
+  });
+
+  it('blocks editing inside a same-tier or higher-tier group, even for admins', () => {
+    const manager = context({ can_manage_users: true, tier: 1 });
+    expect(mayEditMemberQuota(manager, managerGroup, { tier: 0 })).toBe(false);
+    const admin = context({ is_admin: true, can_manage_users: true, tier: 2 });
+    expect(mayEditMemberQuota(admin, adminGroup, { tier: 0 })).toBe(false);
+    expect(mayEditMemberQuota(admin, managerGroup, { tier: 1 })).toBe(true);
+  });
+
+  it('requires can_manage_users and an authenticated context', () => {
+    const noFlag = context({ can_manage_users: false, tier: 2 });
+    expect(mayEditMemberQuota(noFlag, userGroup, { tier: 0 })).toBe(false);
+    expect(mayEditMemberQuota(null, userGroup, { tier: 0 })).toBe(false);
   });
 });
