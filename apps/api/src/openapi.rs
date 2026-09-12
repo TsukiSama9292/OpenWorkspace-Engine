@@ -124,6 +124,8 @@ pub enum AuditAction {
     GroupDelete,
     #[serde(rename = "group.membership_change")]
     GroupMembershipChange,
+    #[serde(rename = "group.quota_change")]
+    GroupQuotaChange,
     #[serde(rename = "user.create")]
     UserCreate,
     #[serde(rename = "user.update")]

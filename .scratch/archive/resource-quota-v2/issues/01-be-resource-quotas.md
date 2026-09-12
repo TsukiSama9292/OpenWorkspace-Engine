@@ -468,4 +468,18 @@ tightening guard; memory-scope `requested` rendered raw in `preflight.ts`
   (migration `000025`, `GroupBilling`, snapshot, UI) never branches any
   sum or check — informational metadata only, sums intentionally
   model-agnostic. Kept; if the label must mean something, that is new scope.
-- *New-group defaults* (Decision 1 / Story 16): see the OPEN checkbox above.
+- *New-group defaults* (Decision 1 / Story 16): see the OPEN checkbox above
+  (closed 2026-09-12 by migration `000028`, documented there).
+
+## Security fuzzing — 2026-09-12 (`pnpm run security:api`, both passes green)
+
+- First run caught a real spec gap: the `AuditAction` enum in `openapi.rs`
+  missed `group.quota_change` (emitted by the member-quota endpoint), so any
+  audit trail containing a quota edit failed response-schema-conformance.
+  Fixed + spec regenerated via `cargo run --bin export_openapi`.
+- Fresh `ow-schemathesis` image builds pulled incompatible transitives
+  (`jsonschema-rs` 0.56 removed the `is_satisfiable` schemathesis 4.24.3
+  calls → AttributeError on all five `{id}` endpoints); pinned
+  `hypothesis==6.165.2` + `jsonschema-rs==0.49.9` in `schemathesis.Dockerfile`
+  with rationale comments. Final: Pass 1 (112 cases) + Pass 2 (240 cases)
+  green, post-run integrity OK.

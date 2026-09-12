@@ -23,6 +23,7 @@
           "group.update",
           "group.delete",
           "group.membership_change",
+          "group.quota_change",
           "user.create",
           "user.update",
           "user.delete",
