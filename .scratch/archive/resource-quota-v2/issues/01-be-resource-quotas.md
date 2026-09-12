@@ -316,21 +316,19 @@ gated run.
       `0 → -1` rewrite, so a legacy `cores = 0` template never backfills a
       snapshot of `0` (which under the new convention means a zero-core
       request, not unlimited).
-- [ ] New groups and new memberships default to `0` (blocked) on the quota
-      columns — **OPEN (code-review 2026-09-11, not fixed blind):** the
-      implementation does the opposite through every live path: `GroupInput`
-      serde defaults are `default_unlimited_*` (`-1`), migration `000026`
-      sets the pool columns `SET DEFAULT -1`, and the web create form defaults
-      to Unlimited. Only raw-SQL membership inserts (migration `000027`
-      `DEFAULT 0`) match the spec. Group creation is admin-only, which bounds
-      the exposure, but spec Decision 1 / Story 16 say `0`. Changing three
-      layers (serde, migration, web form + its tests, which explicitly assert
-      Unlimited defaults) without a test run was judged too risky here —
-      follow-up ticket with a green gate run must decide: either flip all
-      three layers to `0`, or amend the spec. New host caps (`-1`) and new
-      templates (2 cores / 4 GiB) match the spec. (Pre-existing, untouched:
-      `default_max_instances()` serde default `2` predates this feature —
-      commit `19ca5a5`, flat-RBAC revamp.)
+- [x] New groups default to `0` (blocked) on the quota columns — **CLOSED
+      2026-09-12** by migration `000028` (pool columns `SET DEFAULT 0`;
+      existing `-1` rows untouched), `GroupInput` serde defaults renamed to
+      `default_blocked_*` (`0`), and the web create form defaulting to
+      Disabled; new memberships were already `0` (migration `000027`) and new
+      host caps stay `-1`. Collateral fixed in the same pass (all green):
+      legacy RBAC/volume/mock fixtures that relied on unlimited-by-default
+      now declare `-1` pools / grant `-1` member quotas explicitly
+      (`flat_rbac_e2e_test`, `persistent_volumes_integration_test`,
+      `seed_group_kind`); new tests `db_test` pool-default assertions,
+      `test_create_group_omitted_pools_default_to_blocked`, and a web
+      blocked-pools submit test. Gate state: `check.sh` silent, nextest
+      736/738 (2 fails both runsc-environmental), web 433/433.
 
 ### Runtime convention (the `-1` flip in code, not just data)
 

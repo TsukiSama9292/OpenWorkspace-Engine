@@ -28,6 +28,7 @@ mod m20260808_000024_add_audit_logs;
 mod m20260809_000025_add_resource_quotas;
 mod m20260809_000026_minus_one_sentinel;
 mod m20260810_000027_member_resource_quotas;
+mod m20260912_000028_blocked_pool_defaults;
 
 pub struct Migrator;
 
@@ -62,6 +63,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260809_000025_add_resource_quotas::Migration),
             Box::new(m20260809_000026_minus_one_sentinel::Migration),
             Box::new(m20260810_000027_member_resource_quotas::Migration),
+            Box::new(m20260912_000028_blocked_pool_defaults::Migration),
         ]
     }
 }

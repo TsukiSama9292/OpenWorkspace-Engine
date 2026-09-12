@@ -36,16 +36,16 @@ fn default_max_instances() -> i32 {
     2
 }
 
-fn default_unlimited_cpu() -> i32 {
-    -1
+fn default_blocked_cpu() -> i32 {
+    0
 }
 
-fn default_unlimited_memory() -> i64 {
-    -1
+fn default_blocked_memory() -> i64 {
+    0
 }
 
-fn default_unlimited_gpu() -> i32 {
-    -1
+fn default_blocked_gpu() -> i32 {
+    0
 }
 
 fn default_billing_model() -> String {
@@ -80,12 +80,14 @@ struct GroupInput {
     template_ids: Vec<Uuid>,
     #[serde(default = "default_billing_model")]
     billing_model: String,
-    /// `-1` = unlimited, `0` = blocked.
-    #[serde(default = "default_unlimited_cpu")]
+    /// `-1` = unlimited, `0` = blocked. Omitted pool fields default to `0`
+    /// (blocked, spec Decision 1 / Story 16) so a new group never opens an
+    /// ungoverned pool by accident.
+    #[serde(default = "default_blocked_cpu")]
     pool_cpu_cores: i32,
-    #[serde(default = "default_unlimited_memory")]
+    #[serde(default = "default_blocked_memory")]
     pool_memory_mb: i64,
-    #[serde(default = "default_unlimited_gpu")]
+    #[serde(default = "default_blocked_gpu")]
     pool_gpu_count: i32,
 }
 

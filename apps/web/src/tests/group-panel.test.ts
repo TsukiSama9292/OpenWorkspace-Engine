@@ -191,7 +191,8 @@ describe('GroupPanel', () => {
         billing_model: 'dedicated',
         pool_cpu_cores: 8,
         pool_memory_mb: 16384,
-        pool_gpu_count: -1,
+        // Untouched GPU tri-state submits the blocked default (spec Story 16).
+        pool_gpu_count: 0,
         template_ids: ['t1', 't2']
       });
     });

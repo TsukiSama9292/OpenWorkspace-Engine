@@ -1,5 +1,5 @@
 import { createGroup, updateGroup } from '$lib/api/rbac-actions';
-import { UNLIMITED, isTriStateValid, memoryMbFromTriState, memoryMbToTriState, triStateFromValue, valueFromTriState, type TriState } from '$lib/tri-state';
+import { DISABLED, UNLIMITED, isTriStateValid, memoryMbFromTriState, memoryMbToTriState, triStateFromValue, valueFromTriState, type TriState } from '$lib/tri-state';
 import type { Group, GroupInput } from '$lib/types';
 
 export type BillingModel = 'shared' | 'dedicated';
@@ -68,9 +68,11 @@ export function createInitialGroupForm(): GroupFormState {
     can_view_audit_logs: false,
     max_instances: { ...UNLIMITED },
     billing_model: 'shared',
-    poolCpu: { ...UNLIMITED },
-    poolMemory: { ...UNLIMITED },
-    poolGpu: { ...UNLIMITED },
+    // New groups default to blocked pools (spec Story 16): an admin opens
+    // the pool explicitly instead of launching into an ungoverned one.
+    poolCpu: { ...DISABLED },
+    poolMemory: { ...DISABLED },
+    poolGpu: { ...DISABLED },
     template_ids: [],
     loading: false,
     error: ''

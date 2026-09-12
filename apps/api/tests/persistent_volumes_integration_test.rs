@@ -160,6 +160,11 @@ async fn create_group(ctx: &TestContext, name: &str, flags: serde_json::Value) -
     let mut group = flags.as_object().cloned().unwrap_or_default();
     group.insert("name".to_string(), serde_json::Value::String(name.to_string()));
     group.insert("max_instances".to_string(), serde_json::json!(5));
+    // Ungoverned pools: these volume tests exercise persistence, not quotas
+    // (new groups default to blocked pools).
+    group.insert("pool_cpu_cores".to_string(), serde_json::json!(-1));
+    group.insert("pool_memory_mb".to_string(), serde_json::json!(-1));
+    group.insert("pool_gpu_count".to_string(), serde_json::json!(-1));
     let resp = ctx.post("/api/groups", &serde_json::Value::Object(group)).await;
     assert_eq!(resp.status(), 200, "create group failed");
     resp.json::<serde_json::Value>()
@@ -168,6 +173,19 @@ async fn create_group(ctx: &TestContext, name: &str, flags: serde_json::Value) -
         .as_str()
         .unwrap()
         .to_string()
+}
+
+/// Grant an unlimited (-1) member quota: new memberships default to blocked
+/// quotas, which would reject the volume tests' launches at the member layer.
+async fn grant_member_quota(ctx: &TestContext, group_id: &str, user_id: &str) {
+    ctx.login_admin().await;
+    let resp = ctx
+        .put(
+            &format!("/api/groups/{}/members/{}/quota", group_id, user_id),
+            &serde_json::json!({ "cpu_quota": -1, "memory_quota": -1, "gpu_quota": -1 }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "grant member quota failed");
 }
 
 async fn assign_group(ctx: &TestContext, user_id: &str, group_ids: Vec<String>) {
@@ -321,7 +339,8 @@ async fn test_deleting_user_nulls_owner_keeps_row() {
         }),
     )
     .await;
-    assign_group(&ctx, &user_id, vec![group_id]).await;
+    assign_group(&ctx, &user_id, vec![group_id.clone()]).await;
+    grant_member_quota(&ctx, &group_id, &user_id).await;
 
     let resp = ctx.login_user("pv_userdel", "pw123456").await;
     assert_eq!(resp.status(), 200);

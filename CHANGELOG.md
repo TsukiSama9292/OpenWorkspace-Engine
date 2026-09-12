@@ -19,8 +19,9 @@ UI: billing-group picker for multi-group users (defaults to the highest-cap
 membership), per-instance "Billed to" labels, manager-visible Groups tab with
 a tier-gated per-member quota editor and one-click reset, tri-state
 (`-1`/`0`/custom) inputs on the template / group / settings / user-policy
-forms. Known gap tracked in the ticket: new groups default to unlimited
-pools, contradicting the spec's blocked-by-default.
+forms. Known gap from the first revision (new groups defaulting to unlimited
+pools) is closed: pools default to blocked (`0`) at every layer (migration
+`000028`, API contract, web form).
 
 ### Docs: published images + platform support
 

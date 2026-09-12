@@ -276,6 +276,21 @@ async fn flat_rbac_migration_creates_tables_and_seeds_system_groups() {
         query_scalar(&db, "SELECT max_instances AS value FROM groups WHERE name = 'defaults'")
             .await;
     assert_eq!(default_ceiling, -1);
+    // A fresh custom group's resource pools default to `0` (blocked, spec
+    // Decision 1 / Story 16) — migration 000028. No instance launches into
+    // an ungoverned pool by accident.
+    let default_pool_cpu: i32 =
+        query_scalar(&db, "SELECT pool_cpu_cores AS value FROM groups WHERE name = 'defaults'")
+            .await;
+    assert_eq!(default_pool_cpu, 0);
+    let default_pool_mem: i64 =
+        query_scalar(&db, "SELECT pool_memory_mb AS value FROM groups WHERE name = 'defaults'")
+            .await;
+    assert_eq!(default_pool_mem, 0);
+    let default_pool_gpu: i32 =
+        query_scalar(&db, "SELECT pool_gpu_count AS value FROM groups WHERE name = 'defaults'")
+            .await;
+    assert_eq!(default_pool_gpu, 0);
 }
 
 #[tokio::test]

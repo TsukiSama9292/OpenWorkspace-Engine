@@ -528,3 +528,5 @@ default to `0` (blocked until an admin assigns quotas).
   `-1` (unlimited) pools through the API serde defaults, migration `000026`
   column defaults, and the web create form — contradicting Decision 1 /
   Story 16's `0` (blocked), left OPEN for a follow-up ticket with a test run.
+  **Closed 2026-09-12** by migration `000028` + serde/web defaults (see ticket
+  01); legacy fixtures now declare `-1` explicitly where they mean ungoverned.

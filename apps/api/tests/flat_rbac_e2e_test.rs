@@ -82,6 +82,11 @@ async fn create_group(
             "can_manage_registry": false,
             "max_instances": max_instances,
             "template_ids": template_ids,
+            // Ungoverned pools: these RBAC tests exercise ceilings and the
+            // whitelist, not quotas (new groups default to blocked pools).
+            "pool_cpu_cores": -1,
+            "pool_memory_mb": -1,
+            "pool_gpu_count": -1,
         }))
         .await;
     assert_eq!(resp.status(), 200, "create group failed");
@@ -285,6 +290,8 @@ async fn test_flat_rbac_end_to_end() {
     let _outsider_id = create_user(&ctx, "e2e_outsider").await;
 
     assign_user_policy(&ctx, &member_id, std::slice::from_ref(&group_g), None).await;
+    // Ungoverned member cap (new memberships default to blocked quotas).
+    grant_member_quota(&ctx, &group_g, &member_id).await;
     assign_user_policy(
         &ctx,
         &_manager_id,
@@ -528,6 +535,9 @@ async fn test_flat_rbac_2_tiers_end_to_end() {
             "can_manage_registry": true,
             "max_instances": 2,
             "template_ids": manager_json["template_ids"],
+            "pool_cpu_cores": -1,
+            "pool_memory_mb": -1,
+            "pool_gpu_count": -1,
         }))
         .await;
     assert_eq!(resp.status(), 403, "system groups cannot be renamed");
@@ -561,6 +571,9 @@ async fn test_flat_rbac_2_tiers_end_to_end() {
             "can_manage_registry": true,
             "max_instances": -1,
             "template_ids": [tpl1],
+            "pool_cpu_cores": -1,
+            "pool_memory_mb": -1,
+            "pool_gpu_count": -1,
         }))
         .await;
     assert_eq!(resp.status(), 200, "admin edits the Admin group whitelist");

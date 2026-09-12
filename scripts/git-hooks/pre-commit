@@ -53,11 +53,15 @@ fi
 if [ -n "$api_changed" ]; then
   command -v cargo >/dev/null 2>&1 || fail "cargo not found on PATH"
   info "api: check.sh (clippy, both feature sets — must be silent)"
-  out="$(bash apps/api/scripts/check.sh 2>&1)" && [ -z "$out" ] \
+  out="$(cd apps/api && bash scripts/check.sh 2>&1)" && [ -z "$out" ] \
     || fail "check.sh not silent:${out:+$'\n'$out}"
   info "api: check.sh silent, running full nextest suite (needs Docker)"
-  bash apps/api/scripts/run_tests.sh 2>&1 | tail -n 15
-  [ "${PIPESTATUS[0]}" -eq 0 ] || fail "run_tests.sh failed"
+  test_log="$(mktemp)"
+  (cd apps/api && bash scripts/run_tests.sh >"$test_log" 2>&1)
+  rc=$?
+  tail -n 15 "$test_log"
+  rm -f "$test_log"
+  [ "$rc" -eq 0 ] || fail "run_tests.sh failed (exit $rc)"
   info "api gates green"
 fi
 

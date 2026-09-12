@@ -44,15 +44,16 @@ describe('group form', () => {
   });
 
   describe('createInitialGroupForm', () => {
-    it('returns empty defaults with the five flags off', () => {
+    it('returns empty defaults with the five flags off and blocked pools', () => {
       const state = createInitialGroupForm();
       expect(state.name).toBe('');
       expect(state.description).toBe('');
       expect(state.max_instances).toEqual({ mode: 'unlimited', value: 1 });
       expect(state.billing_model).toBe('shared');
-      expect(state.poolCpu).toEqual({ mode: 'unlimited', value: 1 });
-      expect(state.poolMemory).toEqual({ mode: 'unlimited', value: 1 });
-      expect(state.poolGpu).toEqual({ mode: 'unlimited', value: 1 });
+      // New groups default to blocked pools (spec Story 16).
+      expect(state.poolCpu).toEqual({ mode: 'disabled', value: 0 });
+      expect(state.poolMemory).toEqual({ mode: 'disabled', value: 0 });
+      expect(state.poolGpu).toEqual({ mode: 'disabled', value: 0 });
       expect(state.template_ids).toEqual([]);
       for (const flag of GROUP_FLAGS) expect(state[flag]).toBe(false);
     });
@@ -127,6 +128,7 @@ describe('group form', () => {
 
     it('keeps -1 (unlimited) memory pass-through as -1, not scaled', () => {
       const state = createInitialGroupForm();
+      state.poolMemory = { mode: 'unlimited', value: 1 };
       expect(buildGroupInput(state).pool_memory_mb).toBe(-1);
     });
 
@@ -205,6 +207,19 @@ describe('group form', () => {
       const result = await submitGroup(createInitialGroupForm());
       expect(result).toEqual({ error: 'Name is required' });
       expect(mockCreateGroup).not.toHaveBeenCalled();
+    });
+
+    it('submits blocked (0) pools for a fresh group by default', async () => {
+      mockCreateGroup.mockResolvedValue({ group: { ...group } });
+
+      const result = await submitGroup({ ...createInitialGroupForm(), name: 'Fresh' });
+
+      expect(result.id).toBe('g1');
+      expect(mockCreateGroup).toHaveBeenCalledWith(expect.objectContaining({
+        pool_cpu_cores: 0,
+        pool_memory_mb: 0,
+        pool_gpu_count: 0
+      }));
     });
 
     it('rejects a non-positive custom max_instances without calling the API', async () => {

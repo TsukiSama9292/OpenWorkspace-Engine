@@ -3324,6 +3324,11 @@ async fn seed_group_kind(
         can_manage_docker: Set(can_manage_docker),
         can_manage_registry: Set(can_manage_registry),
         max_instances: Set(Some(4)),
+        // Ungoverned pools: seeded fixture groups exercise RBAC/scope layers,
+        // not quotas (fresh groups default to blocked pools since 000028).
+        pool_cpu_cores: Set(-1),
+        pool_memory_mb: Set(-1),
+        pool_gpu_count: Set(-1),
         ..Default::default()
     }
     .insert(&ctx.db)

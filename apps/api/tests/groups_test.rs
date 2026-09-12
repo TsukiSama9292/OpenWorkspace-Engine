@@ -175,6 +175,26 @@ async fn test_admin_group_crud_round_trip() {
 }
 
 #[tokio::test]
+async fn test_create_group_omitted_pools_default_to_blocked() {
+    // Spec Decision 1 / Story 16: a new group with no pool fields in the
+    // request body opens no ungoverned pool — every pool reads back `0`.
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
+
+    let group_id = create_group(&ctx, "blocked-by-default", &[], 4, &[]).await;
+    let body: serde_json::Value = ctx.get("/api/groups").await.json().await.unwrap();
+    let group = body["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["id"] == group_id)
+        .expect("group must appear in the list");
+    assert_eq!(group["pool_cpu_cores"], serde_json::json!(0));
+    assert_eq!(group["pool_memory_mb"], serde_json::json!(0));
+    assert_eq!(group["pool_gpu_count"], serde_json::json!(0));
+}
+
+#[tokio::test]
 async fn test_groups_list_requires_auth() {
     let ctx = TestContext::new().await;
     let resp = ctx.get("/api/groups").await;

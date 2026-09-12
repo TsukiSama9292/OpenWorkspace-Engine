@@ -213,7 +213,7 @@ glassmorphism + zinc/indigo language — no backend change. `feature/log-ui-rede
 | ~~Orphaned-folder cleanup~~ | remove persistent folders that no longer exist in the DB — **✅ already shipped** as the Volumes-tab "Thorough Cleanup" (`OrphanedVolumesPanel` + `/api/persistent-volumes/{id}/cleanup`, landed in the RBAC-volumes work) | ~~Medium~~ Done |
 | ~~Graceful shutdown/startup~~ | restore instance state, rebuild routes, re-declare volumes after reboot — **✅ already shipped**: instance containers get `unless-stopped`, so running instances auto-resume on daemon reboot; route files persist on disk in `traefik/dynamic` and traefik hot-reloads them; lost volume declarations are re-created by `ensure_persistent_volume` on start (`instances.rs`) | ~~Medium~~ Done |
 | Health self-checks | aggregate health endpoints for API/Traefik/DB for external monitoring (uptime checks) | Low |
-| Per-group/user resource quotas | beyond instance count, add group-level CPU / memory / GPU quotas | Medium |
+| ~~Per-group/user resource quotas~~ | group CPU / memory / GPU pools + per-member caps + billing-group attribution + host caps, `-1`/`0` convention — **✅ shipped on `feature/resource-quotas`** (`02ce03a` E2E 13/13, `2a62123` review; `.scratch/archive/resource-quota-v2/`) | ~~Medium~~ Done |
 
 ### 📋 Stage 7: Identity & Security Hardening
 
