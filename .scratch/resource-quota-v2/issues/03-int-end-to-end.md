@@ -14,12 +14,20 @@ exhausted.
 tab, `-1` convention forms)
 
 **Status:** completed (2026-09-12) — `e2e/tests/resource-quotas.full.spec.ts`
-12/12 green against the booted dev stack (real containers). E2E caught one
+13/13 green against the booted dev stack (real containers). E2E caught one
 real backend bug: route-level rejections hardcoded `"requested": 1` for every
 resource scope — fixed (enum carries `requested` now; unit + integration
 assertions updated). Selectors fixed (`.ws-billing` strict-mode), missing
 `memberQuota` helper added, admin-launch used for the `-1`-into-finite-host
 case (member/pool would bind first otherwise).
+
+**Code review 2026-09-12 (fixed point `35814c8`, Standards + Spec):** no
+documented-standard violations; smells all judgement-calls. Actioned:
+E2E-internal duplication folded into `groupBody`/`openTab` helpers, and the
+named `-1`-snapshot tightening E2E gap closed with a host-scope test
+(`host cap tightening is refused beside an active unlimited instance`).
+Left as-is: `any`-typed fixtures (house E2E style), `{cpu,mem,gpu}` clumps,
+`loginAdminCtx` thin wrapper, Rust-side structural duplications.
 
 ## Status — 2026-08-10
 
@@ -30,7 +38,7 @@ frontend (02) is untouched and must land first, since this suite drives the
 browser UI. The full Playwright suite will run against the running dev stack
 only once both tickets land (per the AGENTS.md `test:e2e:full` flow).
 
-## Acceptance criteria (`e2e/tests/resource-quotas.full.spec.ts`, 12 tests, all green)
+## Acceptance criteria (`e2e/tests/resource-quotas.full.spec.ts`, 13 tests, all green)
 
 - [x] A multi-group user launches an instance through the UI, sees the billing
       picker defaulted to the highest-cap group, and the launched instance
@@ -62,7 +70,8 @@ only once both tickets land (per the AGENTS.md `test:e2e:full` flow).
       host-scope `409` while an unlimited (`-1`) template request into a finite
       host cap is refused.
       → `host memory-cap rejection…` + `unlimited template request is
-      refused…` (green 2026-09-12).
+      refused…` + `host cap tightening is refused beside an active unlimited
+      instance` (green 2026-09-12).
 - [x] The `-1` convention round-trips through the UI: creating a template with
       `-1` cores/bandwidth (the unlimited toggle) persists and launches; an
       admin setting `-1` on a host cap / `host_instance_limit` and a group

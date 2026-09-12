@@ -241,6 +241,12 @@ async function loginAdminCtx(browser: Browser): Promise<{ ctx: BrowserContext; p
   return loginUserCtx(browser, ADMIN.username, ADMIN.password);
 }
 
+async function openTab(page: Page, name: string): Promise<void> {
+  await page.goto('/');
+  await page.locator('.sidebar').hover();
+  await page.locator('.sidebar .nav-item').filter({ hasText: name }).click();
+}
+
 async function openTemplateCard(page: Page, templateName: string): Promise<void> {
   await page.goto('/');
   const card = page.locator('.template-card').filter({ hasText: templateName });
@@ -534,9 +540,7 @@ test('manager edits a lower-tier member quota in the Groups tab and it takes eff
     const templateId = await ensureTemplate(admin.ctx.request, TEMPLATE_NAME, 2);
 
     // Manager opens the Groups tab and edits the tier-0 member's CPU cap to 1.
-    await mgr.page.goto('/');
-    await mgr.page.locator('.sidebar').hover();
-    await mgr.page.locator('.sidebar .nav-item').filter({ hasText: 'Groups' }).click();
+    await openTab(mgr.page, 'Groups');
     await expect(mgr.page.locator('.panel-head-title')).toHaveText('Group Management', {
       timeout: 15_000,
     });
@@ -584,30 +588,12 @@ test('admin pool edit below a member cap is refused, then reset-all unblocks it'
   const multiId = await userIdByName(admin.ctx.request, MULTI_USER.username);
   try {
     // API: shrinking the pool below single's finite cap 409s.
-    const shrinkBody = {
-      name: SMALL_GROUP,
-      description: 'E2E quota fixture',
-      can_create_template: false,
-      can_manage_users: false,
-      can_manage_group_instances: false,
-      can_manage_docker: false,
-      can_manage_registry: false,
-      can_view_monitoring: false,
-      can_view_audit_logs: false,
-      max_instances: 10,
-      template_ids: [],
-      billing_model: 'shared',
-      pool_cpu_cores: 2,
-      pool_memory_mb: SMALL_POOL.mem,
-      pool_gpu_count: SMALL_POOL.gpu,
-    };
+    const shrinkBody = groupBody(SMALL_GROUP, { cpu: 2, mem: SMALL_POOL.mem, gpu: SMALL_POOL.gpu });
     const shrink = await admin.ctx.request.put(`/api/groups/${small.id}`, { data: shrinkBody });
     expect(shrink.status()).toBe(409);
 
     // UI: the same edit keeps the group modal open on the 409.
-    await admin.page.goto('/');
-    await admin.page.locator('.sidebar').hover();
-    await admin.page.locator('.sidebar .nav-item').filter({ hasText: 'Groups' }).click();
+    await openTab(admin.page, 'Groups');
     await expect(admin.page.locator('.panel-head-title')).toHaveText('Group Management', {
       timeout: 15_000,
     });
@@ -638,23 +624,7 @@ test('admin pool edit below a member cap is refused, then reset-all unblocks it'
     expect(shrinkOk.status()).toBe(200);
   } finally {
     // Restore the pool and the member caps the suite depends on.
-    const restoreBody = {
-      name: SMALL_GROUP,
-      description: 'E2E quota fixture',
-      can_create_template: false,
-      can_manage_users: false,
-      can_manage_group_instances: false,
-      can_manage_docker: false,
-      can_manage_registry: false,
-      can_view_monitoring: false,
-      can_view_audit_logs: false,
-      max_instances: 10,
-      template_ids: [],
-      billing_model: 'shared',
-      pool_cpu_cores: SMALL_POOL.cpu,
-      pool_memory_mb: SMALL_POOL.mem,
-      pool_gpu_count: SMALL_POOL.gpu,
-    };
+    const restoreBody = groupBody(SMALL_GROUP, SMALL_POOL);
     await admin.ctx.request.put(`/api/groups/${small.id}`, { data: restoreBody });
     if (singleId) await setMemberQuota(admin.ctx.request, small.id, singleId, SINGLE_CAP);
     if (multiId) {
@@ -682,6 +652,39 @@ test('unlimited template request is refused by a finite host cap', async ({ brow
   }
 });
 
+test('host cap tightening is refused beside an active unlimited instance', async ({
+  browser,
+}) => {
+  const admin = await loginAdminCtx(browser);
+  let instanceId = '';
+  try {
+    // An active instance with a `-1` CPU snapshot (admin layers are all `-1`).
+    const templateId = await ensureTemplate(admin.ctx.request, UNLIM_TEMPLATE_NAME, -1);
+    const launched = await launchApi(admin.ctx.request, templateId);
+    expect(launched.status).toBe(200);
+    instanceId = launched.body.instance.id as string;
+    await waitForStatus(admin.ctx.request, instanceId, 'running');
+
+    // Lowering the host CPU cap to finite 409s while it lives.
+    const shrink = await admin.ctx.request.put('/api/admin/settings', {
+      data: { host_instance_limit: -1, host_cpu_cores: 8, host_memory_mb: -1, host_gpu_count: -1 },
+    });
+    expect(shrink.status()).toBe(409);
+
+    // Once it is gone the same cap lands.
+    await deleteInstance(admin.ctx.request, instanceId);
+    instanceId = '';
+    const ok = await admin.ctx.request.put('/api/admin/settings', {
+      data: { host_instance_limit: -1, host_cpu_cores: 8, host_memory_mb: -1, host_gpu_count: -1 },
+    });
+    expect(ok.status()).toBe(200);
+  } finally {
+    if (instanceId) await deleteInstance(admin.ctx.request, instanceId);
+    await setHostCaps(admin.ctx.request, { limit: -1, cpu: -1, mem: -1, gpu: -1 });
+    await admin.ctx.close();
+  }
+});
+
 test('the -1 convention round-trips through the template form and launches', async ({
   browser,
 }) => {
@@ -690,9 +693,7 @@ test('the -1 convention round-trips through the template form and launches', asy
   let instanceId = '';
   try {
     // Create through the UI with the Unlimited toggles for cores/RAM/bandwidth.
-    await admin.page.goto('/');
-    await admin.page.locator('.sidebar').hover();
-    await admin.page.locator('.sidebar .nav-item').filter({ hasText: 'Templates' }).click();
+    await openTab(admin.page, 'Templates');
     await admin.page.locator('button').filter({ hasText: '+ New Template' }).click();
     await expect(admin.page.locator('h1')).toContainText('New Template');
     await admin.page.locator('input[placeholder="e.g. AI Lab"]').fill(UI_TEMPLATE_NAME);
@@ -748,23 +749,7 @@ test('a zero pool blocks launches and -1 round-trips through the Settings tab', 
 
     // A 0 pool blocks every finite launch into the group.
     const zeroed = await admin.ctx.request.put(`/api/groups/${small.id}`, {
-      data: {
-        name: SMALL_GROUP,
-        description: 'E2E quota fixture',
-        can_create_template: false,
-        can_manage_users: false,
-        can_manage_group_instances: false,
-        can_manage_docker: false,
-        can_manage_registry: false,
-        can_view_monitoring: false,
-        can_view_audit_logs: false,
-        max_instances: 10,
-        template_ids: [],
-        billing_model: 'shared',
-        pool_cpu_cores: 0,
-        pool_memory_mb: SMALL_POOL.mem,
-        pool_gpu_count: SMALL_POOL.gpu,
-      },
+      data: groupBody(SMALL_GROUP, { cpu: 0, mem: SMALL_POOL.mem, gpu: SMALL_POOL.gpu }),
     });
     // Pool 0 sits below single's finite cap 3: the tightening invariant refuses.
     expect(zeroed.status()).toBe(409);
@@ -775,23 +760,7 @@ test('a zero pool blocks launches and -1 round-trips through the Settings tab', 
     await setMemberQuota(admin.ctx.request, small.id, singleId as string, { cpu: 0, mem: 0, gpu: 0 });
     await setMemberQuota(admin.ctx.request, small.id, multiId as string, { cpu: 0, mem: 0, gpu: 0 });
     const zeroedOk = await admin.ctx.request.put(`/api/groups/${small.id}`, {
-      data: {
-        name: SMALL_GROUP,
-        description: 'E2E quota fixture',
-        can_create_template: false,
-        can_manage_users: false,
-        can_manage_group_instances: false,
-        can_manage_docker: false,
-        can_manage_registry: false,
-        can_view_monitoring: false,
-        can_view_audit_logs: false,
-        max_instances: 10,
-        template_ids: [],
-        billing_model: 'shared',
-        pool_cpu_cores: 0,
-        pool_memory_mb: SMALL_POOL.mem,
-        pool_gpu_count: SMALL_POOL.gpu,
-      },
+      data: groupBody(SMALL_GROUP, { cpu: 0, mem: SMALL_POOL.mem, gpu: SMALL_POOL.gpu }),
     });
     expect(zeroedOk.status()).toBe(200);
     // Lift single's cap to unlimited so the member layer skips and the 0
@@ -802,9 +771,7 @@ test('a zero pool blocks launches and -1 round-trips through the Settings tab', 
     expect(blocked.body.rejection.scope).toBe('group_pool_cpu');
 
     // Settings tab: -1 host caps save and read back as unlimited.
-    await admin.page.goto('/');
-    await admin.page.locator('.sidebar').hover();
-    await admin.page.locator('.sidebar .nav-item').filter({ hasText: 'Settings' }).click();
+    await openTab(admin.page, 'Settings');
     await expect(admin.page.locator('.card-title')).toContainText('Host Resource Policy', {
       timeout: 15_000,
     });
@@ -820,23 +787,7 @@ test('a zero pool blocks launches and -1 round-trips through the Settings tab', 
     expect(settings.settings.host_cpu_cores).toBe(-1);
     expect(settings.settings.host_memory_mb).toBe(-1);
   } finally {
-    const restoreBody = {
-      name: SMALL_GROUP,
-      description: 'E2E quota fixture',
-      can_create_template: false,
-      can_manage_users: false,
-      can_manage_group_instances: false,
-      can_manage_docker: false,
-      can_manage_registry: false,
-      can_view_monitoring: false,
-      can_view_audit_logs: false,
-      max_instances: 10,
-      template_ids: [],
-      billing_model: 'shared',
-      pool_cpu_cores: SMALL_POOL.cpu,
-      pool_memory_mb: SMALL_POOL.mem,
-      pool_gpu_count: SMALL_POOL.gpu,
-    };
+    const restoreBody = groupBody(SMALL_GROUP, SMALL_POOL);
     await admin.ctx.request.put(`/api/groups/${small.id}`, { data: restoreBody });
     const singleIdNow = await userIdByName(admin.ctx.request, SINGLE_USER.username);
     if (singleIdNow) await setMemberQuota(admin.ctx.request, small.id, singleIdNow, SINGLE_CAP);
