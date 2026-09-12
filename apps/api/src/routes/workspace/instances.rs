@@ -678,6 +678,7 @@ fn preflight_rejection_json(reject: &PreflightReject) -> serde_json::Value {
             resource,
             current,
             limit,
+            requested,
         } => serde_json::json!({
             "error": format!(
                 "Host {} cap reached (used: {}, cap: {})",
@@ -689,13 +690,14 @@ fn preflight_rejection_json(reject: &PreflightReject) -> serde_json::Value {
                 "scope": format!("host_resource_{}", resource.as_str()),
                 "current": current,
                 "limit": limit,
-                "requested": 1,
+                "requested": requested,
             },
         }),
         PreflightReject::PoolResourceExceeded {
             resource,
             current,
             limit,
+            requested,
             group_id,
         } => serde_json::json!({
             "error": format!(
@@ -708,7 +710,7 @@ fn preflight_rejection_json(reject: &PreflightReject) -> serde_json::Value {
                 "scope": format!("group_pool_{}", resource.as_str()),
                 "current": current,
                 "limit": limit,
-                "requested": 1,
+                "requested": requested,
                 "group_id": group_id,
             },
         }),
@@ -716,6 +718,7 @@ fn preflight_rejection_json(reject: &PreflightReject) -> serde_json::Value {
             resource,
             current,
             limit,
+            requested,
             group_id,
         } => serde_json::json!({
             "error": format!(
@@ -728,7 +731,7 @@ fn preflight_rejection_json(reject: &PreflightReject) -> serde_json::Value {
                 "scope": format!("member_quota_{}", resource.as_str()),
                 "current": current,
                 "limit": limit,
-                "requested": 1,
+                "requested": requested,
                 "group_id": group_id,
             },
         }),

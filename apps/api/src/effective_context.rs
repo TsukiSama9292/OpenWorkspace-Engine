@@ -285,6 +285,7 @@ pub enum PreflightReject {
         resource: ResourceKind,
         current: i64,
         limit: i64,
+        requested: i64,
     },
     /// The billing target's pool cannot fit the requested instance (409). For
     /// a group target, `group_id` is the charged group; `None` means a
@@ -293,6 +294,7 @@ pub enum PreflightReject {
         resource: ResourceKind,
         current: i64,
         limit: i64,
+        requested: i64,
         group_id: Option<Uuid>,
     },
     /// The launch's owner is at their personal resource cap inside the billing
@@ -302,6 +304,7 @@ pub enum PreflightReject {
         resource: ResourceKind,
         current: i64,
         limit: i64,
+        requested: i64,
         group_id: Option<Uuid>,
     },
 }
@@ -553,6 +556,7 @@ pub fn pre_flight(
                     resource,
                     current: member_current,
                     limit: member_limit,
+                    requested,
                     group_id: billing.target_group_id,
                 });
             }
@@ -561,6 +565,7 @@ pub fn pre_flight(
                     resource,
                     current: pool_current,
                     limit: pool_limit,
+                    requested,
                     group_id: billing.target_group_id,
                 });
             }
@@ -569,6 +574,7 @@ pub fn pre_flight(
                     resource,
                     current: host_current,
                     limit: host_limit,
+                    requested,
                 });
             }
         } else if requested > 0 {
@@ -577,6 +583,7 @@ pub fn pre_flight(
                     resource,
                     current: member_current,
                     limit: member_limit,
+                    requested,
                     group_id: billing.target_group_id,
                 });
             }
@@ -585,6 +592,7 @@ pub fn pre_flight(
                     resource,
                     current: pool_current,
                     limit: pool_limit,
+                    requested,
                     group_id: billing.target_group_id,
                 });
             }
@@ -593,6 +601,7 @@ pub fn pre_flight(
                     resource,
                     current: host_current,
                     limit: host_limit,
+                    requested,
                 });
             }
         }
@@ -1163,6 +1172,7 @@ mod tests {
                 resource: ResourceKind::Cpu,
                 current: 7,
                 limit: 8,
+                requested: 2,
             })
         );
     }
@@ -1193,6 +1203,7 @@ mod tests {
                 resource: ResourceKind::Cpu,
                 current: 0,
                 limit: 0,
+                requested: 2,
             })
         );
     }
@@ -1212,6 +1223,7 @@ mod tests {
                 resource: ResourceKind::Cpu,
                 current: 3,
                 limit: 4,
+                requested: 2,
                 group_id: Some(uuid(10)),
             })
         );
@@ -1222,6 +1234,7 @@ mod tests {
                 resource: ResourceKind::Memory,
                 current: 2048,
                 limit: 4096,
+                requested: 2049,
                 group_id: Some(uuid(10)),
             })
         );
@@ -1256,6 +1269,7 @@ mod tests {
                 resource: ResourceKind::Cpu,
                 current: 3,
                 limit: 4,
+                requested: 2,
                 group_id: Some(uuid(10)),
             })
         );
@@ -1266,6 +1280,7 @@ mod tests {
                 resource: ResourceKind::Memory,
                 current: 2048,
                 limit: 4096,
+                requested: 2049,
                 group_id: Some(uuid(10)),
             })
         );
@@ -1290,6 +1305,7 @@ mod tests {
                 resource: ResourceKind::Cpu,
                 current: 1,
                 limit: 2,
+                requested: 2,
                 group_id: Some(uuid(10)),
             })
         );
@@ -1335,6 +1351,7 @@ mod tests {
                 resource: ResourceKind::Cpu,
                 current: 0,
                 limit: 0,
+                requested: 1,
                 group_id: Some(uuid(10)),
             })
         );
@@ -1358,6 +1375,7 @@ mod tests {
                 resource: ResourceKind::Cpu,
                 current: 0,
                 limit: 4,
+                requested: -1,
                 group_id: Some(uuid(10)),
             })
         );
@@ -1403,6 +1421,7 @@ mod tests {
                 resource: ResourceKind::Cpu,
                 current: 0,
                 limit: 4,
+                requested: -1,
                 group_id: Some(uuid(10)),
             })
         );
@@ -1422,6 +1441,7 @@ mod tests {
                 resource: ResourceKind::Cpu,
                 current: 0,
                 limit: 8,
+                requested: -1,
             })
         );
     }
@@ -1462,6 +1482,7 @@ mod tests {
                 resource: ResourceKind::Cpu,
                 current: 4,
                 limit: 4,
+                requested: 1,
             })
         );
     }

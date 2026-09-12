@@ -3754,7 +3754,7 @@ async fn test_launch_consumes_billing_group_pool() {
     assert_eq!(body["rejection"]["scope"], "group_pool_cpu");
     assert_eq!(body["rejection"]["current"], 2);
     assert_eq!(body["rejection"]["limit"], 2);
-    assert_eq!(body["rejection"]["requested"], 1);
+    assert_eq!(body["rejection"]["requested"], 2);
     assert_eq!(body["rejection"]["group_id"], serde_json::json!(group_id));
 }
 
@@ -3812,7 +3812,7 @@ async fn test_concurrent_launches_same_group_pool_exactly_one_succeeds() {
                 assert_eq!(body["rejection"]["scope"], "group_pool_cpu");
                 assert_eq!(body["rejection"]["current"], 2);
                 assert_eq!(body["rejection"]["limit"], 2);
-                assert_eq!(body["rejection"]["requested"], 1);
+                assert_eq!(body["rejection"]["requested"], 2);
                 assert_eq!(body["rejection"]["group_id"], serde_json::json!(group_id));
             }
             other => panic!("unexpected status: {}", other),
@@ -4589,7 +4589,7 @@ async fn test_host_resource_cap_blocks_second_launch() {
     assert_eq!(body["rejection"]["scope"], "host_resource_cpu");
     assert_eq!(body["rejection"]["current"], 2);
     assert_eq!(body["rejection"]["limit"], 2);
-    assert_eq!(body["rejection"]["requested"], 1);
+    assert_eq!(body["rejection"]["requested"], 2);
 }
 
 // ── On-demand container logs: SSE endpoint ────────────────────────

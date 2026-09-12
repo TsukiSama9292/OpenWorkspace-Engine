@@ -413,7 +413,11 @@ cargo in this environment. Prior green state (736/736) is the "Revision round
 - [x] All quota rejections return `409` with the existing structured
       `{ error, rejection: { scope, current, limit, requested } }` body; new
       resource scopes encode the resource in the scope string. Audit events
-      cover quota changes.
+      cover quota changes. **E2E 2026-09-12:** the route serializer hardcoded
+      `"requested": 1` on every resource scope — fixed so `requested` carries
+      the launch request's value per spec Decision 10 (`PreflightReject`
+      resource variants gained a `requested` field; unit + integration
+      assertions updated to the real values).
 - [x] Full Rust gate green: `scripts/check.sh` silent (both feature sets, zero
       warnings) and `scripts/run_tests.sh` green (736/736), including new unit
       tests for the flipped gates (`-1` skip, `0` blocked, finite arithmetic,
