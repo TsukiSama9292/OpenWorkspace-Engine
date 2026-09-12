@@ -16,11 +16,8 @@ from ticket 01.
 **Blocked by:** 01 — Backend: resource quotas, attribution, and the `-1`
 convention
 
-**Status:** complete pending gates (2026-09-11) — slices A–H all in code on
-`feature/resource-quotas` (F/G landed in `25431f4`, verified present; H landed
-this session: bandwidth `-1` flip, ceiling-label fix, member-quota tier gate).
-Ticket 01 is closed (openapi hand-synced). Remaining: the user runs `pnpm
-check` + `pnpm test` in `apps/web` (agent shell blocks pnpm), then ticket 03.
+**Status:** completed (2026-09-12) — gates run by agent via background runners:
+`pnpm check` green, vitest 432/432 green. Ticket 03 green 13/13.
 
 ## Status — 2026-09-11 (slices A–H done in code, gates pending)
 

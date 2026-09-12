@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Pre-commit gate for OpenWorkspace-Engine (installed to .git/hooks/pre-commit
+# by scripts/git-hooks/install.sh).
+#
+# Policy: scoped Definition-of-Done gates must pass before a commit lands.
+# Staged paths decide which gates run:
+#   apps/api/**  -> bash scripts/check.sh (must be silent) + full nextest suite
+#   apps/web/**  -> pnpm check (sync + svelte-check + eslint) + pnpm test (vitest)
+#   e2e/**       -> playwright --project=full on the staged spec files
+#                  (requires the running dev stack; see AGENTS.md setsid flow)
+#   docs / .scratch / CHANGELOG / roadmap only -> fast pass (no code gates)
+#
+# Commits that predate this hook (e.g. the resource-quota-v2 branch work up to
+# 2a62123) were verified by running the same commands manually; every commit
+# after this hook is installed is gated automatically.
+#
+# Escape hatch (emergencies only, breaks policy): git commit --no-verify.
+# Force full gates regardless of paths: OW_GATES_FULL=1 git commit.
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "pre-commit: not in a git repo"; exit 1; }
+cd "$ROOT" || exit 1
+
+# Toolchain: prefer the interactive PATH, fall back to known install dirs so
+# the hook also works from bare/non-login shells (agent shells, IDE hooks).
+for d in "$HOME/.nvm/versions/node/v24.16.0/bin" "$HOME/.cargo/bin" "/usr/local/bin"; do
+  [ -d "$d" ] && case ":$PATH:" in *":$d:"*) ;; *) PATH="$d:$PATH" ;; esac
+done
+export PATH
+
+fail() { echo "pre-commit: FAILED: $1" >&2; exit 1; }
+info() { echo "pre-commit: $1"; }
+
+STAGED="$(git diff --cached --name-only --diff-filter=ACMR)"
+[ -z "$STAGED" ] && { info "nothing staged, skipping"; exit 0; }
+
+api_changed=""; web_changed=""; e2e_changed=""
+while IFS= read -r f; do
+  case "$f" in
+    apps/api/*) api_changed=1 ;;
+    apps/web/*) web_changed=1 ;;
+    e2e/*) e2e_changed=1 ;;
+  esac
+done <<< "$STAGED"
+
+if [ -n "${OW_GATES_FULL:-}" ]; then
+  api_changed=1; web_changed=1
+  info "OW_GATES_FULL=1: running all code gates"
+fi
+
+[ -z "$api_changed$web_changed$e2e_changed" ] && { info "docs-only commit, no code gates"; exit 0; }
+
+if [ -n "$api_changed" ]; then
+  command -v cargo >/dev/null 2>&1 || fail "cargo not found on PATH"
+  info "api: check.sh (clippy, both feature sets — must be silent)"
+  out="$(bash apps/api/scripts/check.sh 2>&1)" && [ -z "$out" ] \
+    || fail "check.sh not silent:${out:+$'\n'$out}"
+  info "api: check.sh silent, running full nextest suite (needs Docker)"
+  bash apps/api/scripts/run_tests.sh 2>&1 | tail -n 15
+  [ "${PIPESTATUS[0]}" -eq 0 ] || fail "run_tests.sh failed"
+  info "api gates green"
+fi
+
+if [ -n "$web_changed" ]; then
+  info "web: pnpm check (svelte-kit sync + svelte-check + eslint)"
+  (cd apps/web && pnpm check) || fail "web pnpm check failed"
+  info "web: pnpm test (vitest)"
+  (cd apps/web && pnpm test) || fail "web pnpm test failed"
+  info "web gates green"
+fi
+
+if [ -n "$e2e_changed" ]; then
+  command -v curl >/dev/null 2>&1 || fail "curl not found"
+  curl -sf -o /dev/null http://localhost/ \
+    || fail "dev stack web not reachable at http://localhost (boot it first, AGENTS.md setsid flow)"
+  curl -sf -o /dev/null http://localhost:3000/health \
+    || fail "dev stack api not reachable at http://localhost:3000/health"
+  specs="$(printf '%s\n' "$STAGED" | grep '^e2e/tests/.*\.spec\.ts$' || true)"
+  [ -z "$specs" ] && { info "e2e: no spec files staged, skipping run"; exit 0; }
+  # shellcheck disable=SC2086
+  info "e2e: playwright --project=full on staged specs"
+  (cd e2e && ./node_modules/.bin/playwright test --project=full $specs) \
+    || fail "playwright e2e failed"
+  info "e2e gates green"
+fi
+
+info "all applicable gates green — commit allowed"

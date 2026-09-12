@@ -190,6 +190,30 @@ pnpm test         # vitest run — 25 files, 310 tests
 
 Vitest uses `happy-dom` (unit + component tests). Playwright E2E lives in the standalone `e2e/` package and requires a **running** dev stack (`pnpm run test:e2e` smoke / `test:e2e:full` live VNC). Not run in CI.
 
+### Pre-commit gates
+
+Every fresh clone runs `scripts/git-hooks/install.sh` once — it copies the
+versioned `scripts/git-hooks/pre-commit` into `.git/hooks/` (git never syncs
+hooks on clone). From then on every `git commit` runs the scoped
+Definition-of-Done gates and refuses the commit unless they pass:
+
+| Staged paths | Gates |
+|---|---|
+| `apps/api/**` | `bash scripts/check.sh` (must be silent) + full `bash scripts/run_tests.sh` (nextest, needs Docker) |
+| `apps/web/**` | `pnpm check` + `pnpm test` in `apps/web` |
+| `e2e/**` | `playwright test --project=full` on the staged spec files (requires the running dev stack) |
+| docs / `.scratch` / `CHANGELOG` / `roadmap` only | fast pass, no code gates |
+
+`OW_GATES_FULL=1 git commit` forces all code gates regardless of paths.
+`git commit --no-verify` bypasses the hook — emergencies only, breaks policy.
+
+Known environmental red: `docker_test::test_create_container_runsc_runtime_passthrough`
+needs a host that can actually create runsc sandboxes. Under
+`pnpm run dev:nosudo` (gVisor registration skipped, no sudo) it fails with an
+OCI-shim error that has nothing to do with the code under test; run the suite
+under the sudo'd `pnpm run dev` stack (or a runsc-capable host) for a fully
+green board.
+
 ## Security Fuzzing
 
 ```bash

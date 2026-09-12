@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: completed
 
 > **Status — 2026-09-11:** backend (01) and frontend (02) code complete
 > including code-review fixes (member-sum `.max(0)`, host tightening guard,

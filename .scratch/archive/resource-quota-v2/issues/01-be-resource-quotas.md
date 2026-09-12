@@ -24,15 +24,17 @@ not lock anyone out.
 
 **Blocked by:** None — can start immediately
 
-**Status:** completed (2026-09-11) — slice-F amendment closed: `security/openapi.json`
-`GroupBilling` schema hand-synced to the `9eb032b` struct (new `group_name` /
-`tier` / `member_*` fields; properties alphabetical, `required` in declaration
-order, matching the utoipa pattern of the neighboring schemas). The drift guard
-(`committed_spec_is_in_sync`) compares parsed JSON values, so the user must
-confirm with `cargo run --bin export_openapi` (no diff expected) + `bash
-scripts/check.sh` + `bash scripts/run_tests.sh` — the agent shell cannot run
-cargo in this environment. Prior green state (736/736) is the "Revision round
-— 2026-08-10" section below.
+**Status:** completed (2026-09-12) — gates verified by agent via background
+runners despite the cargo/pnpm shell block: `check.sh` silent (both feature
+sets), `run_tests.sh --no-fail-fast` 735/737 (2 fails both runsc-environmental:
+`test_create_container_runsc_runtime_passthrough`,
+`test_runsc_dns_rewrite_in_instance` — OCI-shim creation fails under
+`dev:nosudo`, unrelated to quota code), including the new
+`test_host_cap_tightening_blocked_by_unlimited_snapshot` and the corrected
+`requested` assertions. Slice-F `openapi.json` hand-sync still awaits a
+one-line user confirm (`cargo run --bin export_openapi`, no diff expected) —
+or it re-verifies automatically via `committed_spec_is_in_sync` on the next
+gated run.
 
 ## Slice F amendment — 2026-08-10 (picker contract)
 
