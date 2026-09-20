@@ -208,11 +208,22 @@ Definition-of-Done gates and refuses the commit unless they pass:
 `git commit --no-verify` bypasses the hook — emergencies only, breaks policy.
 
 Known environmental red: `docker_test::test_create_container_runsc_runtime_passthrough`
-needs a host that can actually create runsc sandboxes. Under
-`pnpm run dev:nosudo` (gVisor registration skipped, no sudo) it fails with an
-OCI-shim error that has nothing to do with the code under test; run the suite
-under the sudo'd `pnpm run dev` stack (or a runsc-capable host) for a fully
-green board.
+and `test_runsc_dns_rewrite_in_instance` need a host that can actually create
+runsc sandboxes. If they fail with `cannot create sandbox ... EOF`, check two
+things: (1) under `pnpm run dev:nosudo` gVisor registration is skipped by
+design; (2) if `/etc/docker/daemon.json` forces `--nvproxy` on runsc while the
+host driver is not in `runsc nvproxy list-supported-drivers` (e.g. driver
+595.x on 2026-09-12), even CPU-only sandboxes fail at start — either switch
+the driver to a listed branch (see `gvison.md` §3) or drop `runtimeArgs` for
+CPU-only runsc. Reproduced and fixed on the RTX 3050 dev box by removing
+`--nvproxy` (verified: `docker run --rm --runtime runsc busybox:1 echo hi`).
+Remaining red there: `test_runsc_dns_rewrite_in_instance` needs *external*
+IPv4 DNS egress — that box cannot reach 8.8.8.8:53 or 1.1.1.1:53 even from
+the host (host DNS resolves via IPv6/Tailscale only), so the in-sandbox
+`getent` hangs to the 360 s timeout regardless of runtime. The DNS rewrite
+itself was verified working (`resolv.conf` correctly rewritten to OW_DNS).
+Run that single test on a host with public DNS egress for a fully green
+board.
 
 ## Security Fuzzing
 

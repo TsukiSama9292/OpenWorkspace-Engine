@@ -117,6 +117,12 @@ Create/update `/etc/docker/daemon.json`:
 Then `sudo systemctl restart docker`. You can now run CPU-only sandboxes with
 `docker run --runtime runsc ...`.
 
+> `--nvproxy` is only needed for GPU workloads inside the sandbox. If the host
+> driver is not in `runsc nvproxy list-supported-drivers`, keep the runtime
+> entry without `runtimeArgs`: CPU-only runsc works fine, while any runsc
+> container (even CPU-only) fails at sandbox start with the flag present.
+> Verified 2026-09-12 on an RTX 3050 box with driver 595.84 (unlisted).
+
 ## 3. NVIDIA GPU passthrough
 
 ### 3.1 Pick a driver version NVProxy supports

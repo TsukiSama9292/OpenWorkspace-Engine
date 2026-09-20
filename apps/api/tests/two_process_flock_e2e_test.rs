@@ -7,8 +7,9 @@
 // per-UID lock directory by construction (spec §20/§47). Both launch a real
 // container through the HTTP API at the same time; the observable outcomes —
 // both launches succeed, distinct host ports, distinct `/30` instance subnets,
-// both containers running with their ports bound, and zero residual runsc after
-// deletion — are the cross-process arbitration acceptance signal that the mock
+// both containers running with their ports bound (under the default `runc`
+// runtime), and zero orphaned runsc sandbox processes as a leak guard — are
+// the cross-process arbitration acceptance signal that the mock
 // harness cannot reach.
 
 mod common;
@@ -86,9 +87,9 @@ async fn create_test_db() -> String {
 /// Spawn one real API process and hand its child handle to the guard. Returns
 /// the base URL to reach it. `PORT_LOCK_DIR` is intentionally not set: the
 /// process resolves the shared per-UID lock directory by construction. The
-/// settings runtime is left at its default (`runsc`); templates also default
-/// to `runsc`, so the launched instances exercise the exact sandbox scenario
-/// from the problem statement.
+/// settings runtime is left at its default (`runc`); templates also default
+/// to `runc`, so the launched instances run under the standard OCI runtime
+/// (no gVisor/`runsc` driver required).
 async fn spawn_server(db_name: &str, port: u16, log_dir: &Path, guard: &mut ServersGuard) -> String {
     let bin = api_binary_path();
     assert!(
@@ -349,9 +350,10 @@ async fn orphan_runsc_count() -> usize {
 }
 
 /// Poll until no runsc sandbox/gofer is orphaned (the leak signal), bounded.
-/// Instances run under the template-default `runsc` runtime, so their sandboxes
-/// are torn down when the API removes the container; a brief post-delete
-/// teardown lag must not false-fail, while a genuine orphan never clears.
+/// Instances run under the template-default `runc` runtime, so this normally
+/// observes zero immediately; the poll still guards against orphans leaked by
+/// sibling `runsc` tests running in parallel. A brief post-delete teardown lag
+/// must not false-fail, while a genuine orphan never clears.
 async fn wait_for_no_orphan_runsc() -> bool {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
@@ -624,10 +626,9 @@ async fn test_two_process_concurrent_launch_arbitrates_host_ports() {
     assert_eq!(da.status(), 204, "delete via server A failed");
     assert_eq!(db_resp.status(), 204, "delete via server B failed");
 
-    // The instances run under the template-default `runsc` runtime (production
-    // default), so this is the exact scenario from the problem statement: two
-    // concurrent runsc launches must not orphan sandbox processes. Poll for
-    // zero orphaned runsc — sibling tests' tracked runsc containers are never
+    // The instances run under the template-default `runc` runtime (no
+    // gVisor/`runsc` driver required). Poll for zero orphaned runsc as a
+    // leak guard — sibling tests' tracked runsc containers are never
     // counted, so this is deterministic under full-suite parallelism.
     assert!(
         wait_for_no_orphan_runsc().await,
