@@ -106,11 +106,11 @@ pub mod workspace_template {
         pub remote_type: String,
         pub container_runtime: String,
         pub persistent_storage_path: Option<String>,
-        pub max_run_seconds: Option<i64>,
+        pub max_run_seconds: i64,
         pub timeout_action: String,
         pub network_bandwidth_up_mbps: i32,
         pub network_bandwidth_down_mbps: i32,
-        pub keep_time_seconds: Option<i64>,
+        pub keep_time_seconds: i64,
         pub keep_time_action: String,
         pub docker_in_instance: bool,
         pub visibility: String,
@@ -167,6 +167,15 @@ pub mod workspace_instance {
         pub host_port: Option<i32>,
         pub started_at: Option<DateTimeUtc>,
         pub last_seen_at: Option<DateTimeUtc>,
+        /// The group this instance bills its resources against; `NULL` means
+        /// self-billed (no resource accounting, the pre-quota behavior).
+        pub owner_group_id: Option<Uuid>,
+        /// The frozen pool caps in effect at launch (JSONB), for reporting.
+        pub billing_group_snapshot: Option<Json>,
+        /// Actual host resources the instance consumed while active.
+        pub host_cpu_cores: i32,
+        pub host_memory_mb: i64,
+        pub host_gpu_count: i32,
         pub created_at: DateTimeUtc,
         pub updated_at: DateTimeUtc,
     }
@@ -185,6 +194,12 @@ pub mod workspace_instance {
             to = "super::user::Column::Id"
         )]
         User,
+        #[sea_orm(
+            belongs_to = "super::group::Entity",
+            from = "Column::OwnerGroupId",
+            to = "super::group::Column::Id"
+        )]
+        Group,
     }
 
     impl Related<super::workspace_template::Entity> for Entity {
@@ -196,6 +211,12 @@ pub mod workspace_instance {
     impl Related<super::user::Entity> for Entity {
         fn to() -> RelationDef {
             Relation::User.def()
+        }
+    }
+
+    impl Related<super::group::Entity> for Entity {
+        fn to() -> RelationDef {
+            Relation::Group.def()
         }
     }
 
@@ -289,8 +310,18 @@ pub mod group {
         /// Audit-log viewer gate (observability-logs spec): admin or a group
         /// flag; Manager system group defaults on.
         pub can_view_audit_logs: bool,
-        /// `None` (NULL) means "unlimited" (the Admin group's ceiling).
+        /// `None` (NULL) and `-1` both mean "unlimited" (the Admin group's
+        /// ceiling); `0` blocks.
         pub max_instances: Option<i32>,
+        /// How member instances bill resources: `shared` (the whole group's
+        /// active instances sum against the pool) or `dedicated` (each member's
+        /// own instances sum against the pool).
+        pub billing_model: String,
+        /// The group's resource pool (`-1` = unlimited, `0` = blocked, matching
+        /// the ceiling convention): cpu cores, memory MB, gpu count.
+        pub pool_cpu_cores: i32,
+        pub pool_memory_mb: i64,
+        pub pool_gpu_count: i32,
         pub created_at: DateTimeUtc,
         pub updated_at: DateTimeUtc,
     }
@@ -312,6 +343,12 @@ pub mod user_group {
         pub user_id: Uuid,
         #[sea_orm(primary_key)]
         pub group_id: Uuid,
+        /// Per-member resource cap inside this group (`0` = blocked, `-1` =
+        /// unlimited). The personal layer of the quota pre-flight.
+        pub cpu_quota: i32,
+        /// Per-member memory cap in MB (matches `groups.pool_memory_mb`).
+        pub memory_quota: i64,
+        pub gpu_quota: i32,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -385,11 +422,11 @@ pub struct WorkspaceTemplate {
     pub exec_config: serde_json::Value,
     pub volume_mappings: serde_json::Value,
     pub persistent_storage_path: Option<String>,
-    pub max_run_seconds: Option<i64>,
+    pub max_run_seconds: i64,
     pub timeout_action: String,
     pub network_bandwidth_up_mbps: i32,
     pub network_bandwidth_down_mbps: i32,
-    pub keep_time_seconds: Option<i64>,
+    pub keep_time_seconds: i64,
     pub keep_time_action: String,
     pub docker_in_instance: bool,
     pub visibility: TemplateVisibility,
@@ -445,6 +482,11 @@ pub struct WorkspaceInstance {
     pub host_port: Option<i32>,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub owner_group_id: Option<Uuid>,
+    pub billing_group_snapshot: Option<serde_json::Value>,
+    pub host_cpu_cores: i32,
+    pub host_memory_mb: i64,
+    pub host_gpu_count: i32,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -466,6 +508,11 @@ impl From<workspace_instance::Model> for WorkspaceInstance {
             host_port: m.host_port,
             started_at: m.started_at,
             last_seen_at: m.last_seen_at,
+            owner_group_id: m.owner_group_id,
+            billing_group_snapshot: m.billing_group_snapshot,
+            host_cpu_cores: m.host_cpu_cores,
+            host_memory_mb: m.host_memory_mb,
+            host_gpu_count: m.host_gpu_count,
             created_at: m.created_at,
             updated_at: m.updated_at,
         }
@@ -498,6 +545,15 @@ pub struct UserWithPolicy {
     pub group_ids: Vec<Uuid>,
     pub is_admin: bool,
     pub tier: i32,
+}
+
+/// One member's resource cap inside a group (`0` = blocked, `-1` = unlimited).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MembershipQuota {
+    pub user_id: Uuid,
+    pub cpu_quota: i32,
+    pub memory_quota: i64,
+    pub gpu_quota: i32,
 }
 
 pub struct UserRepository<'a> {
@@ -552,6 +608,13 @@ impl<'a> UserRepository<'a> {
         user_group::ActiveModel {
             user_id: Set(admin_user_id),
             group_id: Set(admin_group.id),
+            // The bootstrap admin keeps the pre-quota behavior: unlimited
+            // (membership quota -1). This is the single bootstrap exception to
+            // the "new memberships default 0" rule — locking the root admin
+            // out of resource usage on a fresh install is never desired.
+            cpu_quota: Set(-1),
+            memory_quota: Set(-1),
+            gpu_quota: Set(-1),
         }
         .insert(self.db)
         .await?;
@@ -757,9 +820,12 @@ impl<'a> UserRepository<'a> {
             .exec(self.db)
             .await?;
         for &group_id in group_ids {
+            // New memberships default to `0` (blocked) per spec Decision 1 —
+            // the DB column default, left unset here.
             user_group::ActiveModel {
                 user_id: Set(user_id),
                 group_id: Set(group_id),
+                ..Default::default()
             }
             .insert(self.db)
             .await?;
@@ -788,6 +854,118 @@ impl<'a> UserRepository<'a> {
             Err(e) => Err(e),
         }
     }
+
+    /// The membership row linking `user_id` to `group_id`, with its resource
+    /// cap. `None` when the pair is not a membership.
+    pub async fn get_membership_quota(
+        &self,
+        user_id: Uuid,
+        group_id: Uuid,
+    ) -> Result<Option<MembershipQuota>, sea_orm::DbErr> {
+        let row = user_group::Entity::find_by_id((user_id, group_id))
+            .one(self.db)
+            .await?;
+        Ok(row.map(|m| MembershipQuota {
+            user_id: m.user_id,
+            cpu_quota: m.cpu_quota,
+            memory_quota: m.memory_quota,
+            gpu_quota: m.gpu_quota,
+        }))
+    }
+
+    /// Every member's resource cap in the group, as a `MembershipQuota` list.
+    /// Empty for a group with no members.
+    pub async fn list_membership_quotas(
+        &self,
+        group_id: Uuid,
+    ) -> Result<Vec<MembershipQuota>, sea_orm::DbErr> {
+        let rows = user_group::Entity::find()
+            .filter(user_group::Column::GroupId.eq(group_id))
+            .all(self.db)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|m| MembershipQuota {
+                user_id: m.user_id,
+                cpu_quota: m.cpu_quota,
+                memory_quota: m.memory_quota,
+                gpu_quota: m.gpu_quota,
+            })
+            .collect())
+    }
+
+    /// Set a membership's resource cap. Returns `false` when the pair is not a
+    /// membership.
+    pub async fn update_membership_quota(
+        &self,
+        user_id: Uuid,
+        group_id: Uuid,
+        cpu_quota: i32,
+        memory_quota: i64,
+        gpu_quota: i32,
+    ) -> Result<bool, sea_orm::DbErr> {
+        let result = user_group::Entity::update(user_group::ActiveModel {
+            user_id: Set(user_id),
+            group_id: Set(group_id),
+            cpu_quota: Set(cpu_quota),
+            memory_quota: Set(memory_quota),
+            gpu_quota: Set(gpu_quota),
+        })
+        .filter(
+            user_group::Column::UserId
+                .eq(user_id)
+                .and(user_group::Column::GroupId.eq(group_id)),
+        )
+        .exec(self.db)
+        .await;
+        match result {
+            Ok(_) => Ok(true),
+            Err(sea_orm::DbErr::RecordNotFound(_)) | Err(sea_orm::DbErr::RecordNotUpdated) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The group id of the user's highest-tier membership (admin > manager >
+    /// user), tie-broken by the oldest membership row. `None` when the user
+    /// belongs to no group. Used by the upgrade backfill and the restart
+    /// re-attribution of a `NULL`-attributed instance.
+    pub async fn highest_tier_membership(
+        &self,
+        user_id: Uuid,
+    ) -> Result<Option<Uuid>, sea_orm::DbErr> {
+        let memberships = user_group::Entity::find()
+            .filter(user_group::Column::UserId.eq(user_id))
+            .all(self.db)
+            .await?;
+        if memberships.is_empty() {
+            return Ok(None);
+        }
+        let group_ids: Vec<Uuid> = memberships.iter().map(|m| m.group_id).collect();
+        let groups = group::Entity::find()
+            .filter(group::Column::Id.is_in(group_ids))
+            .all(self.db)
+            .await?;
+        let kind_by_id: std::collections::HashMap<Uuid, Option<String>> = groups
+            .into_iter()
+            .map(|g| (g.id, g.kind))
+            .collect();
+        // Rank the user's memberships by their group's kind tier, highest
+        // first; ties break on the group id for determinism.
+        let mut ranked: Vec<(i32, Uuid)> = memberships
+            .into_iter()
+            .filter_map(|m| {
+                kind_by_id.get(&m.group_id).map(|kind| {
+                    let tier = crate::effective_context::group_kind_tier(kind.as_deref());
+                    (tier, m.group_id)
+                })
+            })
+            .collect();
+        ranked.sort_by(|a, b| {
+            b.0.cmp(&a.0)
+                .then_with(|| a.1.to_string().cmp(&b.1.to_string()))
+        });
+        Ok(ranked.into_iter().map(|(_, id)| id).next())
+    }
 }
 
 // ── Group Repository ─────────────────────────────────────────
@@ -809,6 +987,10 @@ pub struct GroupRecord {
     pub can_view_monitoring: bool,
     pub can_view_audit_logs: bool,
     pub max_instances: Option<i32>,
+    pub billing_model: String,
+    pub pool_cpu_cores: i32,
+    pub pool_memory_mb: i64,
+    pub pool_gpu_count: i32,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -838,6 +1020,10 @@ impl<'a> GroupRepository<'a> {
             can_view_monitoring: m.can_view_monitoring,
             can_view_audit_logs: m.can_view_audit_logs,
             max_instances: m.max_instances,
+            billing_model: m.billing_model,
+            pool_cpu_cores: m.pool_cpu_cores,
+            pool_memory_mb: m.pool_memory_mb,
+            pool_gpu_count: m.pool_gpu_count,
             created_at: m.created_at,
             updated_at: m.updated_at,
         }
@@ -886,6 +1072,10 @@ impl<'a> GroupRepository<'a> {
         can_view_monitoring: bool,
         can_view_audit_logs: bool,
         max_instances: i32,
+        billing_model: &str,
+        pool_cpu_cores: i32,
+        pool_memory_mb: i64,
+        pool_gpu_count: i32,
     ) -> Result<Uuid, sea_orm::DbErr> {
         let id = Uuid::new_v4();
         let model = group::ActiveModel {
@@ -901,6 +1091,10 @@ impl<'a> GroupRepository<'a> {
             can_view_monitoring: Set(can_view_monitoring),
             can_view_audit_logs: Set(can_view_audit_logs),
             max_instances: Set(Some(max_instances)),
+            billing_model: Set(billing_model.to_string()),
+            pool_cpu_cores: Set(pool_cpu_cores),
+            pool_memory_mb: Set(pool_memory_mb),
+            pool_gpu_count: Set(pool_gpu_count),
             ..Default::default()
         };
         model.insert(self.db).await?;
@@ -920,6 +1114,10 @@ impl<'a> GroupRepository<'a> {
         can_view_monitoring: bool,
         can_view_audit_logs: bool,
         max_instances: Option<i32>,
+        billing_model: &str,
+        pool_cpu_cores: i32,
+        pool_memory_mb: i64,
+        pool_gpu_count: i32,
     ) -> Result<bool, sea_orm::DbErr> {
         let result = group::Entity::update(group::ActiveModel {
             id: Set(id),
@@ -933,6 +1131,10 @@ impl<'a> GroupRepository<'a> {
             can_view_monitoring: Set(can_view_monitoring),
             can_view_audit_logs: Set(can_view_audit_logs),
             max_instances: Set(max_instances),
+            billing_model: Set(billing_model.to_string()),
+            pool_cpu_cores: Set(pool_cpu_cores),
+            pool_memory_mb: Set(pool_memory_mb),
+            pool_gpu_count: Set(pool_gpu_count),
             ..Default::default()
         })
         .filter(group::Column::Id.eq(id))
@@ -948,6 +1150,36 @@ impl<'a> GroupRepository<'a> {
     pub async fn delete(&self, id: Uuid) -> Result<bool, sea_orm::DbErr> {
         let result = group::Entity::delete_by_id(id).exec(self.db).await?;
         Ok(result.rows_affected > 0)
+    }
+
+    /// Lock the group row `FOR UPDATE` and return it, or `None` when the row is
+    /// missing. Used by the activation transaction to serialize resource billing
+    /// against a group's pool (spec Decision 1: exact accounting).
+    pub async fn lock_for_update<C: sea_orm::ConnectionTrait>(
+        db: &C,
+        group_id: Uuid,
+    ) -> Result<Option<GroupRecord>, sea_orm::DbErr> {
+        let model = group::Entity::find_by_id(group_id)
+            .lock_exclusive()
+            .one(db)
+            .await?;
+        Ok(model.map(Self::from_model))
+    }
+
+    /// Number of active instances (`starting` / `running` / `paused`) billed
+    /// against the group (`owner_group_id = group_id`). Used to guard group
+    /// deletion: a group with active billing cannot be deleted, while one
+    /// holding only stopped instances can (the FK `ON DELETE SET NULL` nulls
+    /// their attribution; the next restart re-attributes them, spec §7).
+    pub async fn count_active_instances_billed_to(
+        &self,
+        group_id: Uuid,
+    ) -> Result<i64, sea_orm::DbErr> {
+        Ok(workspace_instance::Entity::find()
+            .filter(workspace_instance::Column::OwnerGroupId.eq(group_id))
+            .filter(workspace_instance::Column::Status.is_in(ACTIVE_STATUSES))
+            .count(self.db)
+            .await? as i64)
     }
 
     /// The template ids whitelisted for the group.
@@ -1040,11 +1272,11 @@ impl<'a> WorkspaceTemplateRepository<'a> {
         exec_config: &serde_json::Value,
         volume_mappings: &serde_json::Value,
         persistent_storage_path: Option<&str>,
-        max_run_seconds: Option<i64>,
+        max_run_seconds: i64,
         timeout_action: &str,
         network_bandwidth_up_mbps: i32,
         network_bandwidth_down_mbps: i32,
-        keep_time_seconds: Option<i64>,
+        keep_time_seconds: i64,
         keep_time_action: &str,
         docker_in_instance: bool,
     ) -> Result<WorkspaceTemplate, sea_orm::DbErr> {
@@ -1124,11 +1356,11 @@ impl<'a> WorkspaceTemplateRepository<'a> {
         exec_config: &serde_json::Value,
         volume_mappings: &serde_json::Value,
         persistent_storage_path: Option<&str>,
-        max_run_seconds: Option<i64>,
+        max_run_seconds: i64,
         timeout_action: &str,
         network_bandwidth_up_mbps: i32,
         network_bandwidth_down_mbps: i32,
-        keep_time_seconds: Option<i64>,
+        keep_time_seconds: i64,
         keep_time_action: &str,
         docker_in_instance: bool,
     ) -> Result<bool, sea_orm::DbErr> {
@@ -1200,6 +1432,19 @@ impl<'a> WorkspaceTemplateRepository<'a> {
 
 // ── Workspace Instance Repository ─────────────────────────────
 
+/// Counts of active instances whose frozen resource snapshot is `-1`
+/// (unlimited) on each resource. A `-1` snapshot marks a whole-layer consumer
+/// (spec §7): the `-1` request rule means it was launched only while every
+/// checked layer was unlimited, and the negative-filtered usage sums never
+/// count it. Lowering any quota on that resource to a finite value is rejected
+/// while one exists in the scope.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UnlimitedSnapshotCounts {
+    pub cpu_cores: i64,
+    pub memory_mb: i64,
+    pub gpu_count: i64,
+}
+
 pub struct WorkspaceInstanceRepository<'a> {
     pub db: &'a DatabaseConnection,
 }
@@ -1207,6 +1452,41 @@ pub struct WorkspaceInstanceRepository<'a> {
 impl<'a> WorkspaceInstanceRepository<'a> {
     pub fn new(db: &'a DatabaseConnection) -> Self {
         Self { db }
+    }
+
+    /// Count active instances with a `-1` (unlimited) frozen snapshot on each
+    /// resource, optionally scoped to an owner and/or a billing group. Used by
+    /// the tightening guards: lowering a group pool (scope = group), a member
+    /// cap (scope = owner + group), or a host cap (scope = none) to a finite
+    /// value is rejected with `409` while such an instance is attributed in
+    /// that scope (spec §7).
+    pub async fn count_active_unlimited_snapshots(
+        &self,
+        owner_id: Option<Uuid>,
+        group_id: Option<Uuid>,
+    ) -> Result<UnlimitedSnapshotCounts, sea_orm::DbErr> {
+        let mut query = workspace_instance::Entity::find()
+            .filter(workspace_instance::Column::Status.is_in(ACTIVE_STATUSES));
+        if let Some(owner_id) = owner_id {
+            query = query.filter(workspace_instance::Column::OwnerId.eq(owner_id));
+        }
+        if let Some(group_id) = group_id {
+            query = query.filter(workspace_instance::Column::OwnerGroupId.eq(group_id));
+        }
+        let rows = query.all(self.db).await?;
+        let mut counts = UnlimitedSnapshotCounts::default();
+        for r in &rows {
+            if r.host_cpu_cores == -1 {
+                counts.cpu_cores += 1;
+            }
+            if r.host_memory_mb == -1 {
+                counts.memory_mb += 1;
+            }
+            if r.host_gpu_count == -1 {
+                counts.gpu_count += 1;
+            }
+        }
+        Ok(counts)
     }
 
     pub async fn launch(
@@ -1394,6 +1674,30 @@ impl<'a> WorkspaceInstanceRepository<'a> {
         let result = workspace_instance::Entity::update(workspace_instance::ActiveModel {
             id: Set(id),
             resolved_volume_host_path: Set(host_path.map(|s| s.to_string())),
+            ..Default::default()
+        })
+        .filter(workspace_instance::Column::Id.eq(id))
+        .exec(self.db)
+        .await;
+        match result {
+            Ok(_) => Ok(true),
+            Err(sea_orm::DbErr::RecordNotFound(_)) | Err(sea_orm::DbErr::RecordNotUpdated) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Set (or clear) the instance's billing group. Used by the restart
+    /// re-attribution of a `NULL`-attributed instance (spec §5): the group is
+    /// resolved from the owner's highest-tier membership and persisted before
+    /// the restart pipeline runs against it.
+    pub async fn set_owner_group_id(
+        &self,
+        id: Uuid,
+        group_id: Option<Uuid>,
+    ) -> Result<bool, sea_orm::DbErr> {
+        let result = workspace_instance::Entity::update(workspace_instance::ActiveModel {
+            id: Set(id),
+            owner_group_id: Set(group_id),
             ..Default::default()
         })
         .filter(workspace_instance::Column::Id.eq(id))
@@ -1733,6 +2037,18 @@ impl<'a> PolicyRepository<'a> {
             .await?;
         let member_group_ids: Vec<Uuid> = memberships.iter().map(|m| m.group_id).collect();
 
+        // Per-membership caps (`0` = blocked, `-1` = unlimited) keyed by group,
+        // so the billing picker can default to the user's highest-cap group.
+        let member_quotas: HashMap<Uuid, (i32, i64, i32)> = memberships
+            .into_iter()
+            .map(|m| {
+                (
+                    m.group_id,
+                    (m.cpu_quota, m.memory_quota, m.gpu_quota),
+                )
+            })
+            .collect();
+
         let groups = group::Entity::find()
             .filter(group::Column::Id.is_in(member_group_ids))
             .order_by_asc(group::Column::Name)
@@ -1774,17 +2090,28 @@ impl<'a> PolicyRepository<'a> {
         };
         let group_policies: Vec<GroupPolicy> = groups
             .into_iter()
-            .map(|g| GroupPolicy {
-                id: g.id,
-                kind: g.kind,
-                max_instances: g.max_instances,
-                can_create_template: g.can_create_template,
-                can_manage_users: g.can_manage_users,
-                can_manage_group_instances: g.can_manage_group_instances,
-                can_manage_docker: g.can_manage_docker,
-                can_manage_registry: g.can_manage_registry,
-                can_view_monitoring: g.can_view_monitoring,
-                can_view_audit_logs: g.can_view_audit_logs,
+            .map(|g| {
+                let member_quota = member_quotas.get(&g.id).copied().unwrap_or((-1, -1, -1));
+                GroupPolicy {
+                    id: g.id,
+                    name: g.name.clone(),
+                    kind: g.kind,
+                    max_instances: g.max_instances,
+                    billing_model: g.billing_model,
+                    pool_cpu_cores: g.pool_cpu_cores as i64,
+                    pool_memory_mb: g.pool_memory_mb,
+                    pool_gpu_count: g.pool_gpu_count as i64,
+                    member_cpu_cores: member_quota.0 as i64,
+                    member_memory_mb: member_quota.1,
+                    member_gpu_count: member_quota.2 as i64,
+                    can_create_template: g.can_create_template,
+                    can_manage_users: g.can_manage_users,
+                    can_manage_group_instances: g.can_manage_group_instances,
+                    can_manage_docker: g.can_manage_docker,
+                    can_manage_registry: g.can_manage_registry,
+                    can_view_monitoring: g.can_view_monitoring,
+                    can_view_audit_logs: g.can_view_audit_logs,
+                }
             })
             .collect();
 

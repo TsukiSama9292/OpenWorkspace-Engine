@@ -97,10 +97,12 @@ describe("template-form", () => {
       expect(state.ramGb).toBe(4);
       expect(state.gpuCount).toBe(0);
       expect(state.remoteType).toBe("kasmvnc");
-      expect(state.maxRunSeconds).toBeNull();
+      expect(state.maxRunSeconds).toBe(-1);
       expect(state.timeoutAction).toBe("remove");
-      expect(state.keepTimeSeconds).toBeNull();
+      expect(state.keepTimeSeconds).toBe(-1);
       expect(state.keepTimeAction).toBe("pause");
+      expect(state.bandwidthUpMbps).toBe(-1);
+      expect(state.bandwidthDownMbps).toBe(-1);
       expect(state.dockerInInstance).toBe(false);
       expect(state.visibility).toBe("private");
       expect(state.envVars).toEqual([{ key: "", value: "" }]);
@@ -190,7 +192,7 @@ describe("template-form", () => {
       );
     });
 
-    it("sends null for empty optional fields and omits empty config sections", async () => {
+    it("sends -1 for disabled limits and omits empty config sections", async () => {
       const mockFetch = vi
         .fn()
         .mockResolvedValue(jsonResponse({ template: { id: "tpl-new" } }));
@@ -215,12 +217,12 @@ describe("template-form", () => {
             exec_config: {},
             volume_mappings: {},
             persistent_storage_path: null,
-            max_run_seconds: null,
+            max_run_seconds: -1,
             timeout_action: "remove",
-            keep_time_seconds: null,
+            keep_time_seconds: -1,
             keep_time_action: "pause",
-            network_bandwidth_up_mbps: 0,
-            network_bandwidth_down_mbps: 0,
+            network_bandwidth_up_mbps: -1,
+            network_bandwidth_down_mbps: -1,
             docker_in_instance: false,
             visibility: "private",
           }),
@@ -255,22 +257,41 @@ describe("template-form", () => {
       expect(result).toEqual({ error: "Bad image" });
     });
 
-    it("rejects a negative upload bandwidth without calling the API", async () => {
-      const mockFetch = vi.fn();
+    it("accepts -1 (unlimited) bandwidth and sends it through", async () => {
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValue(jsonResponse({ template: { id: "tpl-new" } }));
       vi.stubGlobal("fetch", mockFetch);
 
       const result = await submitTemplate({
         ...createInitialFormState(),
         name: "X",
         bandwidthUpMbps: -1,
+        bandwidthDownMbps: -1,
+      });
+
+      expect(result).toEqual({ id: "tpl-new" });
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+      expect(body.network_bandwidth_up_mbps).toBe(-1);
+      expect(body.network_bandwidth_down_mbps).toBe(-1);
+    });
+
+    it("rejects a below-(-1) upload bandwidth without calling the API", async () => {
+      const mockFetch = vi.fn();
+      vi.stubGlobal("fetch", mockFetch);
+
+      const result = await submitTemplate({
+        ...createInitialFormState(),
+        name: "X",
+        bandwidthUpMbps: -5,
       });
       expect(result).toEqual({
-        error: "Upload bandwidth must be >= 0 (0 = unlimited)",
+        error: "Upload bandwidth must be >= -1 (-1 = unlimited)",
       });
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    it("rejects a negative download bandwidth without calling the API", async () => {
+    it("rejects a below-(-1) download bandwidth without calling the API", async () => {
       const mockFetch = vi.fn();
       vi.stubGlobal("fetch", mockFetch);
 
@@ -280,12 +301,12 @@ describe("template-form", () => {
         bandwidthDownMbps: -5,
       });
       expect(result).toEqual({
-        error: "Download bandwidth must be >= 0 (0 = unlimited)",
+        error: "Download bandwidth must be >= -1 (-1 = unlimited)",
       });
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    it("sends null keep-time and the pause action when keep-time is disabled", async () => {
+    it("sends -1 keep-time and the pause action when keep-time is disabled", async () => {
       const mockFetch = vi
         .fn()
         .mockResolvedValue(jsonResponse({ template: { id: "tpl-new" } }));
@@ -294,7 +315,7 @@ describe("template-form", () => {
       await submitTemplate({ ...createInitialFormState(), name: "X" });
 
       const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
-      expect(body.keep_time_seconds).toBeNull();
+      expect(body.keep_time_seconds).toBe(-1);
       expect(body.keep_time_action).toBe("pause");
     });
 
@@ -402,22 +423,22 @@ describe("template-form", () => {
     it("maps auto-sleep fields, defaulting a missing duration to off", () => {
       const state = formStateFromTemplate({
         ...template,
-        max_run_seconds: null,
+        max_run_seconds: -1,
         timeout_action: "remove",
       });
-      expect(state.maxRunSeconds).toBeNull();
+      expect(state.maxRunSeconds).toBe(-1);
       expect(state.timeoutAction).toBe("remove");
     });
 
-    it("defaults missing bandwidth fields to zero", () => {
+    it("defaults missing bandwidth fields to unlimited (-1)", () => {
       const {
         network_bandwidth_up_mbps: _up,
         network_bandwidth_down_mbps: _down,
         ...rest
       } = template;
       const state = formStateFromTemplate(rest as Template);
-      expect(state.bandwidthUpMbps).toBe(0);
-      expect(state.bandwidthDownMbps).toBe(0);
+      expect(state.bandwidthUpMbps).toBe(-1);
+      expect(state.bandwidthDownMbps).toBe(-1);
     });
 
     it("defaults a missing docker_in_instance to off", () => {
@@ -447,10 +468,10 @@ describe("template-form", () => {
     it("maps a missing keep-time duration to off with the pause default", () => {
       const state = formStateFromTemplate({
         ...template,
-        keep_time_seconds: null,
+        keep_time_seconds: -1,
         keep_time_action: "pause",
       });
-      expect(state.keepTimeSeconds).toBeNull();
+      expect(state.keepTimeSeconds).toBe(-1);
       expect(state.keepTimeAction).toBe("pause");
     });
   });
@@ -551,7 +572,7 @@ describe("template-form", () => {
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    it("rejects a negative upload bandwidth without calling the API", async () => {
+    it("rejects a below-(-1) upload bandwidth without calling the API", async () => {
       const mockFetch = vi.fn();
       vi.stubGlobal("fetch", mockFetch);
 
@@ -561,7 +582,7 @@ describe("template-form", () => {
         bandwidthUpMbps: -3,
       });
       expect(result).toEqual({
-        error: "Upload bandwidth must be >= 0 (0 = unlimited)",
+        error: "Upload bandwidth must be >= -1 (-1 = unlimited)",
       });
       expect(mockFetch).not.toHaveBeenCalled();
     });

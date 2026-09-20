@@ -23,6 +23,7 @@
           "group.update",
           "group.delete",
           "group.membership_change",
+          "group.quota_change",
           "user.create",
           "user.update",
           "user.delete",
@@ -211,9 +212,16 @@
             ]
           },
           "effective_max_instances": {
-            "description": "`0` means \"no ceiling\" (matches the `host_instance_limit = 0`\nconvention). Non-zero values are exact per-user limits. Resolved as the\n*maximum* of the personal ceiling and every group ceiling, where 0/NULL\n= unlimited is the highest (spec Decision 4).",
+            "description": "`-1` means \"no ceiling\" (matches the `host_instance_limit = -1`\nconvention); `0` blocks every launch; positive values are exact per-user\nlimits. Resolved as the *maximum* of the personal ceiling and every\ngroup ceiling, where `-1`/NULL = unlimited is the highest (spec\nDecision 4).",
             "format": "int32",
             "type": "integer"
+          },
+          "group_billing": {
+            "description": "The resource pools and billing model of every group the user belongs to,\nso the launch form can offer a billing target and show its pool. Read\ndirectly from the group rows; informational only.",
+            "items": {
+              "$ref": "#/components/schemas/GroupBilling"
+            },
+            "type": "array"
           },
           "group_ids": {
             "items": {
@@ -225,6 +233,10 @@
           "is_admin": {
             "description": "Root: derived from Admin-group membership, never stored (spec Decision\n4). Replaces the dropped `is_system_admin` column.",
             "type": "boolean"
+          },
+          "resource_quotas": {
+            "$ref": "#/components/schemas/ResourceUse",
+            "description": "The aggregate resource pool across the user's member groups (`-1` =\nunlimited, and an unlimited pool wins over every finite one). Reporting\nonly — the launch check uses the pool of the *chosen* billing group."
           },
           "tier": {
             "description": "The maximum tier across the user's group memberships (0/1/2).",
@@ -253,7 +265,69 @@
           "can_view_audit_logs",
           "effective_max_instances",
           "allowed_template_ids",
-          "group_ids"
+          "group_ids",
+          "group_billing",
+          "resource_quotas"
+        ],
+        "type": "object"
+      },
+      "GroupBilling": {
+        "description": "The resource pool a group offers its members, as serialized on\n`EffectiveContext.group_billing`. Carries the group's display name and\ntier plus the user's own per-membership cap so the launch form can offer a\nbilling target, show its pool, and default to the highest-cap membership.",
+        "properties": {
+          "billing_model": {
+            "description": "`shared` | `dedicated`.",
+            "type": "string"
+          },
+          "group_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "group_name": {
+            "type": "string"
+          },
+          "member_cpu_cores": {
+            "description": "The user's own per-member cap inside this group (`-1` = unlimited,\n`0` = blocked), so the picker can default to the highest-cap\nmembership. Mirrors the member layer of the quota pre-flight.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "member_gpu_count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "member_memory_mb": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "pool_cpu_cores": {
+            "description": "`-1` means \"unlimited\".",
+            "format": "int64",
+            "type": "integer"
+          },
+          "pool_gpu_count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "pool_memory_mb": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "tier": {
+            "description": "Derived from the group kind (Admin=2, Manager=1, else 0); used only for\npicker tie-breaks.",
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "group_id",
+          "group_name",
+          "tier",
+          "billing_model",
+          "pool_cpu_cores",
+          "pool_memory_mb",
+          "pool_gpu_count",
+          "member_cpu_cores",
+          "member_memory_mb",
+          "member_gpu_count"
         ],
         "type": "object"
       },
@@ -271,8 +345,47 @@
         ],
         "type": "object"
       },
+      "GroupMemberSchema": {
+        "properties": {
+          "cpu_quota": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "gpu_quota": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "memory_quota": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "tier": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "user_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "username",
+          "tier",
+          "cpu_quota",
+          "memory_quota",
+          "gpu_quota"
+        ],
+        "type": "object"
+      },
       "GroupSchema": {
         "properties": {
+          "billing_model": {
+            "type": "string"
+          },
           "can_create_template": {
             "type": "boolean"
           },
@@ -317,8 +430,27 @@
               "null"
             ]
           },
+          "members": {
+            "description": "Each member's per-membership resource cap, plus username/tier so the\nlayered Groups tab renders without extra round-trips.",
+            "items": {
+              "$ref": "#/components/schemas/GroupMemberSchema"
+            },
+            "type": "array"
+          },
           "name": {
             "type": "string"
+          },
+          "pool_cpu_cores": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "pool_gpu_count": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "pool_memory_mb": {
+            "format": "int64",
+            "type": "integer"
           },
           "template_ids": {
             "items": {
@@ -338,7 +470,12 @@
           "can_manage_registry",
           "can_view_monitoring",
           "can_view_audit_logs",
-          "template_ids"
+          "billing_model",
+          "pool_cpu_cores",
+          "pool_memory_mb",
+          "pool_gpu_count",
+          "template_ids",
+          "members"
         ],
         "type": "object"
       },
@@ -393,6 +530,7 @@
               "null"
             ]
           },
+          "billing_group_snapshot": {},
           "container_id": {
             "type": [
               "string",
@@ -402,6 +540,18 @@
           "created_at": {
             "format": "date-time",
             "type": "string"
+          },
+          "host_cpu_cores": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "host_gpu_count": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "host_memory_mb": {
+            "format": "int64",
+            "type": "integer"
           },
           "host_port": {
             "format": "int32",
@@ -433,10 +583,7 @@
           },
           "keep_time_seconds": {
             "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
+            "type": "integer"
           },
           "mount_persistent": {
             "type": "boolean"
@@ -446,6 +593,13 @@
           },
           "network_name": {
             "type": "string"
+          },
+          "owner_group_id": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "owner_group_ids": {
             "items": {
@@ -522,6 +676,10 @@
           "access_token",
           "access_password",
           "mount_persistent",
+          "keep_time_seconds",
+          "host_cpu_cores",
+          "host_memory_mb",
+          "host_gpu_count",
           "created_at",
           "updated_at"
         ],
@@ -568,6 +726,29 @@
         },
         "type": "object"
       },
+      "ResourceUse": {
+        "description": "A snapshot of resource usage and its caps at a point in time. `-1` always\nmeans \"unlimited\" for caps; `0` is a real zero (a blocked cap for quota\nfields, a zero-cost request for template resources).",
+        "properties": {
+          "cpu_cores": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "gpu_count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "memory_mb": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cpu_cores",
+          "memory_mb",
+          "gpu_count"
+        ],
+        "type": "object"
+      },
       "SettingsEnvelope": {
         "properties": {
           "settings": {
@@ -580,15 +761,30 @@
         "type": "object"
       },
       "SystemSettings": {
-        "description": "The single global-policy knob exposed by the admin settings API: the host\ninstance ceiling (`0` = unlimited). The host-capacity / shared-fuse fields\nwere dropped with the old quota pipeline.",
+        "description": "The single global-policy knob set exposed by the admin settings API: the\nhost instance ceiling (`-1` = unlimited, `0` = blocked) plus the host-wide\nresource ceilings.",
         "properties": {
+          "host_cpu_cores": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "host_gpu_count": {
+            "format": "int32",
+            "type": "integer"
+          },
           "host_instance_limit": {
             "format": "int32",
+            "type": "integer"
+          },
+          "host_memory_mb": {
+            "format": "int64",
             "type": "integer"
           }
         },
         "required": [
-          "host_instance_limit"
+          "host_instance_limit",
+          "host_cpu_cores",
+          "host_memory_mb",
+          "host_gpu_count"
         ],
         "type": "object"
       },
@@ -666,17 +862,11 @@
           },
           "keep_time_seconds": {
             "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
+            "type": "integer"
           },
           "max_run_seconds": {
             "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
+            "type": "integer"
           },
           "memory": {
             "format": "int64",
@@ -732,7 +922,9 @@
           "run_config",
           "exec_config",
           "volume_mappings",
+          "max_run_seconds",
           "timeout_action",
+          "keep_time_seconds",
           "keep_time_action",
           "network_bandwidth_up_mbps",
           "network_bandwidth_down_mbps",
@@ -1224,6 +1416,9 @@
         "responses": {
           "200": {
             "description": "text/event-stream of container output; a terminal `end` event carries the stop reason (stopped | paused | deleted | eof)"
+          },
+          "400": {
+            "description": "malformed query string (tail not an integer, follow not true/false, or invalid uuid)"
           },
           "401": {
             "description": "missing or invalid ow_token"

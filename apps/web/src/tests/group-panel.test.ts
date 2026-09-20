@@ -49,9 +49,9 @@ function template(overrides: Partial<Template> = {}): Template {
     remote_type: 'kasmvnc',
     persistent_storage_path: '',
     container_runtime: 'runc',
-    max_run_seconds: null,
+    max_run_seconds: -1,
     timeout_action: 'remove',
-    keep_time_seconds: null,
+    keep_time_seconds: -1,
     keep_time_action: 'pause',
     network_bandwidth_up_mbps: 0,
     network_bandwidth_down_mbps: 0,
@@ -87,7 +87,7 @@ describe('GroupPanel', () => {
     vi.clearAllMocks();
   });
 
-  it('hides group policy entirely from a non-admin', async () => {
+  it('hides group policy entirely from a user without can_manage_users', async () => {
     render(GroupPanel, { props: { ctx: context(), templates: [template()] } });
 
     await waitFor(() => {
@@ -98,15 +98,21 @@ describe('GroupPanel', () => {
     expect(mockApi.get).not.toHaveBeenCalled();
   });
 
-  it('renders a hidden group panel for a can_manage_users holder who is not an admin', async () => {
+  it('shows the panel for a can_manage_users holder who is not an admin, without group-structure actions', async () => {
+    mockApi.get.mockResolvedValue({ data: { groups: [group] } });
+
     render(GroupPanel, {
       props: { ctx: context({ can_manage_users: true }), templates: [template()] }
     });
 
     await waitFor(() => {
-      expect(screen.queryByText('Group Management')).toBeNull();
-      expect(screen.queryByText('+ New Group')).toBeNull();
+      expect(screen.getByText('Group Management')).toBeTruthy();
+      expect(screen.getByText('Managers')).toBeTruthy();
     });
+    expect(screen.queryByText('+ New Group')).toBeNull();
+    expect(screen.queryByText('Edit')).toBeNull();
+    expect(screen.queryByText('Delete')).toBeNull();
+    expect(mockApi.get).toHaveBeenCalledWith('/groups');
   });
 
   it('lists groups for an admin', async () => {
@@ -147,8 +153,23 @@ describe('GroupPanel', () => {
     await fireEvent.click(screen.getByTestId('group-template-t1'));
     await fireEvent.click(screen.getByTestId('group-template-t2'));
 
-    const maxInput = screen.getByLabelText(/Max Instances/) as HTMLInputElement;
+    const maxMode = screen.getByLabelText('Max Instances mode') as HTMLSelectElement;
+    await fireEvent.change(maxMode, { target: { value: 'custom' } });
+    const maxInput = screen.getByLabelText('Max Instances value') as HTMLInputElement;
     await fireEvent.input(maxInput, { target: { value: '5' } });
+
+    const billingSelect = screen.getByLabelText('Billing model') as HTMLSelectElement;
+    await fireEvent.change(billingSelect, { target: { value: 'dedicated' } });
+
+    const cpuMode = screen.getByLabelText('Pool CPU (cores) mode') as HTMLSelectElement;
+    await fireEvent.change(cpuMode, { target: { value: 'custom' } });
+    const cpuValue = screen.getByLabelText('Pool CPU (cores) value') as HTMLInputElement;
+    await fireEvent.input(cpuValue, { target: { value: '8' } });
+
+    const memMode = screen.getByLabelText('Pool Memory (GB) mode') as HTMLSelectElement;
+    await fireEvent.change(memMode, { target: { value: 'custom' } });
+    const memValue = screen.getByLabelText('Pool Memory (GB) value') as HTMLInputElement;
+    await fireEvent.input(memValue, { target: { value: '16' } });
 
     await fireEvent.click(screen.getByText('Create Group'));
 
@@ -167,6 +188,11 @@ describe('GroupPanel', () => {
         can_view_monitoring: false,
         can_view_audit_logs: false,
         max_instances: 5,
+        billing_model: 'dedicated',
+        pool_cpu_cores: 8,
+        pool_memory_mb: 16384,
+        // Untouched GPU tri-state submits the blocked default (spec Story 16).
+        pool_gpu_count: 0,
         template_ids: ['t1', 't2']
       });
     });
@@ -268,5 +294,132 @@ describe('GroupPanel', () => {
       expect(screen.getByText('Managers')).toBeTruthy();
       expect(screen.queryByText('Devs')).toBeNull();
     });
+  });
+
+  it('edits a member quota and sends the tri-state values to the quota endpoint', async () => {
+    const withMembers: Group = {
+      ...group,
+      members: [{ user_id: 'u1', username: 'alice', tier: 0, cpu_quota: -1, memory_quota: -1, gpu_quota: -1 }]
+    };
+    mockApi.get.mockResolvedValue({ data: { groups: [withMembers] } });
+    mockApi.put.mockResolvedValue({ data: null });
+
+    render(GroupPanel, { props: { ctx: context({ is_admin: true, tier: 2 }), templates: [template()] } });
+
+    await waitFor(() => {
+      expect(screen.getByText('1 member')).toBeTruthy();
+    });
+
+    await fireEvent.click(screen.getByText('1 member'));
+    await fireEvent.click(screen.getByText('Edit quotas'));
+    await waitFor(() => {
+      expect(screen.getByText(/Edit quotas — alice/)).toBeTruthy();
+    });
+
+    const cpuMode = screen.getByLabelText('CPU Quota (cores) mode') as HTMLSelectElement;
+    await fireEvent.change(cpuMode, { target: { value: 'custom' } });
+    const cpuValue = screen.getByLabelText('CPU Quota (cores) value') as HTMLInputElement;
+    await fireEvent.input(cpuValue, { target: { value: '4' } });
+
+    const memMode = screen.getByLabelText('Memory Quota (GB) mode') as HTMLSelectElement;
+    await fireEvent.change(memMode, { target: { value: 'disabled' } });
+
+    await fireEvent.click(screen.getByText('Save Quotas'));
+
+    await waitFor(() => {
+      expect(mockApi.put).toHaveBeenCalledWith('/groups/g1/members/u1/quota', {
+        cpu_quota: 4,
+        memory_quota: 0,
+        gpu_quota: -1
+      });
+    });
+  });
+
+  it('resets every member quota to zero after confirmation', async () => {
+    const withMembers: Group = {
+      ...group,
+      members: [
+        { user_id: 'u1', username: 'alice', tier: 0, cpu_quota: -1, memory_quota: 4096, gpu_quota: 0 },
+        { user_id: 'u2', username: 'bob', tier: 0, cpu_quota: 4, memory_quota: -1, gpu_quota: 1 }
+      ]
+    };
+    mockApi.get.mockResolvedValue({ data: { groups: [withMembers] } });
+    mockApi.put.mockResolvedValue({ data: null });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    render(GroupPanel, { props: { ctx: context({ is_admin: true, tier: 2 }), templates: [template()] } });
+
+    await waitFor(() => {
+      expect(screen.getByText('2 members')).toBeTruthy();
+    });
+
+    await fireEvent.click(screen.getByText('2 members'));
+    await fireEvent.click(screen.getByText('Reset all quotas to 0'));
+
+    await waitFor(() => {
+      expect(mockApi.put).toHaveBeenCalledWith('/groups/g1/members/u1/quota', {
+        cpu_quota: 0,
+        memory_quota: 0,
+        gpu_quota: 0
+      });
+      expect(mockApi.put).toHaveBeenCalledWith('/groups/g1/members/u2/quota', {
+        cpu_quota: 0,
+        memory_quota: 0,
+        gpu_quota: 0
+      });
+    });
+    expect(window.confirm).toHaveBeenCalled();
+  });
+
+  it('shows Edit quotas to a manager only for strictly lower-tier members', async () => {
+    const withMembers: Group = {
+      ...group,
+      members: [
+        { user_id: 'u1', username: 'alice', tier: 0, cpu_quota: -1, memory_quota: -1, gpu_quota: -1 },
+        { user_id: 'u2', username: 'mallory', tier: 1, cpu_quota: -1, memory_quota: -1, gpu_quota: -1 }
+      ]
+    };
+    mockApi.get.mockResolvedValue({ data: { groups: [withMembers] } });
+
+    render(GroupPanel, {
+      props: { ctx: context({ can_manage_users: true, tier: 1 }), templates: [template()] }
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('2 members')).toBeTruthy();
+    });
+
+    await fireEvent.click(screen.getByText('2 members'));
+
+    await waitFor(() => {
+      expect(screen.getByText('alice')).toBeTruthy();
+      expect(screen.getByText('mallory')).toBeTruthy();
+    });
+    // One Edit quotas button (alice, tier 0); the same-tier member gets none.
+    expect(screen.getAllByText('Edit quotas')).toHaveLength(1);
+  });
+
+  it('hides Edit quotas inside a same-tier group even for an outranking member tier', async () => {
+    const managerGroup: Group = {
+      ...group,
+      kind: 'manager',
+      members: [{ user_id: 'u1', username: 'alice', tier: 0, cpu_quota: -1, memory_quota: -1, gpu_quota: -1 }]
+    };
+    mockApi.get.mockResolvedValue({ data: { groups: [managerGroup] } });
+
+    render(GroupPanel, {
+      props: { ctx: context({ can_manage_users: true, tier: 1 }), templates: [template()] }
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('1 member')).toBeTruthy();
+    });
+
+    await fireEvent.click(screen.getByText('1 member'));
+
+    await waitFor(() => {
+      expect(screen.getByText('alice')).toBeTruthy();
+    });
+    expect(screen.queryByText('Edit quotas')).toBeNull();
   });
 });

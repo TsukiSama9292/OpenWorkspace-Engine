@@ -135,9 +135,10 @@ pub async fn check_auto_sleep(
             }
         };
 
-        let Some(max_run_seconds) = template.max_run_seconds else {
+        let max_run_seconds = template.max_run_seconds;
+        if max_run_seconds <= 0 {
             continue;
-        };
+        }
         let Some(started_at) = instance.started_at else {
             continue;
         };
@@ -210,9 +211,10 @@ pub async fn check_keep_time(
             }
         };
 
-        let Some(keep_time_seconds) = template.keep_time_seconds else {
+        let keep_time_seconds = template.keep_time_seconds;
+        if keep_time_seconds <= 0 {
             continue;
-        };
+        }
         let Some(last_seen_at) = instance.last_seen_at else {
             continue;
         };

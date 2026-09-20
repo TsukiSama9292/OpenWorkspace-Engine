@@ -221,6 +221,9 @@ impl MonitorContext {
         user_group::ActiveModel {
             user_id: Set(user_id.parse().unwrap()),
             group_id: Set(group_id.parse().unwrap()),
+            cpu_quota: Set(-1),
+            memory_quota: Set(-1),
+            gpu_quota: Set(-1),
         }
         .insert(&self.db)
         .await
@@ -251,11 +254,11 @@ impl MonitorContext {
             remote_type: Set("kasmvnc".to_string()),
             container_runtime: Set("runc".to_string()),
             persistent_storage_path: Set(None),
-            max_run_seconds: Set(None),
+            max_run_seconds: Set(-1),
             timeout_action: Set("stop".to_string()),
             network_bandwidth_up_mbps: Set(0),
             network_bandwidth_down_mbps: Set(0),
-            keep_time_seconds: Set(None),
+            keep_time_seconds: Set(-1),
             keep_time_action: Set("stop".to_string()),
             docker_in_instance: Set(false),
             visibility: Set("public".to_string()),
@@ -282,6 +285,11 @@ impl MonitorContext {
             host_port: Set(Some(15000)),
             started_at: Set(Some(now)),
             last_seen_at: Set(None),
+            owner_group_id: Set(None),
+            billing_group_snapshot: Set(None),
+            host_cpu_cores: Set(2),
+            host_memory_mb: Set(4096),
+            host_gpu_count: Set(0),
             created_at: Set(now),
             updated_at: Set(now),
         }

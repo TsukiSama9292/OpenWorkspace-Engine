@@ -8,9 +8,9 @@ const baseProps = {
   gpuCount: 0,
   dockerRegistry: '',
   persistentStoragePath: '',
-  maxRunSeconds: null,
+  maxRunSeconds: -1,
   timeoutAction: 'remove' as const,
-  keepTimeSeconds: null,
+  keepTimeSeconds: -1,
   keepTimeAction: 'pause' as const,
 };
 

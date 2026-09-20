@@ -52,24 +52,24 @@ fn resolve_runtime(container_runtime: &str, settings_runtime: &str) -> String {
     }
 }
 
-fn auto_sleep_deadline(inst: &WorkspaceInstance, max_run_seconds: Option<i64>) -> Option<DateTime<Utc>> {
+fn auto_sleep_deadline(inst: &WorkspaceInstance, max_run_seconds: i64) -> Option<DateTime<Utc>> {
     if inst.status != "running" {
         return None;
     }
-    match (inst.started_at, max_run_seconds) {
-        (Some(started_at), Some(max_run_seconds)) => {
+    match inst.started_at {
+        Some(started_at) if max_run_seconds > 0 => {
             Some(started_at + chrono::Duration::seconds(max_run_seconds))
         }
         _ => None,
     }
 }
 
-fn keep_time_deadline(inst: &WorkspaceInstance, keep_time_seconds: Option<i64>) -> Option<DateTime<Utc>> {
+fn keep_time_deadline(inst: &WorkspaceInstance, keep_time_seconds: i64) -> Option<DateTime<Utc>> {
     if inst.status != "running" {
         return None;
     }
-    match (inst.last_seen_at, keep_time_seconds) {
-        (Some(last_seen_at), Some(keep_time_seconds)) => {
+    match inst.last_seen_at {
+        Some(last_seen_at) if keep_time_seconds > 0 => {
             Some(last_seen_at + chrono::Duration::seconds(keep_time_seconds))
         }
         _ => None,
@@ -83,9 +83,9 @@ fn instance_to_json(
     owner_username: Option<&str>,
     owner_group_ids: &[Uuid],
     owner_tier: i32,
-    max_run_seconds: Option<i64>,
+    max_run_seconds: i64,
     timeout_action: Option<&str>,
-    keep_time_seconds: Option<i64>,
+    keep_time_seconds: i64,
     keep_time_action: Option<&str>,
 ) -> serde_json::Value {
     serde_json::json!({
@@ -112,7 +112,12 @@ fn instance_to_json(
         "timeout_action": timeout_action,
         "keep_time_deadline": keep_time_deadline(inst, keep_time_seconds),
         "keep_time_seconds": keep_time_seconds,
-        "keep_time_action": if keep_time_seconds.is_some() { keep_time_action } else { None },
+        "keep_time_action": if keep_time_seconds > 0 { keep_time_action } else { None },
+        "owner_group_id": inst.owner_group_id,
+        "billing_group_snapshot": inst.billing_group_snapshot,
+        "host_cpu_cores": inst.host_cpu_cores,
+        "host_memory_mb": inst.host_memory_mb,
+        "host_gpu_count": inst.host_gpu_count,
         "created_at": inst.created_at,
         "updated_at": inst.updated_at,
     })
@@ -350,6 +355,7 @@ fn instance_logs_stream(
     ),
     responses(
         (status = 200, description = "text/event-stream of container output; a terminal `end` event carries the stop reason (stopped | paused | deleted | eof)"),
+        (status = 400, description = "malformed query string (tail not an integer, follow not true/false, or invalid uuid)"),
         (status = 401, description = "missing or invalid ow_token"),
         (status = 403, description = "requires mayControlInstance (owner, admin, or lower-tier group-instance holder)"),
         (status = 404, description = "instance not found"),
@@ -450,6 +456,10 @@ struct LaunchInstanceRequest {
     template_id: Uuid,
     persistence: Option<PersistenceMode>,
     mount_persistent: Option<bool>,
+    /// The group the instance bills its resources against. `None` (default) is
+    /// self-billing (unlimited resources). When set, must be one of the
+    /// caller's own member groups.
+    owner_group_id: Option<Uuid>,
 }
 
 #[utoipa::path(
@@ -561,9 +571,9 @@ pub(crate) async fn list_instances(
         .map(|inst| {
             let template_name = template_names.get(&inst.template_id).map(|s| s.as_str());
             let remote_type = template_remote_types.get(&inst.template_id).map(|s| s.as_str());
-            let max_run_seconds = template_max_run_seconds.get(&inst.template_id).copied().flatten();
+            let max_run_seconds = template_max_run_seconds.get(&inst.template_id).copied().unwrap_or(-1);
             let timeout_action = template_timeout_actions.get(&inst.template_id).map(|s| s.as_str());
-            let keep_time_seconds = template_keep_time_seconds.get(&inst.template_id).copied().flatten();
+            let keep_time_seconds = template_keep_time_seconds.get(&inst.template_id).copied().unwrap_or(-1);
             let keep_time_action = template_keep_time_actions.get(&inst.template_id).map(|s| s.as_str());
             let owner_username = owner_usernames.get(&inst.owner_id).map(|s| s.as_str());
             let owner_groups = owner_group_ids.get(&inst.owner_id).map(Vec::as_slice).unwrap_or(&[]);
@@ -664,19 +674,82 @@ fn preflight_rejection_json(reject: &PreflightReject) -> serde_json::Value {
                 "requested": 1,
             },
         }),
+        PreflightReject::HostResourceExceeded {
+            resource,
+            current,
+            limit,
+            requested,
+        } => serde_json::json!({
+            "error": format!(
+                "Host {} cap reached (used: {}, cap: {})",
+                resource.as_str(),
+                current,
+                limit
+            ),
+            "rejection": {
+                "scope": format!("host_resource_{}", resource.as_str()),
+                "current": current,
+                "limit": limit,
+                "requested": requested,
+            },
+        }),
+        PreflightReject::PoolResourceExceeded {
+            resource,
+            current,
+            limit,
+            requested,
+            group_id,
+        } => serde_json::json!({
+            "error": format!(
+                "Group {} pool cap reached (used: {}, cap: {})",
+                resource.as_str(),
+                current,
+                limit
+            ),
+            "rejection": {
+                "scope": format!("group_pool_{}", resource.as_str()),
+                "current": current,
+                "limit": limit,
+                "requested": requested,
+                "group_id": group_id,
+            },
+        }),
+        PreflightReject::MemberResourceExceeded {
+            resource,
+            current,
+            limit,
+            requested,
+            group_id,
+        } => serde_json::json!({
+            "error": format!(
+                "Personal {} quota reached in group (used: {}, quota: {})",
+                resource.as_str(),
+                current,
+                limit
+            ),
+            "rejection": {
+                "scope": format!("member_quota_{}", resource.as_str()),
+                "current": current,
+                "limit": limit,
+                "requested": requested,
+                "group_id": group_id,
+            },
+        }),
     }
 }
 
 /// HTTP status for a pre-flight rejection: whitelist failures are `403`
-/// (permission), both ceilings are `409` (conflict).
+/// (permission); the ceilings and resource caps are all `409` (conflict).
 fn reject_status(reject: &PreflightReject) -> StatusCode {
     match reject {
         PreflightReject::TemplateNotAllowed { .. } | PreflightReject::TemplateHidden { .. } => {
             StatusCode::FORBIDDEN
         }
-        PreflightReject::InstanceCeilingExceeded { .. } | PreflightReject::HostCeilingExceeded { .. } => {
-            StatusCode::CONFLICT
-        }
+        PreflightReject::InstanceCeilingExceeded { .. }
+        | PreflightReject::HostCeilingExceeded { .. }
+        | PreflightReject::HostResourceExceeded { .. }
+        | PreflightReject::PoolResourceExceeded { .. }
+        | PreflightReject::MemberResourceExceeded { .. } => StatusCode::CONFLICT,
     }
 }
 
@@ -759,6 +832,41 @@ async fn launch_instance(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": "Failed to launch instance"})),
         ))?;
+    // Resolve the billing group (spec User Story 5/6/7 and Decision on the
+    // launch request): a named group must be one of the caller's own member
+    // groups (403 otherwise); an omitted group auto-attributes when the caller
+    // is in exactly one group, asks for an explicit choice with `400` when
+    // they are in several, and is rejected `403` when they are in none.
+    let billing_group_id = match input.owner_group_id {
+        Some(group_id) => {
+            if !context.group_ids.contains(&group_id) {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({"error": "Billing group is not one of your groups"})),
+                ));
+            }
+            Some(group_id)
+        }
+        None => match context.group_ids.as_slice() {
+            [] => {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({
+                        "error": "You belong to no billing group"
+                    })),
+                ));
+            }
+            [only] => Some(*only),
+            _ => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": "You belong to several groups; choose a billing group"
+                    })),
+                ));
+            }
+        },
+    };
     let activation_request = ActivationRequest {
         kind: ActivationKind::Launch(LaunchPayload {
             mount_persistent: mount,
@@ -766,6 +874,7 @@ async fn launch_instance(
         }),
         template: &template,
         user_id: auth.user_id,
+        owner_group_id: billing_group_id,
         context: &context,
     };
     let reservation = match crate::activation::activate(&state.db, &activation_request).await {
@@ -1064,9 +1173,9 @@ pub(crate) async fn get_instance(
 
     let template_name = template.as_ref().map(|t| t.name.clone());
     let remote_type = template.as_ref().map(|t| t.remote_type.clone());
-    let max_run_seconds = template.as_ref().and_then(|t| t.max_run_seconds);
+    let max_run_seconds = template.as_ref().map(|t| t.max_run_seconds).unwrap_or(-1);
     let timeout_action = template.as_ref().map(|t| t.timeout_action.clone());
-    let keep_time_seconds = template.as_ref().and_then(|t| t.keep_time_seconds);
+    let keep_time_seconds = template.as_ref().map(|t| t.keep_time_seconds).unwrap_or(-1);
     let keep_time_action = template.as_ref().map(|t| t.keep_time_action.clone());
 
     let owner = user_repo.find_by_id(instance.owner_id).await.ok().flatten();
@@ -1211,6 +1320,59 @@ async fn start_instance(
         ));
     }
 
+    // Re-attribution of a `NULL`-attributed instance (spec Decision 5): an
+    // instance whose billing group was cleared (group deleted after its
+    // instances stopped, or a legacy backfill) is re-attributed to the owner's
+    // highest-tier membership *before* the pre-flight, so the restart bills
+    // against a real group. With no membership the restart is rejected — the
+    // instance has no billing target at all.
+    if instance.owner_group_id.is_none() {
+        let resolved = UserRepository::new(&state.db)
+            .highest_tier_membership(instance.owner_id)
+            .await
+            .map_err(|e| {
+                tracing::error!(
+                    "Failed to resolve billing group for instance {}: {}",
+                    instance.id,
+                    e
+                );
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Internal error"})),
+                )
+            })?;
+        match resolved {
+            Some(group_id) => {
+                WorkspaceInstanceRepository::new(&state.db)
+                    .set_owner_group_id(instance.id, Some(group_id))
+                    .await
+                    .map_err(|e| {
+                        tracing::error!(
+                            "Failed to persist billing group for instance {}: {}",
+                            instance.id,
+                            e
+                        );
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({"error": "Internal error"})),
+                        )
+                    })?;
+                instance.owner_group_id = Some(group_id);
+                tracing::info!(
+                    "Re-attributed instance {} to billing group {}",
+                    instance.id,
+                    group_id
+                );
+            }
+            None => {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({"error": "You belong to no billing group"})),
+                ));
+            }
+        }
+    }
+
     // Re-run the quota pre-flight: a restart re-consumes the quota the
     // instance released while `stopped` (spec Decision 1), so it is gated
     // exactly like a launch. A rejection returns a structured `409` and leaves
@@ -1253,6 +1415,10 @@ async fn start_instance(
         // The restarted instance consumes quota from its owner, not from the
         // acting user (an Admin/Manager may be managing someone else's).
         user_id: instance.owner_id,
+        // A restart re-bills against the same target the launch chose: the
+        // stored billing group, or self-billing when the instance launched with
+        // none.
+        owner_group_id: instance.owner_group_id,
         context: &owner_context,
     };
     if let Err(e) = crate::activation::activate(&state.db, &activation_request).await {

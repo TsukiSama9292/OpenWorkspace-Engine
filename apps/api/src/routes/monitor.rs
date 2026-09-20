@@ -96,11 +96,11 @@ pub(crate) async fn snapshot(
                 "cpu_percent": snap.map(|s| s.cpu_percent).unwrap_or(0.0),
                 // The CPU ceiling is the template's core count, expressed in
                 // the same per-core-% unit Docker reports (200% = 2 cores);
-                // 0 means "unlimited" (the container can use the whole host).
+                // `-1`/`0` means "unlimited" (the container can use the whole host).
                 "cpu_limit_percent": if tpl_cores > 0 { tpl_cores as f64 * 100.0 } else { 0.0 },
                 "mem_used_bytes": snap.map(|s| s.mem_used_bytes).unwrap_or(0),
                 // The rendered memory limit is the template's configured cap in
-                // bytes; 0 means "unlimited" (the container's cgroup reports the
+                // bytes; `-1`/`0` means "unlimited" (the container's cgroup reports the
                 // host RAM as its limit, which would be misleading as a "max").
                 "mem_limit_bytes": if tpl_memory > 0 { tpl_memory as u64 } else { 0 },
                 "cpu_fine": snap.map(|s| s.cpu_fine.clone()).unwrap_or_default(),

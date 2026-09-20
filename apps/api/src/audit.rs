@@ -40,6 +40,7 @@ pub mod action {
     pub const GROUP_UPDATE: &str = "group.update";
     pub const GROUP_DELETE: &str = "group.delete";
     pub const GROUP_MEMBERSHIP_CHANGE: &str = "group.membership_change";
+    pub const GROUP_QUOTA_CHANGE: &str = "group.quota_change";
     pub const USER_CREATE: &str = "user.create";
     pub const USER_UPDATE: &str = "user.update";
     pub const USER_DELETE: &str = "user.delete";

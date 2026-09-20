@@ -124,6 +124,8 @@ pub enum AuditAction {
     GroupDelete,
     #[serde(rename = "group.membership_change")]
     GroupMembershipChange,
+    #[serde(rename = "group.quota_change")]
+    GroupQuotaChange,
     #[serde(rename = "user.create")]
     UserCreate,
     #[serde(rename = "user.update")]
@@ -193,9 +195,9 @@ pub struct TemplateSchema {
     pub exec_config: serde_json::Value,
     pub volume_mappings: serde_json::Value,
     pub persistent_storage_path: Option<String>,
-    pub max_run_seconds: Option<i64>,
+    pub max_run_seconds: i64,
     pub timeout_action: String,
-    pub keep_time_seconds: Option<i64>,
+    pub keep_time_seconds: i64,
     pub keep_time_action: String,
     pub network_bandwidth_up_mbps: i32,
     pub network_bandwidth_down_mbps: i32,
@@ -240,8 +242,13 @@ pub struct InstanceSchema {
     pub auto_sleeps_at: Option<DateTime<Utc>>,
     pub timeout_action: Option<String>,
     pub keep_time_deadline: Option<DateTime<Utc>>,
-    pub keep_time_seconds: Option<i64>,
+    pub keep_time_seconds: i64,
     pub keep_time_action: Option<String>,
+    pub owner_group_id: Option<Uuid>,
+    pub billing_group_snapshot: Option<serde_json::Value>,
+    pub host_cpu_cores: i32,
+    pub host_memory_mb: i64,
+    pub host_gpu_count: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -291,12 +298,62 @@ pub struct GroupSchema {
     pub can_view_monitoring: bool,
     pub can_view_audit_logs: bool,
     pub max_instances: Option<i32>,
+    pub billing_model: String,
+    pub pool_cpu_cores: i32,
+    pub pool_memory_mb: i64,
+    pub pool_gpu_count: i32,
     pub template_ids: Vec<Uuid>,
+    /// Each member's per-membership resource cap, plus username/tier so the
+    /// layered Groups tab renders without extra round-trips.
+    pub members: Vec<GroupMemberSchema>,
+}
+
+#[derive(utoipa::ToSchema)]
+pub struct GroupMemberSchema {
+    pub user_id: Uuid,
+    pub username: String,
+    pub tier: i32,
+    pub cpu_quota: i32,
+    pub memory_quota: i64,
+    pub gpu_quota: i32,
 }
 
 #[derive(utoipa::ToSchema)]
 pub struct GroupListEnvelope {
     pub groups: Vec<GroupSchema>,
+}
+
+/// The group resource-billing view: the pool, the aggregate usage billed
+/// against it, and a per-member usage breakdown.
+#[derive(utoipa::ToSchema)]
+pub struct GroupBillingEnvelope {
+    pub group: GroupBillingSchema,
+    pub used: ResourceUseSchema,
+    pub members: Vec<GroupBillingMemberSchema>,
+}
+
+#[derive(utoipa::ToSchema)]
+pub struct GroupBillingSchema {
+    pub id: Uuid,
+    pub name: String,
+    pub billing_model: String,
+    pub pool_cpu_cores: i32,
+    pub pool_memory_mb: i64,
+    pub pool_gpu_count: i32,
+}
+
+#[derive(utoipa::ToSchema)]
+pub struct ResourceUseSchema {
+    pub cpu_cores: i64,
+    pub memory_mb: i64,
+    pub gpu_count: i64,
+}
+
+#[derive(utoipa::ToSchema)]
+pub struct GroupBillingMemberSchema {
+    pub user_id: Uuid,
+    pub username: String,
+    pub used: ResourceUseSchema,
 }
 
 #[derive(utoipa::ToSchema)]

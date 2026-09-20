@@ -5,6 +5,8 @@
   import { performAction, deleteInstance } from '$lib/api/instance-actions';
   import { wrapperUrl } from '$lib/countdown/countdown';
   import KeepTimeLine from '$lib/components/instances/KeepTimeLine.svelte';
+  import { billingGroupName, instanceResourceLabel } from '$lib/launch-billing';
+  import { auth } from '$lib/stores/auth';
   import type { Instance } from '$lib/types';
 
   let instance = $state<Instance | null>(null);
@@ -123,6 +125,14 @@
           <div class="info-item">
             <span class="info-label">Owner</span>
             <span class="info-value">{instance.owner_username || '---'}</span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">Billed to</span>
+            <span class="info-value">{billingGroupName(instance, $auth?.group_billing ?? []) ?? '---'}</span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">Resources</span>
+            <span class="info-value">{instanceResourceLabel(instance) ?? '---'}</span>
           </div>
           <div class="info-item">
             <span class="info-label">Container</span>

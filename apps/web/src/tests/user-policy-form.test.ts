@@ -1,9 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
+  BLOCKED_CEILING,
+  INHERIT_CEILING,
+  UNLIMITED_CEILING,
   buildUserPolicyUpdate,
+  ceilingFromValue,
   createInitialUserPolicyForm,
+  describeDirectMax,
   submitUserPolicy,
-  userPolicyFormFromRow
+  userPolicyFormFromRow,
+  valueFromCeiling
 } from '$lib/users/user-policy-form';
 import { updateUserPolicy } from '$lib/api/rbac-actions';
 
@@ -26,7 +32,44 @@ describe('user policy form', () => {
     it('starts with no memberships and an inherit ceiling', () => {
       const state = createInitialUserPolicyForm();
       expect(state.group_ids).toEqual([]);
-      expect(state.direct_max_instances).toBe('');
+      expect(state.ceiling).toEqual({ mode: 'inherit', value: 1 });
+    });
+  });
+
+  describe('ceilingFromValue', () => {
+    it('maps NULL to inherit', () => {
+      expect(ceilingFromValue(null)).toEqual(INHERIT_CEILING);
+      expect(ceilingFromValue(undefined)).toEqual(INHERIT_CEILING);
+    });
+
+    it('maps -1 to unlimited', () => {
+      expect(ceilingFromValue(-1)).toEqual(UNLIMITED_CEILING);
+    });
+
+    it('maps 0 to blocked', () => {
+      expect(ceilingFromValue(0)).toEqual(BLOCKED_CEILING);
+    });
+
+    it('maps a positive number to custom', () => {
+      expect(ceilingFromValue(6)).toEqual({ mode: 'custom', value: 6 });
+    });
+  });
+
+  describe('valueFromCeiling', () => {
+    it('round-trips all four modes back to wire values', () => {
+      expect(valueFromCeiling(INHERIT_CEILING)).toBeNull();
+      expect(valueFromCeiling(UNLIMITED_CEILING)).toBe(-1);
+      expect(valueFromCeiling(BLOCKED_CEILING)).toBe(0);
+      expect(valueFromCeiling({ mode: 'custom', value: 6 })).toBe(6);
+    });
+  });
+
+  describe('describeDirectMax', () => {
+    it('labels raw wire values for the table row', () => {
+      expect(describeDirectMax(null)).toBe('inherit');
+      expect(describeDirectMax(-1)).toBe('unlimited');
+      expect(describeDirectMax(0)).toBe('blocked');
+      expect(describeDirectMax(6)).toBe('6');
     });
   });
 
@@ -37,35 +80,53 @@ describe('user policy form', () => {
         direct_max_instances: 6
       });
       expect(state.group_ids).toEqual(['g1', 'g2']);
-      expect(state.direct_max_instances).toBe('6');
+      expect(state.ceiling).toEqual({ mode: 'custom', value: 6 });
     });
 
     it('defaults missing policy fields to empty / inherit', () => {
       const state = userPolicyFormFromRow({});
       expect(state.group_ids).toEqual([]);
-      expect(state.direct_max_instances).toBe('');
+      expect(state.ceiling).toEqual(INHERIT_CEILING);
     });
   });
 
   describe('buildUserPolicyUpdate', () => {
-    it('builds a UserPolicyUpdate with memberships and ceiling', () => {
+    it('builds a UserPolicyUpdate with memberships and a custom ceiling', () => {
       const update = buildUserPolicyUpdate({
         group_ids: ['g1'],
-        direct_max_instances: '4',
+        ceiling: { mode: 'custom', value: 4 },
         loading: false,
         error: ''
       });
       expect(update).toEqual({ group_ids: ['g1'], direct_max_instances: 4 });
     });
 
-    it('clears the personal ceiling with null when the field is emptied', () => {
+    it('keeps NULL inherit when the mode is inherit', () => {
       const update = buildUserPolicyUpdate({
         group_ids: ['g1'],
-        direct_max_instances: '',
+        ceiling: { mode: 'inherit', value: 1 },
         loading: false,
         error: ''
       });
       expect(update.direct_max_instances).toBeNull();
+    });
+
+    it('emits -1 for unlimited and 0 for blocked', () => {
+      const unlimited = buildUserPolicyUpdate({
+        group_ids: [],
+        ceiling: { mode: 'unlimited', value: 1 },
+        loading: false,
+        error: ''
+      });
+      expect(unlimited.direct_max_instances).toBe(-1);
+
+      const blocked = buildUserPolicyUpdate({
+        group_ids: [],
+        ceiling: { mode: 'disabled', value: 0 },
+        loading: false,
+        error: ''
+      });
+      expect(blocked.direct_max_instances).toBe(0);
     });
   });
 
@@ -75,7 +136,7 @@ describe('user policy form', () => {
 
       const result = await submitUserPolicy('u1', {
         group_ids: ['g1', 'g2'],
-        direct_max_instances: '6',
+        ceiling: { mode: 'custom', value: 6 },
         loading: false,
         error: ''
       });
@@ -87,25 +148,25 @@ describe('user policy form', () => {
       });
     });
 
-    it('rejects a non-numeric ceiling without calling the API', async () => {
+    it('rejects a non-positive custom ceiling without calling the API', async () => {
       const result = await submitUserPolicy('u1', {
         group_ids: [],
-        direct_max_instances: 'abc',
+        ceiling: { mode: 'custom', value: 0 },
         loading: false,
         error: ''
       });
-      expect(result.error).toBeTruthy();
+      expect(result.error).toContain('-1');
       expect(mockUpdateUserPolicy).not.toHaveBeenCalled();
     });
 
-    it('rejects a negative ceiling without calling the API', async () => {
+    it('rejects a negative custom ceiling without calling the API', async () => {
       const result = await submitUserPolicy('u1', {
         group_ids: [],
-        direct_max_instances: '-2',
+        ceiling: { mode: 'custom', value: -2 },
         loading: false,
         error: ''
       });
-      expect(result.error).toBeTruthy();
+      expect(result.error).toContain('-1');
       expect(mockUpdateUserPolicy).not.toHaveBeenCalled();
     });
 
@@ -122,7 +183,7 @@ describe('user policy form', () => {
         'u1',
         {
           group_ids: ['admin-group'],
-          direct_max_instances: '6',
+          ceiling: { mode: 'custom', value: 6 },
           loading: false,
           error: ''
         },

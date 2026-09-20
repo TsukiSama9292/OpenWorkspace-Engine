@@ -11,6 +11,11 @@ pub mod entity {
         #[sea_orm(primary_key, auto_increment = false)]
         pub id: i32,
         pub host_instance_limit: i32,
+        /// Host-wide resource ceilings (`-1` = unlimited, `0` = blocked): cpu
+        /// cores, memory MB, gpu count.
+        pub host_cpu_cores: i32,
+        pub host_memory_mb: i64,
+        pub host_gpu_count: i32,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -19,18 +24,24 @@ pub mod entity {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-/// The single global-policy knob exposed by the admin settings API: the host
-/// instance ceiling (`0` = unlimited). The host-capacity / shared-fuse fields
-/// were dropped with the old quota pipeline.
+/// The single global-policy knob set exposed by the admin settings API: the
+/// host instance ceiling (`-1` = unlimited, `0` = blocked) plus the host-wide
+/// resource ceilings.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct SystemSettings {
     pub host_instance_limit: i32,
+    pub host_cpu_cores: i32,
+    pub host_memory_mb: i64,
+    pub host_gpu_count: i32,
 }
 
 impl From<entity::Model> for SystemSettings {
     fn from(m: entity::Model) -> Self {
         Self {
             host_instance_limit: m.host_instance_limit,
+            host_cpu_cores: m.host_cpu_cores,
+            host_memory_mb: m.host_memory_mb,
+            host_gpu_count: m.host_gpu_count,
         }
     }
 }
@@ -40,6 +51,9 @@ impl From<&SystemSettings> for entity::ActiveModel {
         Self {
             id: Set(1),
             host_instance_limit: Set(s.host_instance_limit),
+            host_cpu_cores: Set(s.host_cpu_cores),
+            host_memory_mb: Set(s.host_memory_mb),
+            host_gpu_count: Set(s.host_gpu_count),
         }
     }
 }
@@ -73,6 +87,9 @@ impl<'a> SystemSettingsRepository<'a> {
             .on_conflict(
                 OnConflict::column(entity::Column::Id)
                     .update_column(entity::Column::HostInstanceLimit)
+                    .update_column(entity::Column::HostCpuCores)
+                    .update_column(entity::Column::HostMemoryMb)
+                    .update_column(entity::Column::HostGpuCount)
                     .to_owned(),
             )
             .exec(self.db)
@@ -82,16 +99,19 @@ impl<'a> SystemSettingsRepository<'a> {
             .ok_or_else(|| sea_orm::DbErr::RecordNotFound("system_settings".into()))
     }
 
-    /// Return the singleton row, creating it with the default unlimited ceiling
-    /// when absent (the migration normally guarantees it exists). Used by the
-    /// admin settings read path and the launch pre-flight so the row always
-    /// exists for the global lock target.
+    /// Return the singleton row, creating it with the default unlimited
+    /// ceilings when absent (the migration normally guarantees it exists).
+    /// Used by the admin settings read path and the launch pre-flight so the
+    /// row always exists for the global lock target.
     pub async fn get_or_create(&self) -> Result<SystemSettings, sea_orm::DbErr> {
         if let Some(existing) = self.get().await? {
             return Ok(existing);
         }
         self.upsert(&SystemSettings {
-            host_instance_limit: 0,
+            host_instance_limit: -1,
+            host_cpu_cores: -1,
+            host_memory_mb: -1,
+            host_gpu_count: -1,
         })
         .await
     }

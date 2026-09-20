@@ -240,16 +240,31 @@ async fn test_create_template_default_network_bandwidth() {
 }
 
 #[tokio::test]
-async fn test_create_template_rejects_negative_network_bandwidth() {
+async fn test_create_template_accepts_unlimited_bandwidth() {
+    // `-1` = unlimited is the valid sentinel under the new convention (spec
+    // Decision 1); only values below `-1` are rejected.
     let ctx = TestContext::new().await;
     ctx.login_admin().await;
 
     let resp = ctx.post("/api/templates", &serde_json::json!({
-        "name": "bad-up-config",
+        "name": "unlimited-up-config",
         "image": "busybox:1",
         "network_bandwidth_up_mbps": -1
     })).await;
-    assert_eq!(resp.status(), 400);
+    assert_eq!(resp.status(), 200);
+
+    let resp = ctx.post("/api/templates", &serde_json::json!({
+        "name": "unlimited-down-config",
+        "image": "busybox:1",
+        "network_bandwidth_down_mbps": -1
+    })).await;
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn test_create_template_rejects_negative_network_bandwidth() {
+    let ctx = TestContext::new().await;
+    ctx.login_admin().await;
 
     let resp = ctx.post("/api/templates", &serde_json::json!({
         "name": "bad-down-config",
@@ -456,7 +471,7 @@ async fn test_template_to_json_fields_in_response() {
     assert_eq!(cfg["exec_config"]["cmd"], true);
     assert_eq!(cfg["volume_mappings"]["/h"], "/c");
     assert_eq!(cfg["persistent_storage_path"], "/data");
-    assert!(cfg["max_run_seconds"].is_null());
+    assert_eq!(cfg["max_run_seconds"], -1);
     assert_eq!(cfg["timeout_action"], "remove");
     assert_eq!(cfg["network_bandwidth_up_mbps"], 0);
     assert_eq!(cfg["network_bandwidth_down_mbps"], 0);
@@ -705,7 +720,7 @@ async fn test_create_template_default_auto_sleep_disabled() {
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(body["template"]["max_run_seconds"].is_null());
+    assert_eq!(body["template"]["max_run_seconds"], -1);
     assert_eq!(body["template"]["timeout_action"], "remove");
 }
 
@@ -781,7 +796,7 @@ async fn test_update_template_auto_sleep() {
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(body["template"]["max_run_seconds"].is_null());
+    assert_eq!(body["template"]["max_run_seconds"], -1);
     assert_eq!(body["template"]["timeout_action"], "remove");
 }
 
@@ -847,7 +862,7 @@ async fn test_create_template_default_keep_time_disabled() {
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(body["template"]["keep_time_seconds"].is_null());
+    assert_eq!(body["template"]["keep_time_seconds"], -1);
     assert_eq!(body["template"]["keep_time_action"], "pause");
 }
 
@@ -896,7 +911,7 @@ async fn test_update_template_keep_time() {
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(body["template"]["keep_time_seconds"].is_null());
+    assert_eq!(body["template"]["keep_time_seconds"], -1);
     assert_eq!(body["template"]["keep_time_action"], "remove");
 }
 

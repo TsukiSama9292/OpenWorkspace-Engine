@@ -1,5 +1,5 @@
 import { api } from '$lib/api/client';
-import type { EffectiveContext, Group, GroupInput, PersistentVolume, UserPolicyUpdate } from '$lib/types';
+import type { EffectiveContext, Group, GroupInput, MemberQuotaUpdate, PersistentVolume, UserPolicyUpdate } from '$lib/types';
 
 export async function fetchEffectiveContext(): Promise<{ context?: EffectiveContext; error?: string }> {
   const res = await api.get<{ context: EffectiveContext }>('/auth/me');
@@ -45,6 +45,16 @@ export async function listOrphanedVolumes(): Promise<{ volumes?: PersistentVolum
 
 export async function cleanupOrphanedVolume(volumeId: string): Promise<{ error?: string }> {
   const res = await api.post(`/persistent-volumes/${volumeId}/cleanup`);
+  if (res.error) return { error: res.error };
+  return {};
+}
+
+export async function updateMemberQuota(
+  groupId: string,
+  userId: string,
+  update: MemberQuotaUpdate
+): Promise<{ error?: string }> {
+  const res = await api.put(`/groups/${groupId}/members/${userId}/quota`, update);
   if (res.error) return { error: res.error };
   return {};
 }

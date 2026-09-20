@@ -82,6 +82,11 @@ async fn create_group(
             "can_manage_registry": false,
             "max_instances": max_instances,
             "template_ids": template_ids,
+            // Ungoverned pools: these RBAC tests exercise ceilings and the
+            // whitelist, not quotas (new groups default to blocked pools).
+            "pool_cpu_cores": -1,
+            "pool_memory_mb": -1,
+            "pool_gpu_count": -1,
         }))
         .await;
     assert_eq!(resp.status(), 200, "create group failed");
@@ -127,9 +132,37 @@ async fn system_group_id(ctx: &TestContext, kind: &str) -> String {
         .to_string()
 }
 
-async fn launch_plain(ctx: &TestContext, template_id: &str) -> String {
+/// Give a member an unlimited (`-1`) resource quota inside a group via the
+/// per-member quota endpoint. Memberships created through the API default to
+/// `0` (blocked) per spec Decision 1, so tests that launch real resources must
+/// grant a quota to the billing group first.
+async fn grant_member_quota(ctx: &TestContext, group_id: &str, user_id: &str) {
+    ctx.login_admin().await;
     let resp = ctx
-        .post("/api/instances", &serde_json::json!({ "template_id": template_id }))
+        .put(
+            &format!("/api/groups/{}/members/{}/quota", group_id, user_id),
+            &serde_json::json!({ "cpu_quota": -1, "memory_quota": -1, "gpu_quota": -1 }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "grant member quota failed");
+}
+
+async fn launch_plain(ctx: &TestContext, template_id: &str) -> String {
+    launch_plain_in_group(ctx, template_id, None).await
+}
+
+async fn launch_plain_in_group(
+    ctx: &TestContext,
+    template_id: &str,
+    billing_group_id: Option<&str>,
+) -> String {
+    let mut body = serde_json::Map::new();
+    body.insert("template_id".to_string(), serde_json::json!(template_id));
+    if let Some(group_id) = billing_group_id {
+        body.insert("owner_group_id".to_string(), serde_json::json!(group_id));
+    }
+    let resp = ctx
+        .post("/api/instances", &serde_json::Value::Object(body))
         .await;
     assert_eq!(resp.status(), 200, "launch failed: {:?}", resp.text().await);
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -257,6 +290,8 @@ async fn test_flat_rbac_end_to_end() {
     let _outsider_id = create_user(&ctx, "e2e_outsider").await;
 
     assign_user_policy(&ctx, &member_id, std::slice::from_ref(&group_g), None).await;
+    // Ungoverned member cap (new memberships default to blocked quotas).
+    grant_member_quota(&ctx, &group_g, &member_id).await;
     assign_user_policy(
         &ctx,
         &_manager_id,
@@ -448,7 +483,7 @@ async fn test_flat_rbac_2_tiers_end_to_end() {
     let groups = body["groups"].as_array().unwrap();
     let admin_json = groups.iter().find(|g| g["kind"] == "admin").unwrap();
     assert_eq!(admin_json["name"], "Admin");
-    assert!(admin_json["max_instances"].is_null(), "Admin starts unlimited");
+    assert_eq!(admin_json["max_instances"], -1, "Admin starts unlimited");
     for flag in [
         "can_create_template",
         "can_manage_users",
@@ -483,7 +518,7 @@ async fn test_flat_rbac_2_tiers_end_to_end() {
         .as_array()
         .unwrap()
         .contains(&serde_json::json!(admin_group)));
-    assert_eq!(context["effective_max_instances"], 0);
+    assert_eq!(context["effective_max_instances"], -1);
 
     // System groups are undeletable and unrenameable.
     assert_eq!(ctx.delete(&format!("/api/groups/{}", admin_group)).await.status(), 403);
@@ -500,6 +535,9 @@ async fn test_flat_rbac_2_tiers_end_to_end() {
             "can_manage_registry": true,
             "max_instances": 2,
             "template_ids": manager_json["template_ids"],
+            "pool_cpu_cores": -1,
+            "pool_memory_mb": -1,
+            "pool_gpu_count": -1,
         }))
         .await;
     assert_eq!(resp.status(), 403, "system groups cannot be renamed");
@@ -531,8 +569,11 @@ async fn test_flat_rbac_2_tiers_end_to_end() {
             "can_manage_group_instances": true,
             "can_manage_docker": true,
             "can_manage_registry": true,
-            "max_instances": 0,
+            "max_instances": -1,
             "template_ids": [tpl1],
+            "pool_cpu_cores": -1,
+            "pool_memory_mb": -1,
+            "pool_gpu_count": -1,
         }))
         .await;
     assert_eq!(resp.status(), 200, "admin edits the Admin group whitelist");
@@ -563,8 +604,8 @@ async fn test_flat_rbac_2_tiers_end_to_end() {
     assert_eq!(effective_ceiling(&ctx, "rbac2_carol").await, 3, "personal ceiling raises");
     assign_user_policy(&ctx, &carol_id, std::slice::from_ref(&user_group), Some(1)).await;
     assert_eq!(effective_ceiling(&ctx, "rbac2_carol").await, 1, "ties with the group cap");
-    assign_user_policy(&ctx, &carol_id, std::slice::from_ref(&user_group), Some(0)).await;
-    assert_eq!(effective_ceiling(&ctx, "rbac2_carol").await, 0, "0 = unlimited wins");
+    assign_user_policy(&ctx, &carol_id, std::slice::from_ref(&user_group), Some(-1)).await;
+    assert_eq!(effective_ceiling(&ctx, "rbac2_carol").await, -1, "-1 = unlimited wins");
 
     // A group ceiling raises above a lower personal ceiling (never lowers).
     let devs = create_group(&ctx, "rbac2_devs", 5, &[]).await;
@@ -651,11 +692,16 @@ async fn test_flat_rbac_2_tiers_end_to_end() {
 
     // ── Instance tier guardrails (real Docker) ────────────────────────
     ctx.login_admin().await;
+    grant_member_quota(&ctx, &team, &alice_id).await;
+    grant_member_quota(&ctx, &team, &mike2_id).await;
     let admin_instance = launch_plain(&ctx, &tpl1).await;
     assert_eq!(ctx.login_user("rbac2_alice", "pw123456").await.status(), 200);
-    let alice_instance = launch_plain(&ctx, &tpl1).await;
+    // Alice and Mike2 ride two groups each (user/manager + team), so the
+    // billing group must be named explicitly and a member quota granted —
+    // omitted attribution would 400 "choose a billing group".
+    let alice_instance = launch_plain_in_group(&ctx, &tpl1, Some(&team)).await;
     assert_eq!(ctx.login_user("rbac2_mike2", "pw123456").await.status(), 200);
-    let mike2_instance = launch_plain(&ctx, &tpl1).await;
+    let mike2_instance = launch_plain_in_group(&ctx, &tpl1, Some(&team)).await;
 
     // A manager reads/stops/deletes a tier-0 owner's shared-group instance.
     assert_eq!(ctx.login_user("rbac2_mike", "pw123456").await.status(), 200);
@@ -736,8 +782,13 @@ async fn test_template_visibility_end_to_end() {
     assert_eq!(by_id(&tpl_plain)["visibility"], "private", "absent field defaults to private");
 
     // A user with no template grants (the seeded User system group's whitelist
-    // is empty) launches the public template for real.
+    // is empty) launches the public template for real. The seeded User group
+    // is the sole billing group, so the launch auto-attributes there — a member
+    // quota must be granted first (new memberships default to `0`).
     let no_grant_id = create_user(&ctx, "vis_nogrant").await;
+    let user_system_group = system_group_id(&ctx, "user").await;
+    ctx.login_admin().await;
+    grant_member_quota(&ctx, &user_system_group, &no_grant_id).await;
     assert_eq!(ctx.login_user("vis_nogrant", "pw123456").await.status(), 200);
     let body: serde_json::Value = ctx.get("/api/auth/me").await.json().await.unwrap();
     assert_eq!(
@@ -791,7 +842,8 @@ async fn test_template_visibility_end_to_end() {
     ctx.login_admin().await;
     let whitelist_group = create_group(&ctx, "vis_trusted", 1, std::slice::from_ref(&tpl_plain)).await;
     let trusted_id = create_user(&ctx, "vis_trusted").await;
-    assign_user_policy(&ctx, &trusted_id, &[whitelist_group], None).await;
+    assign_user_policy(&ctx, &trusted_id, std::slice::from_ref(&whitelist_group), None).await;
+    grant_member_quota(&ctx, &whitelist_group, &trusted_id).await;
     assert_eq!(ctx.login_user("vis_trusted", "pw123456").await.status(), 200);
     let private_instance = launch_plain(&ctx, &tpl_plain).await;
 

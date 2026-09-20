@@ -1,9 +1,17 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '$lib/api/client';
-  import type { SystemSettingsValue } from '$lib/system-settings';
+  import {
+    settingsFormFromValue,
+    settingsValueFromForm,
+    type AdminSettingsFormState,
+    type SystemSettingsValue
+  } from '$lib/system-settings';
+  import { describeTriState } from '$lib/tri-state';
+  import TriStateInput from '$lib/components/forms/TriStateInput.svelte';
 
   let settings = $state<SystemSettingsValue | null>(null);
+  let form = $state<AdminSettingsFormState | null>(null);
   let loading = $state(true);
   let error = $state('');
   let saved = $state(false);
@@ -15,6 +23,7 @@
     const res = await api.get<{ settings: SystemSettingsValue }>('/admin/settings');
     if (res.data?.settings) {
       settings = res.data.settings;
+      form = settingsFormFromValue(res.data.settings);
     } else if (res.error) {
       error = res.error;
     } else {
@@ -24,13 +33,15 @@
   }
 
   async function save() {
-    if (!settings) return;
+    if (!settings || !form) return;
     saving = true;
     error = '';
     saved = false;
-    const res = await api.put<{ settings: SystemSettingsValue }>('/admin/settings', settings);
+    const body = settingsValueFromForm(form);
+    const res = await api.put<{ settings: SystemSettingsValue }>('/admin/settings', body);
     if (res.data?.settings) {
       settings = res.data.settings;
+      form = settingsFormFromValue(res.data.settings);
       saved = true;
     } else if (res.error) {
       error = res.error;
@@ -38,17 +49,6 @@
       error = 'Failed to save system settings';
     }
     saving = false;
-  }
-
-  function numeric(value: unknown): number {
-    const n = Number(value);
-    return Number.isFinite(n) ? n : 0;
-  }
-
-  function update(key: keyof SystemSettingsValue, value: unknown) {
-    if (settings) {
-      settings = { ...settings, [key]: numeric(value) };
-    }
   }
 
   onMount(load);
@@ -75,32 +75,33 @@
 
     {#if loading}
       <div class="field-loading">Loading settings&hellip;</div>
-    {:else if settings}
+    {:else if settings && form}
       <div class="field">
         <div class="field-label-row">
-          <label class="field-label" for="admin-instance-limit">Global Instance Limit</label>
-          <span class="field-current">
-            Current: {settings.host_instance_limit === 0 ? 'unlimited' : settings.host_instance_limit}
-          </span>
+          <span class="field-label">Global Instance Limit</span>
+          <span class="field-current">Current: {describeTriState(form.hostInstanceLimit)}</span>
         </div>
         <p class="field-desc">
           The maximum number of instances allowed to run at the same time across the entire host,
           all tiers and users combined.
         </p>
-        <div class="field-control">
-          <input
-            id="admin-instance-limit"
-            class="field-input"
-            type="number"
-            min="0"
-            step="1"
-            value={settings.host_instance_limit}
-            oninput={(e) => update('host_instance_limit', e.currentTarget.value)}
-            disabled={saving}
-          />
-          <span class="field-suffix">instances</span>
+        <TriStateInput label="Global instance limit" bind:value={form.hostInstanceLimit} unit="instances" placeholder="e.g. 20" />
+      </div>
+
+      <div class="field">
+        <div class="field-label-row">
+          <span class="field-label">Host Resource Caps</span>
+          <span class="field-current">CPU {describeTriState(form.hostCpu)} · Mem {describeTriState(form.hostMemory)} GB · GPU {describeTriState(form.hostGpu)}</span>
         </div>
-        <p class="field-hint">Set to 0 for no limit.</p>
+        <p class="field-desc">
+          Per-resource ceilings that apply to every launch on the host regardless of tier.
+          Unlimited (-1) disables the cap; Disabled (0) is a real zero cap that blocks the resource.
+        </p>
+        <div class="caps-grid">
+          <TriStateInput label="Host CPU (cores)" bind:value={form.hostCpu} unit="cores" placeholder="e.g. 32" />
+          <TriStateInput label="Host memory (GB)" bind:value={form.hostMemory} unit="GB" placeholder="e.g. 64" />
+          <TriStateInput label="Host GPU" bind:value={form.hostGpu} unit="GPUs" placeholder="e.g. 8" />
+        </div>
       </div>
 
       {#if error}
@@ -251,54 +252,11 @@
     margin: 0;
   }
 
-  .field-control {
+  .caps-grid {
     display: flex;
-    align-items: center;
-    gap: 0.5rem;
+    gap: 10px;
     margin-top: 0.4rem;
-  }
-
-  .field-input {
-    width: 160px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.95rem;
-    font-weight: 500;
-    color: #f4f4f5;
-    background: #0d0d10;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 8px;
-    padding: 0.55rem 0.75rem;
-    outline: none;
-    transition: border-color 0.2s, box-shadow 0.2s;
-    -moz-appearance: textfield;
-    appearance: textfield;
-  }
-
-  .field-input::-webkit-outer-spin-button,
-  .field-input::-webkit-inner-spin-button {
-    -webkit-appearance: none;
-    margin: 0;
-  }
-
-  .field-input:focus {
-    border-color: #6366f1;
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
-  }
-
-  .field-input:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .field-suffix {
-    font-size: 0.8rem;
-    color: #71717a;
-  }
-
-  .field-hint {
-    font-size: 0.75rem;
-    color: #71717a;
-    margin: 0;
+    align-items: flex-end;
   }
 
   .error-banner {

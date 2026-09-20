@@ -62,6 +62,21 @@ export function assignableGroups(ctx: PermissionContext, groups: Group[]): Group
   return groups.filter((g) => groupTier(g) < ctx.tier);
 }
 
+/**
+ * Mirror of `PUT /api/groups/{id}/members/{user_id}/quota` gates (spec
+ * Decision 7): the actor holds `can_manage_users` and outranks both the
+ * target member and the member's group. No admin bypass — an admin cannot
+ * edit quotas inside the Admin group itself, exactly like the API.
+ */
+export function mayEditMemberQuota(
+  ctx: PermissionContext,
+  group: Pick<Group, 'kind'>,
+  member: { tier?: number }
+): boolean {
+  if (!mayManageUsers(ctx)) return false;
+  return ctx!.tier > groupTier(group) && ctx!.tier > userTier(member);
+}
+
 export function mayCreateTemplate(ctx: PermissionContext): boolean {
   return ctx !== null && (ctx.is_admin || ctx.can_create_template);
 }

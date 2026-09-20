@@ -190,6 +190,41 @@ pnpm test         # vitest run — 25 files, 310 tests
 
 Vitest uses `happy-dom` (unit + component tests). Playwright E2E lives in the standalone `e2e/` package and requires a **running** dev stack (`pnpm run test:e2e` smoke / `test:e2e:full` live VNC). Not run in CI.
 
+### Pre-commit gates
+
+Every fresh clone runs `scripts/git-hooks/install.sh` once — it copies the
+versioned `scripts/git-hooks/pre-commit` into `.git/hooks/` (git never syncs
+hooks on clone). From then on every `git commit` runs the scoped
+Definition-of-Done gates and refuses the commit unless they pass:
+
+| Staged paths | Gates |
+|---|---|
+| `apps/api/**` | `bash scripts/check.sh` (must be silent) + full `bash scripts/run_tests.sh` (nextest, needs Docker) |
+| `apps/web/**` | `pnpm check` + `pnpm test` in `apps/web` |
+| `e2e/**` | `playwright test --project=full` on the staged spec files (requires the running dev stack) |
+| docs / `.scratch` / `CHANGELOG` / `roadmap` only | fast pass, no code gates |
+
+`OW_GATES_FULL=1 git commit` forces all code gates regardless of paths.
+`git commit --no-verify` bypasses the hook — emergencies only, breaks policy.
+
+Known environmental red: `docker_test::test_create_container_runsc_runtime_passthrough`
+and `test_runsc_dns_rewrite_in_instance` need a host that can actually create
+runsc sandboxes. If they fail with `cannot create sandbox ... EOF`, check two
+things: (1) under `pnpm run dev:nosudo` gVisor registration is skipped by
+design; (2) if `/etc/docker/daemon.json` forces `--nvproxy` on runsc while the
+host driver is not in `runsc nvproxy list-supported-drivers` (e.g. driver
+595.x on 2026-09-12), even CPU-only sandboxes fail at start — either switch
+the driver to a listed branch (see `gvison.md` §3) or drop `runtimeArgs` for
+CPU-only runsc. Reproduced and fixed on the RTX 3050 dev box by removing
+`--nvproxy` (verified: `docker run --rm --runtime runsc busybox:1 echo hi`).
+Remaining red there: `test_runsc_dns_rewrite_in_instance` needs *external*
+IPv4 DNS egress — that box cannot reach 8.8.8.8:53 or 1.1.1.1:53 even from
+the host (host DNS resolves via IPv6/Tailscale only), so the in-sandbox
+`getent` hangs to the 360 s timeout regardless of runtime. The DNS rewrite
+itself was verified working (`resolv.conf` correctly rewritten to OW_DNS).
+Run that single test on a host with public DNS egress for a fully green
+board.
+
 ## Security Fuzzing
 
 ```bash

@@ -49,9 +49,9 @@ export interface TemplateFormState {
   shmSize: string;
   networkMode: string;
   containerRuntime: string;
-  maxRunSeconds: number | null;
+  maxRunSeconds: number;
   timeoutAction: TimeoutAction;
-  keepTimeSeconds: number | null;
+  keepTimeSeconds: number;
   keepTimeAction: TimeoutAction;
   bandwidthUpMbps: number;
   bandwidthDownMbps: number;
@@ -81,12 +81,12 @@ export function createInitialFormState(): TemplateFormState {
     shmSize: '',
     networkMode: '',
     containerRuntime: 'runc',
-    maxRunSeconds: null,
+    maxRunSeconds: -1,
     timeoutAction: 'remove',
-    keepTimeSeconds: null,
+    keepTimeSeconds: -1,
     keepTimeAction: 'pause',
-    bandwidthUpMbps: 0,
-    bandwidthDownMbps: 0,
+    bandwidthUpMbps: -1,
+    bandwidthDownMbps: -1,
     dockerInInstance: false,
     visibility: 'private',
     envVars: [createEmptyEnvVar()],
@@ -104,7 +104,7 @@ function buildTemplateBody(state: TemplateFormState): Record<string, unknown> {
     description: state.description || null,
     image: state.image,
     cores: state.cores,
-    memory: state.ramGb * 1024 * 1024 * 1024,
+    memory: state.ramGb === -1 ? -1 : state.ramGb * 1024 * 1024 * 1024,
     gpu_count: state.gpuCount,
     container_runtime: state.containerRuntime,
     docker_registry: state.dockerRegistry || null,
@@ -131,8 +131,8 @@ function buildTemplateBody(state: TemplateFormState): Record<string, unknown> {
 }
 
 function validateBandwidth(state: TemplateFormState): string | undefined {
-  if (state.bandwidthUpMbps < 0) return 'Upload bandwidth must be >= 0 (0 = unlimited)';
-  if (state.bandwidthDownMbps < 0) return 'Download bandwidth must be >= 0 (0 = unlimited)';
+  if (state.bandwidthUpMbps < -1) return 'Upload bandwidth must be >= -1 (-1 = unlimited)';
+  if (state.bandwidthDownMbps < -1) return 'Download bandwidth must be >= -1 (-1 = unlimited)';
   return undefined;
 }
 
@@ -182,7 +182,7 @@ export function formStateFromTemplate(t: Template): TemplateFormState {
     description: t.description || '',
     image: t.image,
     cores: t.cores,
-    ramGb: Math.round(t.memory / (1024 * 1024 * 1024)),
+    ramGb: t.memory === -1 ? -1 : Math.round(t.memory / (1024 * 1024 * 1024)),
     gpuCount: t.gpu_count,
     dockerRegistry: t.docker_registry || '',
     persistentStoragePath: t.persistent_storage_path || '',
@@ -192,12 +192,12 @@ export function formStateFromTemplate(t: Template): TemplateFormState {
     shmSize: rc.shmSize,
     networkMode: rc.networkMode,
     containerRuntime: t.container_runtime,
-    maxRunSeconds: t.max_run_seconds ?? null,
+    maxRunSeconds: t.max_run_seconds,
     timeoutAction: t.timeout_action ?? 'remove',
-    keepTimeSeconds: t.keep_time_seconds ?? null,
+    keepTimeSeconds: t.keep_time_seconds,
     keepTimeAction: (t.keep_time_action ?? 'pause') as TimeoutAction,
-    bandwidthUpMbps: t.network_bandwidth_up_mbps ?? 0,
-    bandwidthDownMbps: t.network_bandwidth_down_mbps ?? 0,
+    bandwidthUpMbps: t.network_bandwidth_up_mbps ?? -1,
+    bandwidthDownMbps: t.network_bandwidth_down_mbps ?? -1,
     dockerInInstance: t.docker_in_instance ?? false,
     visibility: t.visibility ?? 'private',
     envVars: rc.envVars,
