@@ -52,6 +52,13 @@ async fn main() {
         .await
         .expect("Failed to seed admin user");
 
+    if settings.dev_seed {
+        tracing::info!("OW_DEV_SEED is set, seeding dev fixtures...");
+        openworkspace_api::dev_seed::seed_dev_data(&db, &settings.dev_user_password)
+            .await
+            .expect("Failed to seed dev fixtures");
+    }
+
     tracing::info!("Admin seed done, populating VNC cache...");
 
     let vnc_cache = openworkspace_api::vnc_cache::VncCache::new();

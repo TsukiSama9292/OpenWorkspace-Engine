@@ -157,17 +157,26 @@ pub fn create_token(user_id: &Uuid, jwt_secret: &str) -> Result<String, StatusCo
 
 const SESSION_COOKIE_MAX_AGE: i64 = 7 * 24 * 60 * 60;
 
-pub fn set_cookie(headers: &mut axum::http::HeaderMap, token: &str) {
-    let cookie = format!(
-        "ow_token={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={}",
-        token, SESSION_COOKIE_MAX_AGE
+pub fn set_cookie(headers: &mut axum::http::HeaderMap, token: &str, secure: bool) {
+    headers.insert(
+        header::SET_COOKIE,
+        build_session_cookie(&format!("ow_token={token}"), SESSION_COOKIE_MAX_AGE, secure),
     );
-    headers.insert(header::SET_COOKIE, cookie.parse().unwrap());
 }
 
-pub fn clear_cookie(headers: &mut axum::http::HeaderMap) {
-    let cookie = "ow_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
-    headers.insert(header::SET_COOKIE, cookie.parse().unwrap());
+pub fn clear_cookie(headers: &mut axum::http::HeaderMap, secure: bool) {
+    headers.insert(header::SET_COOKIE, build_session_cookie("ow_token=", 0, secure));
+}
+
+fn build_session_cookie(
+    name_value: &str,
+    max_age: i64,
+    secure: bool,
+) -> axum::http::HeaderValue {
+    let secure_flag = if secure { "; Secure" } else { "" };
+    format!("{name_value}; Path=/; HttpOnly{secure_flag}; SameSite=Lax; Max-Age={max_age}")
+        .parse()
+        .unwrap()
 }
 
 #[cfg(test)]
@@ -309,7 +318,7 @@ mod tests {
     #[test]
     fn test_set_cookie() {
         let mut headers = axum::http::HeaderMap::new();
-        set_cookie(&mut headers, "test-token");
+        set_cookie(&mut headers, "test-token", true);
 
         let cookie_val = headers.get(header::SET_COOKIE).unwrap().to_str().unwrap();
         assert!(cookie_val.contains("ow_token=test-token"));
@@ -320,11 +329,22 @@ mod tests {
     }
 
     #[test]
+    fn test_set_cookie_insecure_for_plain_http() {
+        let mut headers = axum::http::HeaderMap::new();
+        set_cookie(&mut headers, "test-token", false);
+
+        let cookie_val = headers.get(header::SET_COOKIE).unwrap().to_str().unwrap();
+        assert!(cookie_val.contains("ow_token=test-token"));
+        assert!(!cookie_val.contains("Secure"));
+    }
+
+    #[test]
     fn test_clear_cookie() {
         let mut headers = axum::http::HeaderMap::new();
-        clear_cookie(&mut headers);
+        clear_cookie(&mut headers, false);
 
         let cookie_val = headers.get(header::SET_COOKIE).unwrap().to_str().unwrap();
         assert!(cookie_val.contains("Max-Age=0"));
+        assert!(!cookie_val.contains("Secure"));
     }
 }

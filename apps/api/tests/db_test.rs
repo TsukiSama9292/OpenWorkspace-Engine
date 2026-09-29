@@ -496,6 +496,90 @@ async fn user_seed_admin_idempotent() {
 }
 
 #[tokio::test]
+async fn dev_seed_user_creates_plain_user() {
+    let db = setup_db().await;
+    let repo = UserRepository::new(&db);
+
+    repo.seed_dev_user("userpass").await.unwrap();
+
+    let user = repo.find_by_username("user").await.unwrap();
+    assert!(user.is_some());
+    let u = user.unwrap();
+    assert_eq!(u.username, "user");
+    assert!(!u.id.is_nil());
+    assert_eq!(
+        group_membership_count(&db, "User", u.id).await,
+        1,
+        "dev user must join the User system group"
+    );
+}
+
+#[tokio::test]
+async fn dev_seed_user_idempotent_and_keeps_password() {
+    let db = setup_db().await;
+    let repo = UserRepository::new(&db);
+
+    repo.seed_dev_user("first").await.unwrap();
+    let before = repo.find_by_username("user").await.unwrap().unwrap();
+    repo.seed_dev_user("second").await.unwrap();
+    let after = repo.find_by_username("user").await.unwrap().unwrap();
+
+    assert_eq!(before.id, after.id);
+    assert_eq!(before.password_hash, after.password_hash);
+}
+
+#[tokio::test]
+async fn dev_seed_templates_creates_three_public_templates() {
+    let db = setup_db().await;
+    let user_repo = UserRepository::new(&db);
+    user_repo.seed_admin("pass").await.unwrap();
+    let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
+
+    let template_repo = WorkspaceTemplateRepository::new(&db);
+    template_repo.seed_dev_templates(admin.id).await.unwrap();
+
+    for expected in ["Ubuntu Desktop", "Ubuntu Terminal", "Python Lab"] {
+        let count: i64 = query_scalar(
+            &db,
+            &format!("SELECT count(*) AS value FROM workspace_templates WHERE name = '{expected}'"),
+        )
+        .await;
+        assert_eq!(count, 1, "missing {expected}");
+    }
+    let public: i64 = query_scalar(
+        &db,
+        "SELECT count(*) AS value FROM workspace_templates WHERE visibility = 'public'",
+    )
+    .await;
+    assert_eq!(public, 3);
+    for expected in ["kasmvnc", "ttyd", "jupyter"] {
+        let count: i64 = query_scalar(
+            &db,
+            &format!(
+                "SELECT count(*) AS value FROM workspace_templates WHERE remote_type = '{expected}'"
+            ),
+        )
+        .await;
+        assert_eq!(count, 1, "missing {expected}");
+    }
+}
+
+#[tokio::test]
+async fn dev_seed_templates_idempotent_and_keeps_edits() {
+    let db = setup_db().await;
+    let user_repo = UserRepository::new(&db);
+    user_repo.seed_admin("pass").await.unwrap();
+    let admin = user_repo.find_by_username("admin").await.unwrap().unwrap();
+
+    let template_repo = WorkspaceTemplateRepository::new(&db);
+    template_repo.seed_dev_templates(admin.id).await.unwrap();
+    template_repo.seed_dev_templates(admin.id).await.unwrap();
+
+    let count: i64 = query_scalar(&db, "SELECT count(*) AS value FROM workspace_templates").await;
+    assert_eq!(count, 3);
+}
+
+#[tokio::test]
 async fn user_create_and_find_by_id() {
     let db = setup_db().await;
     let repo = UserRepository::new(&db);

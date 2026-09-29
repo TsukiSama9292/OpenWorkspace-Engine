@@ -46,9 +46,9 @@ test('launches a real instance, opens the KasmVNC viewer over the proxied WebSoc
     templateId = await ensureTemplate(page.request);
     await page.goto('/');
 
-    const quickLaunch = page.locator('.template-card').first();
+    const quickLaunch = page.locator('.catalog-card').first();
     await quickLaunch.waitFor({ state: 'attached', timeout: 15_000 });
-    const launchable = page.locator('.template-card:not(.locked)').first();
+    const launchable = page.locator('.catalog-card:not(.locked)').first();
     if ((await launchable.count()) === 0) {
       test.skip(true, 'No launchable templates in the dev stack — create one on the Templates tab first.');
     }
@@ -58,7 +58,7 @@ test('launches a real instance, opens the KasmVNC viewer over the proxied WebSoc
       wsUrls.push(ws.url());
     });
 
-    await quickLaunch.click();
+    await quickLaunch.locator('.catalog-launch').click();
     await expect(page.locator('.modal-confirm')).toBeVisible();
     await page.locator('.modal-confirm').click();
 

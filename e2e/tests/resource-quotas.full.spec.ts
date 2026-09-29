@@ -249,9 +249,9 @@ async function openTab(page: Page, name: string): Promise<void> {
 
 async function openTemplateCard(page: Page, templateName: string): Promise<void> {
   await page.goto('/');
-  const card = page.locator('.template-card').filter({ hasText: templateName });
+  const card = page.locator('.catalog-card').filter({ hasText: templateName });
   await expect(card.first()).toBeVisible({ timeout: 15_000 });
-  await card.first().click();
+  await card.first().locator('.catalog-launch').click();
   await expect(page.locator('.modal-confirm')).toBeVisible();
 }
 

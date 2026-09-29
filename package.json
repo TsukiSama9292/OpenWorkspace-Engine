@@ -11,6 +11,7 @@
     "dev:nosudo": "bash ./scripts/kill-dev.sh && bash ./scripts/docker-network.sh && pnpm run docker:dev:up && concurrently --kill-others --names api,web --prefix-colors blue,green \"pnpm run dev:api\" \"pnpm run dev:web\"",
     "dev:api": "PATH=/usr/sbin:$PATH pnpm --filter api dev",
     "dev:web": "pnpm --filter web dev",
+    "dev:account": "bash ./scripts/dev-account.sh",
     "dev:stop": "pnpm run docker:dev:down && pnpm run network:deny",
     "dev:stop:nosudo": "pnpm run docker:dev:down",
     "dev:remove": "docker compose -f docker/openworkspace_dev/docker-compose.yml down -v && pnpm run clean && pnpm run network:deny && echo '✅ 已移除開發環境 volumes 和 network'",

@@ -19,6 +19,19 @@ pub struct Settings {
     /// Audit-log retention in days, from `AUDIT_RETENTION_DAYS` (default 90).
     /// Pruned daily by the health worker behind the pure `due_for_prune` gate.
     pub audit_retention_days: i64,
+    /// Dev-only seed switch, from `OW_DEV_SEED` (default off). When set, the
+    /// API seeds dev fixtures (see `crate::dev_seed`) at startup. Production
+    /// compose never sets this; it is only enabled by the local dev scripts.
+    pub dev_seed: bool,
+    /// Password for the dev-seeded `user` account, from `DEV_USER_PASSWORD`
+    /// (default "user"). Only consulted when `dev_seed` is on.
+    pub dev_user_password: String,
+    /// Whether the session cookie carries the `Secure` flag, from
+    /// `OW_COOKIE_SECURE` (default off). Browsers refuse to store `Secure`
+    /// cookies over plain HTTP, so this must stay off for the default
+    /// http:// dev and prod deployments; enable it only when serving
+    /// exclusively over TLS.
+    pub cookie_secure: bool,
 }
 
 impl Settings {
@@ -83,12 +96,22 @@ impl Settings {
                 .unwrap_or_else(|| "90".to_string())
                 .parse()
                 .map_err(|e| format!("AUDIT_RETENTION_DAYS invalid: {}", e))?,
+            dev_seed: parse_bool_env(get("OW_DEV_SEED")),
+            dev_user_password: get("DEV_USER_PASSWORD")
+                .unwrap_or_else(|| "user".to_string()),
+            cookie_secure: parse_bool_env(get("OW_COOKIE_SECURE")),
         })
     }
 
     pub fn bind_address(&self) -> String {
         format!("{}:{}", self.server_host, self.server_port)
     }
+}
+
+/// Opt-in env flag: "1", "true", or "yes" (any case) enables; missing or any
+/// other value disables. Used by `OW_DEV_SEED` and `OW_COOKIE_SECURE`.
+fn parse_bool_env(value: Option<String>) -> bool {
+    value.is_some_and(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes"))
 }
 
 #[cfg(test)]
@@ -116,6 +139,9 @@ mod tests {
             instance_dns: "8.8.8.8,1.1.1.1".to_string(),
             port_lock_dir: String::new(),
             audit_retention_days: 90,
+            dev_seed: false,
+            dev_user_password: "user".to_string(),
+            cookie_secure: false,
         };
         assert_eq!(settings.bind_address(), "0.0.0.0:3000");
     }
@@ -137,6 +163,9 @@ mod tests {
             instance_dns: "8.8.8.8,1.1.1.1".to_string(),
             port_lock_dir: String::new(),
             audit_retention_days: 90,
+            dev_seed: false,
+            dev_user_password: "user".to_string(),
+            cookie_secure: false,
         };
         assert_eq!(settings.bind_address(), "127.0.0.1:8080");
     }
@@ -158,6 +187,9 @@ mod tests {
             instance_dns: "8.8.8.8,1.1.1.1".to_string(),
             port_lock_dir: String::new(),
             audit_retention_days: 90,
+            dev_seed: false,
+            dev_user_password: "user".to_string(),
+            cookie_secure: false,
         };
         let debug = format!("{:?}", settings);
         assert!(debug.contains("Settings"));
@@ -181,6 +213,9 @@ mod tests {
             instance_dns: "8.8.8.8,1.1.1.1".to_string(),
             port_lock_dir: String::new(),
             audit_retention_days: 90,
+            dev_seed: false,
+            dev_user_password: "user".to_string(),
+            cookie_secure: false,
         };
         let cloned = settings.clone();
         assert_eq!(settings.database_url, cloned.database_url);
@@ -242,6 +277,9 @@ mod tests {
         assert_eq!(settings.host_port_end, 20000);
         assert_eq!(settings.port_lock_dir, "");
         assert_eq!(settings.audit_retention_days, 90);
+        assert!(!settings.dev_seed);
+        assert_eq!(settings.dev_user_password, "user");
+        assert!(!settings.cookie_secure);
     }
 
     #[test]
@@ -285,6 +323,70 @@ mod tests {
         ]));
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("AUDIT_RETENTION_DAYS invalid"));
+    }
+
+    #[test]
+    fn test_dev_seed_opt_in() {
+        for value in ["1", "true", "TRUE", "yes"] {
+            let settings = Settings::from_env(vars(&[
+                ("DATABASE_URL", "postgres://localhost/test"),
+                ("JWT_SECRET", "test"),
+                ("OW_DEV_SEED", value),
+            ]))
+            .unwrap();
+            assert!(settings.dev_seed, "OW_DEV_SEED={value} must opt in");
+        }
+    }
+
+    #[test]
+    fn test_dev_seed_defaults_off() {
+        let settings = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://localhost/test"),
+            ("JWT_SECRET", "test"),
+        ]))
+        .unwrap();
+        assert!(!settings.dev_seed);
+        let settings = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://localhost/test"),
+            ("JWT_SECRET", "test"),
+            ("OW_DEV_SEED", "0"),
+        ]))
+        .unwrap();
+        assert!(!settings.dev_seed);
+    }
+
+    #[test]
+    fn test_dev_user_password_default_and_custom() {
+        let settings = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://localhost/test"),
+            ("JWT_SECRET", "test"),
+        ]))
+        .unwrap();
+        assert_eq!(settings.dev_user_password, "user");
+        let settings = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://localhost/test"),
+            ("JWT_SECRET", "test"),
+            ("DEV_USER_PASSWORD", "s3cret"),
+        ]))
+        .unwrap();
+        assert_eq!(settings.dev_user_password, "s3cret");
+    }
+
+    #[test]
+    fn test_cookie_secure_defaults_off_and_opts_in() {
+        let settings = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://localhost/test"),
+            ("JWT_SECRET", "test"),
+        ]))
+        .unwrap();
+        assert!(!settings.cookie_secure);
+        let settings = Settings::from_env(vars(&[
+            ("DATABASE_URL", "postgres://localhost/test"),
+            ("JWT_SECRET", "test"),
+            ("OW_COOKIE_SECURE", "1"),
+        ]))
+        .unwrap();
+        assert!(settings.cookie_secure);
     }
 
     #[test]

@@ -17,13 +17,22 @@ start, stop, and open all feel instant.
 
 ## The dashboard
 
-A sidebar shows the pages you're allowed to use. Everyone sees **Instances**;
-management and admin pages appear only if your group grants the permission
-(see [RBAC](rbac.md)).
+A navigation rail shows the pages you're allowed to use — readable labels by
+default, collapsible to a narrow strip (your choice is remembered), and a
+drawer behind a menu button on phones. A running-session count rides next to
+the session entries, and the bottom shows your real name and tier instead of
+a placeholder. Everyone sees **Instances**; management and admin pages appear
+only if your group grants the permission (see [RBAC](rbac.md)).
+
+The **Instances** page reads top to bottom in three stages: a greeting hero
+with one search box for everything, your quota usage, and totals for running,
+stopped, and available templates; your sessions as rich cards above; and the
+template catalog below. The search box filters both sessions and templates at
+once, with running/stopped chips for sessions.
 
 | Page | What it shows | Who can see it |
 |------|---------------|----------------|
-| **Instances** | Your sessions as cards, plus the quick-launch template grid | Everyone |
+| **Instances** | Greeting hero with search, your session cards, and the template catalog | Everyone |
 | **Templates** | The template catalog and editor | Template creators and admins |
 | **Sessions** | A table of all sessions with status and user filters | Session managers and admins |
 | **Volumes** | Orphaned persistent data, with a double-confirmed thorough cleanup | User managers and admins |
@@ -35,8 +44,10 @@ management and admin pages appear only if your group grants the permission
 
 ## Launching a session
 
-1. On the **Instances** page, pick a template from the quick-launch grid (or
-   create one on the **Templates** page).
+1. On the **Instances** page, pick a template from the catalog (or
+   create one on the **Templates** page). Each catalog card shows what the
+   template is, what it costs in processor/memory/graphics/storage, and a
+   **Launch** button — locked templates explain why and whom to ask instead.
 2. In the launch dialog, choose how your data is handled — **Use persistent
    storage** (default), **No persistent storage**, or **Reset persistent
    storage** (which asks you to confirm). See [Persistent Storage](persistent-storage.md).
@@ -45,9 +56,10 @@ management and admin pages appear only if your group grants the permission
 
 ## Managing your sessions
 
-Each session card shows its status (running / starting / paused / stopped /
-error), a persistence badge, a live countdown of any time budget, and the
-actions available in that state:
+Each session card names its source template, shows its state plus any
+remaining time budget in plain words, and leads with a single **Open** action
+— the rest (pause/stop/start, logs, removal) lives behind a **More** menu.
+Removal always asks for confirmation:
 
 - **Start / Stop** — stop shuts the container down but keeps your data and
   setup; start brings it back on the same address.

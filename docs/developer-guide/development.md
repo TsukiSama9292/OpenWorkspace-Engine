@@ -33,6 +33,8 @@ pnpm run dev                  # full dev stack (API + web + Traefik + Postgres)
 
 Stop with `pnpm run dev:stop` (compose down + revoke caps) or `pnpm run dev:remove` (full wipe incl. volumes).
 
+**Dev accounts:** `pnpm run dev:account` prints the seeded credentials and verifies each with a live login — `admin`/`admin` (`ADMIN_PASSWORD`) plus `user`/`user` (`DEV_USER_PASSWORD`). The `user` account and the three public templates (Ubuntu Desktop/KasmVNC, Ubuntu Terminal/ttyd, Python Lab/Jupyter) are seeded at API startup only when `OW_DEV_SEED=1`, which the `dev:api` script sets (production compose never sets it, so it cannot leak into prod). Fixtures live in `apps/api/src/dev_seed.rs` — future dev fixtures (e.g. settings) follow the same `seed_dev_*` pattern there.
+
 **No-sudo variant:** `pnpm run dev:nosudo` skips both privileged steps — the gVisor `runsc` registration (`init`) and `network:allow` (capability grants). It still ensures `ow-network`, starts Traefik + Postgres, and runs API + web, so no password prompt is needed. Trade-offs: bandwidth shaping (tc/nsenter) fails open (logged, not enforced), and `runsc`-pinned templates cannot launch unless gVisor was registered previously. Stop with `pnpm run dev:stop:nosudo` (compose down only).
 
 > **Dev routing note:** the dev Traefik proxies to the **host-run** servers via `host.docker.internal` (`:5173` / `:3000`), and the host-run API writes route YAMLs to `docker/openworkspace_dev/traefik/dynamic` (its compile-time default when `TRAEFIK_DYNAMIC_DIR` is unset). Instances are still created by the host-run API via the Docker socket, and Traefik reaches them through host-published ports.
@@ -96,6 +98,9 @@ All variables are read via `core/settings.rs` (`Settings::from_env`). Only `DATA
 | `DATABASE_URL` | *(required)* | Postgres connection string |
 | `JWT_SECRET` | *(required)* | Signing secret for the `ow_token` JWT |
 | `ADMIN_PASSWORD` | `admin` | Bootstrap password for the seeded admin user |
+| `OW_DEV_SEED` | *(unset)* | Dev-only fixture switch (`1`/`true`/`yes` opts in): seeds the plain `user` account at startup. Set by `dev:api`; never set in production compose |
+| `DEV_USER_PASSWORD` | `user` | Password for the dev-seeded `user` account (only consulted when `OW_DEV_SEED` is on) |
+| `OW_COOKIE_SECURE` | *(unset)* | Adds `Secure` to the session cookie. Keep off for plain-HTTP dev/prod (browsers drop `Secure` cookies over HTTP and every API call 401s); enable only behind TLS |
 | `SERVER_HOST` / `SERVER_PORT` | `0.0.0.0` / `3000` | API bind address |
 | `DB_MAX_CONNECTIONS` | `5` | sqlx connection pool size |
 | `OW_CONTAINER_RUNTIME` | `runc` | Server-level default container runtime (`runsc`, `runc`, …); used when a template doesn't pin its own |

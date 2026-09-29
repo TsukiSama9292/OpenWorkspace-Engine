@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { getTemplateIcon } from '$lib/utils/template-icons';
   import TemplatePanel from '$lib/components/templates/TemplatePanel.svelte';
   import { parseDashboardHash, serializeDashboardHash, isTemplatesEditor, confirmDiscardChanges, type DashboardView, type DashboardTab } from '$lib/templates/dashboard-view';
   import { loadDashboard } from './dashboard-data';
@@ -35,8 +34,15 @@
     instanceResourceLabel,
     describeBillingOption
   } from '$lib/launch-billing';
+  import { filterDashboard, countSessionsByStatus, type DashboardStatusFilter } from '$lib/dashboard/filter';
+  import { loadRailCollapsed, saveRailCollapsed } from '$lib/dashboard/navigation';
+  import { resolveTemplateFamily, familyIconSrc, familyCoverClass } from '$lib/dashboard/artwork';
+  import { formatMemory } from '$lib/utils/format';
 
-  let sidebarOpen = $state(false);
+  let sidebarOpen = $state(true);
+  let drawerOpen = $state(false);
+  let dashboardQuery = $state('');
+  let dashboardStatus = $state<DashboardStatusFilter>('');
   let view = $state<DashboardView>({ tab: 'instances' });
   let activeTab = $derived(view.tab);
   let showSettings = $state(false);
@@ -91,10 +97,19 @@
   let canManage = $derived($canCreateTemplate || $canManageUsers || $canManageGroupInstances);
   let effectiveLimitLabel = $derived($isAdmin || $effectiveMaxInstances === -1 ? 'Unlimited' : String($effectiveMaxInstances));
   let allowedTemplateLabel = $derived(String(configs.filter((c) => mayLaunchTemplate($auth, c)).length));
-  // The session-launch surface only offers usable templates: hidden templates
-  // are excluded here (they remain visible in the templates-management panel,
-  // where managers can restore them).
-  let quickLaunchTemplates = $derived(configs.filter((c) => c.visibility !== 'hidden'));
+  // The catalog surface only offers usable templates: hidden templates are
+  // excluded inside filterDashboard (they remain visible in the
+  // templates-management panel, where managers can restore them).
+  let quickLaunchTemplates = $derived(configs);
+
+  function toggleRail() {
+    sidebarOpen = !sidebarOpen;
+    try {
+      saveRailCollapsed(localStorage, !sidebarOpen);
+    } catch {
+      // storage unavailable (private mode) — preference just won't persist
+    }
+  }
 
   function navigateToHash(hash: string) {
     view = parseDashboardHash(hash);
@@ -113,6 +128,7 @@
     const next: DashboardView = tab === 'templates' ? { tab: 'templates', editor: 'list' } : { tab };
     const hash = serializeDashboardHash(next);
     if (!confirmLeaveEditor(hash)) return;
+    drawerOpen = false;
     navigateToHash(hash);
   }
 
@@ -134,6 +150,11 @@
 
   onMount(() => {
     view = parseDashboardHash(window.location.hash);
+    try {
+      sidebarOpen = !loadRailCollapsed(localStorage);
+    } catch {
+      sidebarOpen = true;
+    }
     window.addEventListener('hashchange', onHashChange);
     window.addEventListener('beforeunload', onBeforeUnload);
 
@@ -162,6 +183,35 @@
     launchPersistence = 'use_persistent';
     prevLaunchPersistence = 'use_persistent';
     launchGroup = defaultGroupId;
+  }
+
+  async function onCatalogSelect(config: Template) {
+    if (mayLaunchTemplate($auth, config)) {
+      openLaunch(config);
+      return;
+    }
+    const result = await launchInstance(config.id, launchPersistence, launchGroup || undefined);
+    if (result.rejection) {
+      rejectionNotice = { error: result.error ?? '', rejection: result.rejection };
+    }
+  }
+
+  // The catalog never shows hidden templates (filterDashboard drops them), so
+  // a locked card always means the template is outside the viewer's whitelist.
+  function lockedReason(): string {
+    return 'Not allowed — this template is outside your whitelist. Ask an admin for access.';
+  }
+
+  function closeOverlays() {
+    drawerOpen = false;
+    showSettings = false;
+    openMenuId = null;
+  }
+
+  let openMenuId = $state<string | null>(null);
+
+  function toggleMenu(id: string) {
+    openMenuId = openMenuId === id ? null : id;
   }
 
   function onLaunchPersistenceChange(event: Event) {
@@ -248,6 +298,14 @@
   }
 
   const myInstances = $derived(instances.filter(i => mayControlInstance($auth, i)));
+  let sessionCounts = $derived(countSessionsByStatus(myInstances));
+  let runningCount = $derived(sessionCounts.running);
+  let stoppedCount = $derived(sessionCounts.stopped);
+  let dashboardFiltered = $derived(
+    filterDashboard(myInstances, quickLaunchTemplates, { query: dashboardQuery, status: dashboardStatus })
+  );
+  let identityName = $derived($auth?.username ?? 'Signed in');
+  let identityTier = $derived(`Tier ${$auth?.tier ?? 0}${$auth?.is_admin ? ' · Admin' : ''}`);
 
   const uniqueUsers = $derived([...new Set(myInstances.map(i => i.owner_username).filter(Boolean))].sort());
   const filteredInstances = $derived(
@@ -267,12 +325,18 @@
   };
 </script>
 
+<svelte:window onkeydown={(e) => { if (e.key === 'Escape') closeOverlays(); }} />
+
 <div class="dashboard">
+  <button class="rail-menu" aria-label="Open navigation" onclick={() => drawerOpen = true}>Menu</button>
+  {#if drawerOpen}
+    <div class="drawer-overlay" onclick={() => drawerOpen = false} role="presentation"></div>
+  {/if}
   <aside
     class="sidebar"
     class:expanded={sidebarOpen}
-    onmouseenter={() => sidebarOpen = true}
-    onmouseleave={() => { sidebarOpen = false; }}
+    class:drawer={drawerOpen}
+    aria-label="Primary navigation"
   >
     <div class="sidebar-top">
       <div class="brand-icon">
@@ -281,6 +345,9 @@
       {#if sidebarOpen}
         <span class="brand-name">OpenWorkspace</span>
       {/if}
+      <button class="rail-toggle" aria-label={sidebarOpen ? 'Collapse navigation' : 'Expand navigation'} title={sidebarOpen ? 'Collapse' : 'Expand'} onclick={toggleRail}>
+        {sidebarOpen ? '«' : '»'}
+      </button>
     </div>
 
     <nav class="nav-list">
@@ -292,18 +359,22 @@
         <button
           class="nav-item"
           class:active={activeTab === 'instances'}
-          onclick={() => navigateTab('instances')}
+          title={sidebarOpen ? '' : 'Instances'}
+          aria-label={`Instances${runningCount > 0 ? `, ${runningCount} running` : ''}`}
+          onclick={() => { navigateTab('instances'); drawerOpen = false; }}
         >
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <rect x="2" y="3" width="20" height="14" rx="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" />
           </svg>
           {#if sidebarOpen}<span class="nav-text">Instances</span>{/if}
+          {#if runningCount > 0}<span class="nav-count" aria-label={`${runningCount} running`}>{runningCount}</span>{/if}
         </button>
 
         {#if canManage}
           <button
             class="nav-item"
             class:active={activeTab === 'templates'}
+            title={sidebarOpen ? '' : 'Templates'}
             onclick={() => navigateTab('templates')}
           >
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -315,12 +386,15 @@
           <button
             class="nav-item"
             class:active={activeTab === 'sessions'}
+            title={sidebarOpen ? '' : 'Sessions'}
+            aria-label={`Sessions${runningCount > 0 ? `, ${runningCount} running` : ''}`}
             onclick={() => navigateTab('sessions')}
           >
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="2" y="2" width="20" height="8" rx="2" /><rect x="2" y="14" width="20" height="8" rx="2" /><line x1="6" y1="6" x2="6.01" y2="6" /><line x1="6" y1="18" x2="6.01" y2="18" />
             </svg>
             {#if sidebarOpen}<span class="nav-text">Sessions</span>{/if}
+            {#if runningCount > 0}<span class="nav-count" aria-label={`${runningCount} running`}>{runningCount}</span>{/if}
           </button>
         {/if}
 
@@ -328,6 +402,7 @@
           <button
             class="nav-item"
             class:active={activeTab === 'volumes'}
+            title={sidebarOpen ? '' : 'Volumes'}
             onclick={() => navigateTab('volumes')}
           >
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -347,6 +422,7 @@
           <button
             class="nav-item"
             class:active={activeTab === 'groups'}
+            title={sidebarOpen ? '' : 'Groups'}
             onclick={() => navigateTab('groups')}
           >
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -360,6 +436,7 @@
           <button
             class="nav-item"
             class:active={activeTab === 'users'}
+            title={sidebarOpen ? '' : 'Users'}
             onclick={() => navigateTab('users')}
           >
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -379,6 +456,7 @@
           <button
             class="nav-item"
             class:active={activeTab === 'monitor'}
+            title={sidebarOpen ? '' : 'Monitor'}
             onclick={() => navigateTab('monitor')}
           >
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -392,6 +470,7 @@
           <button
             class="nav-item"
             class:active={activeTab === 'settings'}
+            title={sidebarOpen ? '' : 'Settings'}
             onclick={() => navigateTab('settings')}
           >
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -405,6 +484,7 @@
           <button
             class="nav-item"
             class:active={activeTab === 'logs'}
+            title={sidebarOpen ? '' : 'Logs'}
             onclick={() => navigateTab('logs')}
           >
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -417,13 +497,13 @@
     </nav>
 
     <div class="sidebar-bottom">
-      <button class="avatar-btn" onclick={() => showSettings = !showSettings}>
+      <button class="avatar-btn" aria-label="Account" onclick={() => showSettings = !showSettings}>
         <div class="avatar">OW</div>
       </button>
       {#if sidebarOpen}
         <button class="user-btn" onclick={() => showSettings = !showSettings}>
-          <span class="user-name">Developer</span>
-          <span class="user-role">Settings</span>
+          <span class="user-name">{identityName}</span>
+          <span class="user-role">{identityTier}</span>
         </button>
       {/if}
     </div>
@@ -538,17 +618,53 @@
       <p class="loading-text">Loading instances...</p>
 
     {:else if activeTab === 'instances'}
-      <section class="ws-section">
-        <h2 class="section-title">Instances</h2>
-        <p class="section-desc">Effective ceiling: {effectiveLimitLabel} instances · Allowed templates: {allowedTemplateLabel}</p>
-        {#if myInstances.length === 0}
-          <p class="empty-text">No instances yet. Launch a template to get started.</p>
+      <section class="hero" aria-label="Dashboard overview">
+        <div class="hero-text">
+          <h2 class="hero-greeting">Hello, {identityName}</h2>
+          <p class="section-desc">Effective ceiling: {effectiveLimitLabel} instances · Allowed templates: {allowedTemplateLabel}</p>
+        </div>
+        <div class="hero-search">
+          <label class="hero-label" for="dashboard-search">Search sessions and templates</label>
+          <input
+            id="dashboard-search"
+            class="hero-input"
+            type="search"
+            placeholder="Search sessions and templates"
+            bind:value={dashboardQuery}
+          />
+        </div>
+        <div class="hero-totals" role="status">
+          <span class="hero-total">Quota: {myInstances.length}/{effectiveLimitLabel} sessions used</span>
+          <span class="hero-total">{runningCount} running</span>
+          <span class="hero-total">{stoppedCount} stopped or paused</span>
+          <span class="hero-total">{allowedTemplateLabel} available templates</span>
+        </div>
+        <div class="hero-chips" role="group" aria-label="Session status filter">
+          <button class="hero-chip" class:active={dashboardStatus === ''} aria-pressed={dashboardStatus === ''} onclick={() => dashboardStatus = ''}>All</button>
+          <button class="hero-chip" class:active={dashboardStatus === 'running'} aria-pressed={dashboardStatus === 'running'} onclick={() => dashboardStatus = 'running'}>Running</button>
+          <button class="hero-chip" class:active={dashboardStatus === 'stopped'} aria-pressed={dashboardStatus === 'stopped'} onclick={() => dashboardStatus = 'stopped'}>Stopped</button>
+        </div>
+      </section>
+
+      <section class="ws-section" aria-label="My sessions">
+        <h2 class="section-title">My sessions</h2>
+        {#if dashboardFiltered.sessions.length === 0}
+          {#if myInstances.length === 0}
+            <div class="empty-state">
+              <img class="empty-mark" src="/icons/generic.svg" alt="" aria-hidden="true" />
+              <p class="empty-text">No instances yet. Browse the template catalog below to launch your first session.</p>
+            </div>
+          {:else}
+            <p class="empty-text">No sessions match the current search.</p>
+            <button class="filter-clear" onclick={() => { dashboardQuery = ''; dashboardStatus = ''; }}>Clear search</button>
+          {/if}
         {:else}
           <div class="instance-grid">
-            {#each myInstances as inst (inst.id)}
+            {#each dashboardFiltered.sessions as inst (inst.id)}
               {@const billingLabel = billingGroupName(inst, billingGroups)}
               {@const resourceLabel = instanceResourceLabel(inst)}
-              <div class="ws-card" class:dimmed={inst.status !== 'running'}>
+              {@const stateLabel = sleepLabel(inst) ?? inst.status}
+              <div class="ws-card session-rich" class:dimmed={inst.status !== 'running'}>
                 <div class="ws-card-header">
                   <div>
                     <div class="ws-title-row">
@@ -559,9 +675,7 @@
                       {/if}
                     </div>
                     <span class="ws-template">{inst.template_name || 'Unknown template'}</span>
-                    {#if sleepLabel(inst)}
-                      <span class="ws-sleep">{sleepLabel(inst)}</span>
-                    {/if}
+                    <span class="ws-state-story">{stateLabel}</span>
                     {#if billingLabel || resourceLabel}
                       <div class="ws-billing-row">
                         {#if billingLabel}
@@ -578,20 +692,33 @@
                 <div class="ws-actions">
                   {#if mayControlInstance($auth, inst)}
                     <div class="action-buttons">
-                      {#if inst.status === 'running'}
-                        {#if inst.access_token}
-                           <a href={instanceUrl(inst)} target="_blank" class="launch-btn vnc">Open</a>
-                        {/if}
-                        <button class="launch-btn pause" onclick={() => onAction(inst, 'pause')}>Pause</button>
-                        <button class="launch-btn stop" onclick={() => onAction(inst, 'stop')}>Stop</button>
-                      {:else if inst.status === 'paused'}
-                        <button class="launch-btn resume" onclick={() => onAction(inst, 'unpause')}>Resume</button>
-                        <button class="launch-btn stop" onclick={() => onAction(inst, 'stop')}>Stop</button>
-                      {:else}
-                        <button class="launch-btn resume" onclick={() => onAction(inst, 'start')}>Start</button>
+                      {#if inst.status === 'running' && inst.access_token}
+                        <a href={instanceUrl(inst)} target="_blank" class="launch-btn vnc primary-action">Open</a>
                       {/if}
-                      <button class="launch-btn logs" onclick={() => logsInstance = inst}>Logs</button>
-                      <button class="launch-btn remove" onclick={() => onRemove(inst)}>Remove</button>
+                      <div class="overflow-wrap">
+                        <button
+                          class="launch-btn overflow-btn"
+                          aria-haspopup="menu"
+                          aria-expanded={openMenuId === inst.id}
+                          onclick={() => toggleMenu(inst.id)}
+                        >More ▾</button>
+                        {#if openMenuId === inst.id}
+                          <div class="overflow-scrim" onclick={() => openMenuId = null} role="presentation"></div>
+                          <div class="overflow-menu" role="menu" aria-label={`Actions for ${inst.name}`}>
+                            {#if inst.status === 'running'}
+                              <button class="launch-btn pause overflow-item" role="menuitem" onclick={() => { openMenuId = null; onAction(inst, 'pause'); }}>Pause</button>
+                              <button class="launch-btn stop overflow-item" role="menuitem" onclick={() => { openMenuId = null; onAction(inst, 'stop'); }}>Stop</button>
+                            {:else if inst.status === 'paused'}
+                              <button class="launch-btn resume overflow-item" role="menuitem" onclick={() => { openMenuId = null; onAction(inst, 'unpause'); }}>Resume</button>
+                              <button class="launch-btn stop overflow-item" role="menuitem" onclick={() => { openMenuId = null; onAction(inst, 'stop'); }}>Stop</button>
+                            {:else}
+                              <button class="launch-btn resume overflow-item" role="menuitem" onclick={() => { openMenuId = null; onAction(inst, 'start'); }}>Start</button>
+                            {/if}
+                            <button class="launch-btn logs overflow-item" role="menuitem" onclick={() => { openMenuId = null; logsInstance = inst; }}>Logs</button>
+                            <button class="launch-btn remove overflow-item danger" role="menuitem" onclick={() => { openMenuId = null; onRemove(inst); }}>Remove</button>
+                          </div>
+                        {/if}
+                      </div>
                     </div>
                   {/if}
                 </div>
@@ -601,19 +728,35 @@
         {/if}
       </section>
 
-      <section class="ws-section">
-        <h2 class="section-title">Quick Launch</h2>
+      <section class="ws-section" aria-label="Template catalog">
+        <h2 class="section-title">Template catalog</h2>
         <p class="section-desc">Pick a template to spin up a new instance.</p>
-        <div class="template-grid">
-          {#each quickLaunchTemplates as config (config.id)}
-            {@const launchable = mayLaunchTemplate($auth, config)}
-            <button class="template-card" class:locked={!launchable} onclick={() => openLaunch(config)}>
-              <span class="template-icon">{getTemplateIcon(config.name)}</span>
-              <span class="template-name">{config.name}</span>
-              <span class="template-access">{launchable ? 'Allowed' : 'Not allowed'}</span>
-            </button>
-          {/each}
-        </div>
+        {#if dashboardFiltered.templates.length === 0}
+          <p class="empty-text">No templates match the current search.</p>
+        {:else}
+          <div class="catalog-grid">
+            {#each dashboardFiltered.templates as config (config.id)}
+              {@const launchable = mayLaunchTemplate($auth, config)}
+              {@const family = resolveTemplateFamily(config.name)}
+              <div class="catalog-card" class:locked={!launchable}>
+                <div class={familyCoverClass(family)}>
+                  <img class="catalog-mark" src={familyIconSrc(family)} alt={`${family} mark`} loading="lazy" />
+                </div>
+                <div class="catalog-body">
+                  <h3 class="catalog-name">{config.name}</h3>
+                  <p class="catalog-desc">{config.description || 'No description yet.'}</p>
+                  <p class="catalog-facts">{config.cores} CPU · {formatMemory(config.memory)} · {config.gpu_count} GPU · {config.persistent_storage_path ? 'persistent storage' : 'ephemeral storage'}</p>
+                  {#if launchable}
+                    <button class="launch-btn vnc catalog-launch" onclick={() => onCatalogSelect(config)}>Launch</button>
+                  {:else}
+                    <p class="catalog-locked-reason">{lockedReason()}</p>
+                    <button class="launch-btn catalog-launch" title={lockedReason()} onclick={() => onCatalogSelect(config)}>Locked</button>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
       </section>
 
     {:else if activeTab === 'sessions' && canManage}
@@ -1330,62 +1473,183 @@
   :global(.launch-btn.edit:hover) { border-color: #22c55e; color: #4ade80; }
   :global(.launch-btn.sm) { font-size: 0.65rem; padding: 0.3rem 0.55rem; }
 
-  /* Template Quick Launch */
-  .template-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-    gap: 0.75rem;
-  }
-
-  .template-card {
+  /* Dashboard hero: greeting + search + totals */
+  .hero {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 8px;
-    padding: 1.25rem 0.75rem;
+    gap: 0.75rem;
+    padding: 1.25rem 1.5rem;
+    background: rgba(20, 20, 26, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 16px;
+    margin-bottom: 1.25rem;
+  }
+
+  .hero-greeting { font-size: 1.25rem; font-weight: 700; margin: 0; }
+  .hero-label { font-size: 0.75rem; color: #a1a1aa; display: block; margin-bottom: 0.35rem; }
+  .hero-input {
+    width: 100%;
+    max-width: 28rem;
+    padding: 0.6rem 0.9rem;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(9, 9, 11, 0.6);
+    color: #f4f4f5;
+  }
+  .hero-totals { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+  .hero-total {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.6rem;
+    border-radius: 999px;
+    background: rgba(99, 102, 241, 0.12);
+    border: 1px solid rgba(99, 102, 241, 0.3);
+  }
+  .hero-chips { display: flex; gap: 0.5rem; }
+  .hero-chip {
+    font-size: 0.75rem;
+    padding: 0.35rem 0.75rem;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: transparent;
+    color: #a1a1aa;
+    cursor: pointer;
+  }
+  .hero-chip.active { background: rgba(99, 102, 241, 0.2); color: #f4f4f5; border-color: rgba(99, 102, 241, 0.5); }
+
+  /* Session rich cards */
+  .session-rich .primary-action { font-weight: 700; }
+  .ws-state-story { display: block; font-size: 0.75rem; color: #a1a1aa; margin-top: 0.25rem; text-transform: capitalize; }
+  .overflow-wrap { position: relative; display: inline-flex; }
+  .overflow-btn { white-space: nowrap; }
+  .overflow-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    cursor: default;
+  }
+  .overflow-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 61;
+    display: flex;
+    flex-direction: column;
+    min-width: 10rem;
+    padding: 0.35rem;
+    background: rgba(24, 24, 30, 0.98);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  }
+  .overflow-menu .overflow-item {
+    justify-content: flex-start;
+    width: 100%;
+    border: none;
+    background: transparent;
+    border-radius: 8px;
+    text-align: left;
+  }
+  .overflow-menu .overflow-item:hover { background: rgba(255, 255, 255, 0.07); }
+  .overflow-menu .overflow-item.danger { color: #f87171; }
+  .empty-state { padding: 1rem; border: 1px dashed rgba(255, 255, 255, 0.15); border-radius: 12px; display: flex; align-items: center; gap: 0.75rem; }
+  .empty-mark { width: 40px; height: 40px; color: #c7d2fe; flex-shrink: 0; }
+
+  /* Template catalog: large cards with self-hosted marks */
+  .catalog-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 1rem;
+  }
+  .catalog-card {
+    display: flex;
+    flex-direction: column;
     background: rgba(20, 20, 26, 0.6);
     border: 1px solid rgba(255, 255, 255, 0.06);
     border-top: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 12px;
+    border-radius: 16px;
+    overflow: hidden;
+  }
+  .catalog-card.locked { opacity: 0.85; }
+  .catalog-cover {
+    height: 112px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(99, 102, 241, 0.22);
+  }
+  .catalog-cover.family-ubuntu { background: linear-gradient(135deg, rgba(232, 119, 34, 0.6), rgba(124, 45, 18, 0.55)); }
+  .catalog-cover.family-python { background: linear-gradient(135deg, rgba(59, 130, 246, 0.6), rgba(30, 58, 138, 0.55)); }
+  .catalog-cover.family-pytorch { background: linear-gradient(135deg, rgba(239, 68, 68, 0.6), rgba(127, 29, 29, 0.55)); }
+  .catalog-cover.family-rust { background: linear-gradient(135deg, rgba(249, 115, 22, 0.6), rgba(124, 45, 18, 0.55)); }
+  .catalog-cover.family-jupyter { background: linear-gradient(135deg, rgba(249, 115, 22, 0.5), rgba(59, 130, 246, 0.5)); }
+  .catalog-cover.family-generic { background: rgba(255, 255, 255, 0.14); }
+  .catalog-mark {
+    width: 52px;
+    height: 52px;
+    color: #ffffff;
+    filter: drop-shadow(0 2px 10px rgba(0, 0, 0, 0.55));
+  }
+  .catalog-body { padding: 1rem; display: flex; flex-direction: column; gap: 0.5rem; }
+  .catalog-name { font-size: 1rem; font-weight: 700; margin: 0; }
+  .catalog-desc { font-size: 0.8rem; color: #a1a1aa; margin: 0; }
+  .catalog-facts { font-size: 0.75rem; color: #d4d4d8; margin: 0; }
+  .catalog-locked-reason { font-size: 0.75rem; color: #fbbf24; margin: 0; }
+
+  /* Rail: pinnable + drawer + counts */
+  .rail-menu { display: none; }
+  .rail-toggle {
+    margin-left: auto;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #a1a1aa;
+    border-radius: 8px;
     cursor: pointer;
-    transition: all 0.2s;
-    font-family: inherit;
+    padding: 0.25rem 0.5rem;
+  }
+  .nav-count {
+    margin-left: auto;
+    font-size: 0.7rem;
+    font-weight: 700;
+    min-width: 1.4rem;
     text-align: center;
+    padding: 0.1rem 0.4rem;
+    border-radius: 999px;
+    background: rgba(99, 102, 241, 0.2);
+    border: 1px solid rgba(99, 102, 241, 0.4);
+  }
+  .drawer-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 40;
   }
 
-  .template-card:hover {
-    border-color: rgba(99, 102, 241, 0.4);
-    background: rgba(30, 30, 38, 0.8);
-    transform: translateY(-2px);
+  @media (max-width: 640px) {
+    .rail-menu {
+      display: block;
+      position: fixed;
+      top: 0.75rem;
+      left: 0.75rem;
+      z-index: 60;
+      background: rgba(18, 18, 22, 0.9);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: #f4f4f5;
+      border-radius: 8px;
+      padding: 0.5rem 0.75rem;
+      cursor: pointer;
+    }
+    .sidebar { position: fixed; left: 0; top: 0; transform: translateX(-100%); transition: transform 0.25s; }
+    .sidebar.drawer { transform: translateX(0); width: 240px; }
+    .sidebar.drawer .nav-text, .sidebar.drawer .nav-section-label, .sidebar.drawer .brand-name, .sidebar.drawer .user-btn { display: inline; }
+    .catalog-grid { grid-template-columns: 1fr; }
   }
-
-  .template-icon { font-size: 1.5rem; }
-
-  .template-name {
-    max-width: 100%;
+  @media (prefers-reduced-motion: reduce) {
+    .sidebar { transition: none; }
+    * { animation: none !important; }
   }
-
-  .template-card.locked {
-    opacity: 0.55;
-    cursor: not-allowed;
-  }
-
-  .template-card.locked:hover {
-    border-color: rgba(255, 255, 255, 0.06);
-    background: rgba(20, 20, 26, 0.6);
-    transform: none;
-  }
-
-  .template-access {
-    font-size: 0.62rem;
-    font-weight: 600;
-    color: #4ade80;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  .template-card.locked .template-access {
-    color: #71717a;
+  .nav-item:focus-visible, .rail-toggle:focus-visible, .rail-menu:focus-visible, .hero-input:focus-visible, .hero-chip:focus-visible, .launch-btn:focus-visible {
+    outline: 2px solid #818cf8;
+    outline-offset: 2px;
   }
 
   /* Filter Bar (shared: the Sessions view here and the audit filter bar in

@@ -73,6 +73,7 @@ async function openInstanceLogs(page: Page, instanceId: string, instanceName: st
   await page.goto('/');
   const card = page.locator('.ws-card').filter({ hasText: instanceName });
   await expect(card).toBeVisible({ timeout: 15_000 });
+  await card.locator('.overflow-btn').click();
   await card.locator('.launch-btn.logs').click();
   await expect(page.locator('.logs-modal')).toBeVisible({ timeout: 15_000 });
 }

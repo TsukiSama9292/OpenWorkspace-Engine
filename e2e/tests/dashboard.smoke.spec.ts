@@ -23,7 +23,7 @@ test('unauthenticated visitors are redirected to login and see no dashboard tabs
 test('admin can log in and sees the dashboard with all admin-gated tabs', async ({ page }) => {
   await loginAsAdmin(page);
 
-  await expect(page.locator('.section-title')).toHaveText(['Instances', 'Quick Launch']);
+  await expect(page.locator('.section-title')).toHaveText(['My sessions', 'Template catalog']);
   // The instances section renders a grid when instances exist and an
   // empty-state message when the stack has none — the smoke test is read-only
   // and must pass in either state.

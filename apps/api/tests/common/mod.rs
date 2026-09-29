@@ -96,6 +96,9 @@ impl TestContext {
             instance_dns: "8.8.8.8,1.1.1.1".to_string(),
             port_lock_dir: String::new(),
             audit_retention_days: 90,
+            dev_seed: false,
+            dev_user_password: "user".to_string(),
+            cookie_secure: false,
         };
 
         UserRepository::new(&db)

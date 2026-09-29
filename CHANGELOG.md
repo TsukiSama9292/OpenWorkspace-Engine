@@ -4,6 +4,24 @@ Chronological, user-visible changes. Append, don't rewrite history.
 
 ## [Unreleased]
 
+### Sidebar + dashboard redesign — `feature/sidebar-dashboard-redesign` (squash)
+
+`.scratch/archive/sidebar-dashboard-redesign/`. The Instances page is now a
+three-stage dashboard: a greeting hero (global search, quota usage, running /
+stopped / available totals), rich session cards (dominant Open action,
+secondary intents tucked into a More menu, removal always confirmed, state
+plus remaining budget in plain words), and a template catalog (recognizable
+family marks on duotone covers, descriptions, resource facts, explicit Launch
+or a locked card that explains whom to ask). The navigation rail shows labels
+by default, remembers its collapsed state, becomes a drawer on phones, carries
+running-session counts, and shows your real name and tier. No permission or
+lifecycle behavior changed.
+
+Same round, dev tooling: the dev stack seeds a plain `user` account and three
+public templates on boot (`OW_DEV_SEED=1`, see `pnpm run dev:account`), the
+session cookie's `Secure` flag is opt-in (`OW_COOKIE_SECURE`, so plain-HTTP
+logins work), and `pnpm run init` pins a working gVisor release.
+
 ### Group & user resource quotas (CPU / memory / GPU) — `feature/resource-quotas` (unmerged)
 
 `.scratch/resource-quota-v2/`. Beyond the instance-count ceiling: per-group

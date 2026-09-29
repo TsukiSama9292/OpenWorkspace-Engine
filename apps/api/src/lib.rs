@@ -11,6 +11,7 @@ pub mod audit;
 pub mod auth;
 pub mod core;
 pub mod db;
+pub mod dev_seed;
 pub mod effective_context;
 pub mod docker;
 pub mod health_worker;

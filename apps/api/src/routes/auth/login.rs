@@ -90,7 +90,7 @@ pub(crate) async fn login(
     let token = create_token(&user.id, &state.settings.jwt_secret)?;
 
     let mut headers = axum::http::HeaderMap::new();
-    set_cookie(&mut headers, &token);
+    set_cookie(&mut headers, &token, state.settings.cookie_secure);
 
     Ok((
         headers,

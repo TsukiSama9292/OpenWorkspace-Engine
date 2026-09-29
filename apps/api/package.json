@@ -4,7 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "RUST_LOG=info cargo watch -i security/openapi.json -x run",
+    "dev": "OW_DEV_SEED=1 RUST_LOG=info,sqlx::query=warn cargo watch -i security/openapi.json -x run",
     "build": "cargo build --release",
     "check": "bash ./scripts/check.sh",
     "analysis:rust": "cargo clippy --all-targets --all-features -- -W clippy::too_many_lines -W clippy::cognitive_complexity",

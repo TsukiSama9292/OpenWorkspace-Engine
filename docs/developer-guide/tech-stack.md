@@ -319,6 +319,9 @@ changing `JWT_SECRET` forces every logged-in user to re-login; changing
 | `DATABASE_URL` | *(required)* | Postgres connection string |
 | `JWT_SECRET` | *(required; must change in prod)* | Signing key for the `ow_token` JWT |
 | `ADMIN_PASSWORD` | `admin` | Startup password for the seeded admin |
+| `OW_DEV_SEED` | *(unset)* | Dev-only fixture switch: seeds the plain `user` account at startup. Set by `dev:api`; never in production compose |
+| `DEV_USER_PASSWORD` | `user` | Password for the dev-seeded `user` account |
+| `OW_COOKIE_SECURE` | *(unset)* | Adds `Secure` to the session cookie — keep off for plain HTTP (browsers drop it and all API calls 401); TLS-only deployments opt in |
 | `SERVER_HOST` / `SERVER_PORT` | `0.0.0.0` / `3000` | API bind address |
 | `DB_MAX_CONNECTIONS` | `5` | sqlx connection-pool size |
 | `OW_CONTAINER_RUNTIME` | `runc` | Server-level default container runtime (`runsc`, `runc`, …); applies when a template has none |

@@ -44,6 +44,12 @@ server {
         try_files $uri =404;
     }
 
+    location /icons/ {
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+        try_files $uri =404;
+    }
+
     location / {
         try_files $uri $uri/ /index.html;
     }

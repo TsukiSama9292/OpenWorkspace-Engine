@@ -74,7 +74,7 @@ async fn logout(
             .with_target(Some(auth.user_id.to_string()), Some(auth.username.clone())),
     );
     let mut headers = axum::http::HeaderMap::new();
-    clear_cookie(&mut headers);
+    clear_cookie(&mut headers, state.settings.cookie_secure);
     (headers, Json(serde_json::json!({ "status": "ok" })))
 }
 

@@ -1,4 +1,10 @@
-Status: ready-for-agent
+Status: completed (2026-09-29) — all three tickets closed on `feature/sidebar-dashboard-redesign`, squash-merged to `main`. Accepted divergences and out-of-scope companions are recorded below; details per ticket.
+
+## As-built notes (2026-09-29)
+
+- Accepted divergences: Story 17 ships the state story without a progress bar (remaining budget is uncomputable from the Instance payload); Story 20 shows storage kind instead of disk size (no disk field on Template); Story 26 drops the middle-breakpoint force-compact in favor of the persisted rail preference; Story 28 reduced-motion covers rail transitions plus a global animation kill; Story 5 badge renders only when count > 0; the overflow menu is hand-rolled (Escape + scrim + aria roles, no focus trap).
+- Artwork landed as official Simple Icons brand paths in monochrome treatment (CC0 path data; trademarks stay with owners — see `apps/web/static/icons/README.md`), plus the icon-licensing prompt at `.opencode/prompts/icon-licensing.md`.
+- Out-of-scope companions that rode this branch (separate commits, spec-adjacent dev tooling): dev-only DB seed (`user` + three public templates) with `pnpm run dev:account`, opt-in `Secure` cookie flag (`OW_COOKIE_SECURE`), gVisor download fix (pinned release + GCS arch names), vite `/api` dev proxy.
 
 ## Problem Statement
 

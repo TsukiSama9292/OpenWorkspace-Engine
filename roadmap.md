@@ -202,6 +202,20 @@ glassmorphism + zinc/indigo language — no backend change. `feature/log-ui-rede
 
 ---
 
+### ✅ Sidebar + dashboard redesign (navigation rail + personal dashboard)
+
+Highest-traffic surfaces rebuilt as one language (`.scratch/archive/sidebar-dashboard-redesign/`): pinnable rail with drawer/counts/truthful identity, three-stage dashboard (greeting hero with search + quota, rich session cards, true-mark template catalog). Self-hosted monochrome brand marks under immutable caching, no emoji, no permission-model change. `feature/sidebar-dashboard-redesign` (squash).
+
+| Deliverable | Content |
+|---|---|
+| Navigation rail | expanded by default, collapsible with persisted preference, drawer on phones, running counts, real username/tier, Escape dismissal |
+| Dashboard hero | greeting, global search filtering sessions + templates, quota chip, running/stopped/available totals, status chips |
+| Session cards | dominant Open action, secondary intents in a More menu, confirmed removal, state-plus-budget story in words |
+| Template catalog | family mark on duotone cover, description, resource facts, explicit launch or locked-with-reason reusing the denial notice |
+| Tests | pure `dashboard-filter` / `artwork` / `navigation` seams + component tests — full web suite 460 green; `sidebar-dashboard.full` Playwright spec (6 tests) + desktop/tablet/phone captures |
+
+---
+
 ## In-progress / Planned Stages
 
 ### 🔵 Stage 6: Reliability & Backup

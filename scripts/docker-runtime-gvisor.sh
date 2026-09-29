@@ -8,7 +8,9 @@
 # 測試用覆寫環境變數 (皆不會影響正式行為的預設值)：
 #   DOCKER_DAEMON_JSON   daemon.json 路徑        (預設 /etc/docker/daemon.json)
 #   RUNSC_INSTALL_DIR    runsc 安裝目錄          (預設 /usr/local/bin)
-#   RUNSC_VERSION        runsc release 版本      (預設 latest)
+#   RUNSC_VERSION        runsc release 版本        (預設 20250127.0；上游已移除
+#                                                GCS 上的 `latest` 指標，`latest`
+#                                                一律 404，必須釘住版本號)
 #   SKIP_RUNSC_INSTALL=1  略過 runsc 下載安裝
 #   SKIP_DAEMON_RELOAD=1  略過 daemon 重新載入
 #   NO_SUDO=1             不經 sudo 執行檔案操作 (供非 root 測試)
@@ -34,7 +36,7 @@ log() {
 DOCKER_DAEMON_JSON="${DOCKER_DAEMON_JSON:-/etc/docker/daemon.json}"
 RUNSC_INSTALL_DIR="${RUNSC_INSTALL_DIR:-/usr/local/bin}"
 RUNSC_BIN="${RUNSC_INSTALL_DIR%/}/runsc"
-RUNSC_VERSION="${RUNSC_VERSION:-latest}"
+RUNSC_VERSION="${RUNSC_VERSION:-20250127.0}"
 SKIP_RUNSC_INSTALL="${SKIP_RUNSC_INSTALL:-0}"
 SKIP_DAEMON_RELOAD="${SKIP_DAEMON_RELOAD:-0}"
 NO_SUDO="${NO_SUDO:-0}"
@@ -44,14 +46,15 @@ if [ "$NO_SUDO" = "0" ] && [ "$(id -u)" != "0" ]; then
     SUDO_PREFIX="sudo"
 fi
 
-# 對應 uname -m → gVisor release 的 GOARCH 目錄名。
+# 對應 uname -m → gVisor release 的 GOARCH 目錄名。注意：GCS release 目錄用
+# 的是核心架構名 (x86_64/aarch64)，不是 Go 架構名 (amd64/arm64)。
 host_arch() {
     case "$(uname -m)" in
-        x86_64|amd64) echo "amd64" ;;
-        aarch64|arm64) echo "arm64" ;;
-        armv7l) echo "armv7" ;;
+        x86_64|amd64) echo "x86_64" ;;
+        aarch64|arm64) echo "aarch64" ;;
+        armv7l) echo "arm" ;;
         i686|i386) echo "386" ;;
-        *) echo "amd64" ;;
+        *) echo "x86_64" ;;
     esac
 }
 

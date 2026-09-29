@@ -623,6 +623,62 @@ impl<'a> UserRepository<'a> {
         Ok(())
     }
 
+    pub async fn seed_dev_user(&self, dev_user_password: &str) -> Result<(), sea_orm::DbErr> {
+        // Dev-only fixture (called from `crate::dev_seed`, itself gated by
+        // `OW_DEV_SEED`, which production compose never sets): a plain
+        // `user` account in the User system group with unlimited membership
+        // quotas, mirroring the admin bootstrap exception so local launches
+        // are never quota-blocked. Idempotent: an existing `user` keeps its
+        // password; a missing membership is (re)created.
+        let Some(user_group) = group::Entity::find()
+            .filter(group::Column::Kind.eq(Some("user".to_string())))
+            .one(self.db)
+            .await?
+        else {
+            return Ok(());
+        };
+        let user_id = match user::Entity::find()
+            .filter(user::Column::Username.eq("user"))
+            .one(self.db)
+            .await?
+        {
+            Some(existing) => existing.id,
+            None => {
+                let password_hash =
+                    bcrypt::hash(dev_user_password, 10).expect("Failed to hash dev user password");
+                let id = Uuid::new_v4();
+                user::ActiveModel {
+                    id: Set(id),
+                    username: Set("user".to_string()),
+                    password_hash: Set(password_hash),
+                    ..Default::default()
+                }
+                .insert(self.db)
+                .await?;
+                id
+            }
+        };
+        let member = user_group::Entity::find()
+            .filter(user_group::Column::UserId.eq(user_id))
+            .filter(user_group::Column::GroupId.eq(user_group.id))
+            .one(self.db)
+            .await?;
+        if member.is_none() {
+            user_group::ActiveModel {
+                user_id: Set(user_id),
+                group_id: Set(user_group.id),
+                cpu_quota: Set(-1),
+                memory_quota: Set(-1),
+                gpu_quota: Set(-1),
+            }
+            .insert(self.db)
+            .await?;
+        }
+
+        tracing::info!("Seeded dev user (username: user)");
+        Ok(())
+    }
+
     pub async fn find_by_username(
         &self,
         username: &str,
@@ -1427,6 +1483,79 @@ impl<'a> WorkspaceTemplateRepository<'a> {
             }
             Err(e) => Err(e),
         }
+    }
+
+    /// Seed the three default dev templates (KasmVNC desktop, ttyd terminal,
+    /// Jupyter lab) as public templates owned by `owner_id`. Called from
+    /// `crate::dev_seed`, itself gated by `OW_DEV_SEED`, which production
+    /// compose never sets. Idempotent: an existing template keeps its row
+    /// (name match) — a developer who edited a fixture keeps their edits.
+    pub async fn seed_dev_templates(&self, owner_id: Uuid) -> Result<(), sea_orm::DbErr> {
+        struct DevTemplateFixture {
+            name: &'static str,
+            description: &'static str,
+            image: &'static str,
+            remote_type: &'static str,
+        }
+        const FIXTURES: &[DevTemplateFixture] = &[
+            DevTemplateFixture {
+                name: "Ubuntu Desktop",
+                description: "Full Ubuntu desktop over KasmVNC.",
+                image: "tsukisama9292/ow-kasmvnc-ubuntu:jammy",
+                remote_type: "kasmvnc",
+            },
+            DevTemplateFixture {
+                name: "Ubuntu Terminal",
+                description: "Ubuntu shell over ttyd in the browser.",
+                image: "tsukisama9292/ow-ttyd-ubuntu:jammy",
+                remote_type: "ttyd",
+            },
+            DevTemplateFixture {
+                name: "Python Lab",
+                description: "JupyterLab with a Python data stack.",
+                image: "tsukisama9292/ow-jupyter-ubuntu:jammy",
+                remote_type: "jupyter",
+            },
+        ];
+        let empty = serde_json::json!({});
+        for fixture in FIXTURES {
+            let existing = workspace_template::Entity::find()
+                .filter(workspace_template::Column::Name.eq(fixture.name))
+                .one(self.db)
+                .await?;
+            if existing.is_some() {
+                continue;
+            }
+            let template = self
+                .create(
+                    fixture.name,
+                    Some(fixture.description),
+                    owner_id,
+                    fixture.image,
+                    2,
+                    4_294_967_296,
+                    0,
+                    None,
+                    fixture.remote_type,
+                    "runc",
+                    &empty,
+                    &empty,
+                    &empty,
+                    None,
+                    -1,
+                    "remove",
+                    -1,
+                    -1,
+                    -1,
+                    "pause",
+                    false,
+                )
+                .await?;
+            self.set_visibility(template.id, TemplateVisibility::Public)
+                .await?;
+            tracing::info!("Seeded dev template ({})", fixture.name);
+        }
+        Ok(())
     }
 }
 
