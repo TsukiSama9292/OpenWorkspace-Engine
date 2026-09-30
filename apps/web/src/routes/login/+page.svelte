@@ -85,10 +85,6 @@
             </svg>
           {/if}
         </button>
-
-        <div class="divider"><span>OR</span></div>
-
-        <button class="btn-secondary" type="button">SSH Key / Single Sign-On</button>
       </form>
     </div>
   </div>
@@ -287,39 +283,6 @@
 
   .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
-  .divider {
-    display: flex;
-    align-items: center;
-    text-align: center;
-    color: #3f3f46;
-    font-size: 0.7rem;
-    margin: 0.5rem 0;
-  }
-
-  .divider::before, .divider::after {
-    content: '';
-    flex: 1;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  }
-
-  .divider span { padding: 0 8px; }
-
-  .btn-secondary {
-    background: transparent;
-    color: #a1a1aa;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 8px;
-    padding: 0.6rem;
-    font-size: 0.8rem;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .btn-secondary:hover {
-    border-color: rgba(255, 255, 255, 0.2);
-    color: #fff;
-  }
-
   .error-badge {
     background: rgba(239, 68, 68, 0.1);
     border: 1px solid rgba(239, 68, 68, 0.2);
@@ -328,5 +291,15 @@
     padding: 0.5rem;
     border-radius: 6px;
     text-align: center;
+  }
+
+  @media (max-width: 760px) {
+    .app-container { padding: 1rem; align-items: flex-start; }
+    .login-wrapper { grid-template-columns: 1fr; height: auto; }
+    .panel-visual { padding: 1.5rem 1.5rem 0 1.5rem; border-right: none; }
+    .panel-visual .hero-desc, .panel-visual .panel-footer { display: none; }
+    .panel-visual .hero-title { font-size: 1.4rem; margin-bottom: 0; }
+    .panel-visual .visual-content { margin-top: 1rem; }
+    .panel-form { padding: 1.5rem; }
   }
 </style>

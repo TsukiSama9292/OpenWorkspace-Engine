@@ -2,6 +2,10 @@
   import { onMount } from 'svelte';
   import { listOrphanedVolumes, cleanupOrphanedVolume } from '$lib/api/rbac-actions';
   import { mayManageUsers } from '$lib/permissions';
+  import Modal from '$lib/components/ui/Modal.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import EmptyState from '$lib/components/ui/EmptyState.svelte';
+  import { statusBadgeClass } from '$lib/status-badge';
   import type { EffectiveContext, PersistentVolume } from '$lib/types';
 
   let { ctx = null }: { ctx?: EffectiveContext | null } = $props();
@@ -88,11 +92,11 @@
     </div>
 
     {#if loading}
-      <p class="empty-text">Loading volumes...</p>
+      <EmptyState message="Loading volumes..." />
     {:else if loadError}
-      <p class="empty-text">{loadError}</p>
+      <EmptyState message={loadError} />
     {:else if volumes.length === 0}
-      <p class="empty-text">No orphaned volumes.</p>
+      <EmptyState message="No orphaned volumes. Removed or failed instances leave nothing behind right now." />
     {:else}
       <div class="panel-toolbar">
         <div class="panel-search-wrap">
@@ -108,7 +112,7 @@
         {/if}
       </div>
       {#if filteredVolumes.length === 0}
-        <p class="empty-text">No volumes match your filters.</p>
+        <EmptyState message="No volumes match your filters. Try different keywords, or clear the search to browse everything." />
       {:else}
         <div class="instances-table-wrap">
           <table class="instances-table">
@@ -116,6 +120,7 @@
               <tr>
                 <th>Host Path</th>
                 <th>Owner</th>
+                <th>Status</th>
                 <th>Orphaned Since</th>
                 <th>Actions</th>
               </tr>
@@ -127,6 +132,12 @@
                     <span class="td-name-text">{volume.host_path}</span>
                   </td>
                   <td class="td-owner">{volume.owner_username ?? 'deleted user'}</td>
+                  <td>
+                    <span class="status-badge {statusBadgeClass(volume.status)}">
+                      <span class="status-dot-inline"></span>
+                      {volume.status}
+                    </span>
+                  </td>
                   <td class="td-date">{formatSince(volume.created_at)}</td>
                   <td class="td-actions">
                     <button class="launch-btn remove" onclick={() => openCleanup(volume)}>Clean Up</button>
@@ -141,37 +152,32 @@
   </section>
 
   {#if cleanupTarget}
-    <div class="modal-overlay" onclick={closeCleanup} role="presentation"></div>
-    <div class="modal-card">
-      <h3 class="modal-title">Thorough Cleanup</h3>
-      <p class="modal-desc">This permanently deletes the volume directory. Type the full host path to confirm.</p>
-      <code class="cleanup-path">{cleanupTarget.host_path}</code>
-      <div class="modal-field">
-        <label for="cleanup-confirm" class="modal-label">Host Path</label>
-        <input
-          id="cleanup-confirm"
-          class="modal-input"
-          type="text"
-          autocomplete="off"
-          bind:value={confirmText}
-          placeholder={cleanupTarget.host_path}
-        />
+    <Modal open title="Thorough Cleanup" width="28rem" onclose={closeCleanup}>
+      <div class="flex flex-col gap-3" data-testid="volume-cleanup">
+        <p class="text-sm leading-relaxed text-surface-200">This permanently deletes the volume directory. Type the full host path to confirm.</p>
+        <code class="cleanup-path">{cleanupTarget.host_path}</code>
+        <div class="modal-field">
+          <label for="cleanup-confirm" class="modal-label">Host Path</label>
+          <input
+            id="cleanup-confirm"
+            class="modal-input"
+            type="text"
+            autocomplete="off"
+            bind:value={confirmText}
+            placeholder={cleanupTarget.host_path}
+          />
+        </div>
+        {#if cleanupError}
+          <p class="text-error-500 text-sm m-0">{cleanupError}</p>
+        {/if}
+        <div class="flex justify-end gap-2">
+          <Button variant="secondary" onclick={closeCleanup}>Cancel</Button>
+          <Button variant="error" onclick={onCleanup} disabled={!confirmed || cleaning}>
+            {cleaning ? 'Cleaning...' : 'Permanently Delete'}
+          </Button>
+        </div>
       </div>
-      {#if cleanupError}
-        <div class="error-badge">{cleanupError}</div>
-      {/if}
-      <div class="modal-actions">
-        <button type="button" class="modal-cancel" onclick={closeCleanup}>Cancel</button>
-        <button
-          type="button"
-          class="cleanup-confirm"
-          disabled={!confirmed || cleaning}
-          onclick={onCleanup}
-        >
-          {cleaning ? 'Cleaning...' : 'Permanently Delete'}
-        </button>
-      </div>
-    </div>
+    </Modal>
   {/if}
 {/if}
 
@@ -192,119 +198,5 @@
     border: 1px solid rgba(255, 255, 255, 0.06);
     border-radius: 6px;
     word-break: break-all;
-  }
-
-  .modal-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.6);
-    z-index: 200;
-  }
-
-  .modal-card {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: 440px;
-    max-height: 88vh;
-    overflow-y: auto;
-    background: rgba(20, 20, 26, 0.98);
-    backdrop-filter: blur(24px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-top: 1px solid rgba(255, 255, 255, 0.2);
-    border-radius: 16px;
-    padding: 1.5rem;
-    z-index: 201;
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-  }
-
-  .modal-title {
-    font-size: 1.1rem;
-    font-weight: 600;
-    margin: 0;
-  }
-
-  .modal-desc {
-    font-size: 0.8rem;
-    color: #71717a;
-    margin: 0;
-  }
-
-  .modal-field {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .modal-label {
-    font-size: 0.7rem;
-    font-weight: 600;
-    color: #71717a;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  .modal-input {
-    background: rgba(0, 0, 0, 0.4);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 8px;
-    padding: 0.6rem 0.75rem;
-    color: #f4f4f5;
-    font-size: 0.85rem;
-    font-family: inherit;
-    outline: none;
-  }
-
-  .modal-input:focus {
-    border-color: #818cf8;
-  }
-
-  .modal-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 0.5rem;
-  }
-
-  .modal-cancel {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    color: #a1a1aa;
-    padding: 0.5rem 1rem;
-    border-radius: 8px;
-    font-size: 0.8rem;
-    cursor: pointer;
-    font-family: inherit;
-    transition: all 0.2s;
-  }
-
-  .modal-cancel:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: #fff;
-  }
-
-  .cleanup-confirm {
-    background: #dc2626;
-    border: none;
-    color: #fff;
-    padding: 0.5rem 1.25rem;
-    border-radius: 8px;
-    font-size: 0.8rem;
-    font-weight: 600;
-    cursor: pointer;
-    font-family: inherit;
-    transition: background 0.2s;
-  }
-
-  .cleanup-confirm:hover {
-    background: #b91c1c;
-  }
-
-  .cleanup-confirm:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
   }
 </style>

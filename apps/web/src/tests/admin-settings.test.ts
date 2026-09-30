@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/svelte';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import AdminSettings from '$lib/components/AdminSettings.svelte';
 
@@ -104,8 +104,7 @@ describe('AdminSettings', () => {
     });
   });
 
-  it('surfaces a save error from the API', async () => {
-    const fetchMock = vi.fn();
+  it('surfaces a save error from the API', async () => {    const fetchMock = vi.fn();
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -128,6 +127,46 @@ describe('AdminSettings', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Invalid negative value')).toBeTruthy();
+    });
+  });
+
+  it('asks for confirmation only when a save newly blocks a resource', async () => {
+    const fetchMock = vi.fn();
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(JSON.stringify({ settings: MOCK_SETTINGS }))
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(AdminSettings);
+
+    await waitFor(() => {
+      expect((screen.getByLabelText('Global instance limit value') as HTMLInputElement).value).toBe('5');
+    });
+
+    const limitMode = screen.getByLabelText('Global instance limit mode') as HTMLSelectElement;
+    await fireEvent.change(limitMode, { target: { value: 'disabled' } });
+
+    await fireEvent.click(screen.getByText('Save Changes'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Save blocking settings?')).toBeTruthy();
+    });
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText(/Global instance limit/)).toBeTruthy();
+    const puts = fetchMock.mock.calls.filter(([, options]) => (options as RequestInit).method === 'PUT');
+    expect(puts).toHaveLength(0);
+
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Save anyway' }));
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(
+        ([, options]) => (options as RequestInit).method === 'PUT'
+      );
+      expect(putCall).toBeTruthy();
+      const [, options] = putCall as [string, RequestInit];
+      expect(JSON.parse(options.body as string)).toMatchObject({ host_instance_limit: 0 });
     });
   });
 });

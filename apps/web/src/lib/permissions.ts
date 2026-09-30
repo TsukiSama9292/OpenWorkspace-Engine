@@ -46,6 +46,12 @@ export function mayLaunchTemplate(ctx: PermissionContext, template: Template): b
   return ctx.allowed_template_ids.includes(template.id);
 }
 
+/** Plain-words reason a template cannot be launched, or null when it can. */
+export function templateLockReason(ctx: PermissionContext, template: Template): string | null {
+  if (mayLaunchTemplate(ctx, template)) return null;
+  return 'Not allowed — this template is outside your whitelist. Ask an admin for access.';
+}
+
 export function mayManageUsers(ctx: PermissionContext): boolean {
   return ctx !== null && (ctx.is_admin || ctx.can_manage_users);
 }

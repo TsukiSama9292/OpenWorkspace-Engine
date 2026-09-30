@@ -20,8 +20,7 @@ export async function launchInstance(
   return { error: 'Failed to launch instance' };
 }
 
-export async function deleteTemplate(templateId: string): Promise<{ error?: string; cancelled?: boolean }> {
-  if (!confirm('Delete this template? Instances must be stopped first.')) return { cancelled: true };
+export async function deleteTemplate(templateId: string): Promise<{ error?: string }> {
   const res = await api.delete(`/templates/${templateId}`);
   if (res.error) return { error: res.error };
   return {};

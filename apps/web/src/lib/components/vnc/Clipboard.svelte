@@ -1,5 +1,6 @@
 <script lang="ts">
   import Modal from '$lib/components/ui/Modal.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
 
   interface Props {
     open: boolean;
@@ -69,9 +70,9 @@
       <div class="text-[11px] text-primary-500">{syncStatus}</div>
     {/if}
     <div class="flex gap-2 justify-end">
-      <button class="px-3.5 py-1.5 rounded text-[13px] font-sans cursor-pointer border border-surface-700 bg-black/40 text-surface-100 transition-all hover:bg-surface-800" onclick={handlePaste}>Read from clipboard</button>
-      <button class="px-3.5 py-1.5 rounded text-[13px] font-sans cursor-pointer border border-surface-700 bg-black/40 text-surface-100 transition-all hover:bg-surface-800" onclick={handleCopy}>Copy to clipboard</button>
-      <button class="px-3.5 py-1.5 rounded text-[13px] font-sans cursor-pointer border border-transparent bg-primary-500 text-primary-contrast-500 font-medium transition-all hover:bg-primary-600" onclick={handleSend}>Send to remote</button>
+      <Button variant="secondary" onclick={() => void handlePaste()}>Read from clipboard</Button>
+      <Button variant="secondary" onclick={() => void handleCopy()}>Copy to clipboard</Button>
+      <Button variant="primary" onclick={() => void handleSend()}>Send to remote</Button>
     </div>
   </div>
 </Modal>

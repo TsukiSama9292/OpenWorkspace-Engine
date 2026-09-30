@@ -48,8 +48,65 @@ export function selectDeadline(
   return null;
 }
 
-export function formatRemaining(ms: number): string {
-  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+export interface BudgetWindows {
+  maxRunSeconds: number | null | undefined;
+  keepTimeSeconds: number | null | undefined;
+}
+
+export interface BudgetStory {
+  kind: 'auto-sleep' | 'keep-time';
+  remainingMs: number;
+  action: TimeoutAction | null;
+  label: string;
+  severity: CountdownSeverity;
+  /** Remaining share of the originating window, or null when the window is unlimited or unknown. */
+  fraction: number | null;
+}
+
+export function budgetStory(
+  deadlines: {
+    auto_sleeps_at: string | null | undefined;
+    timeout_action: TimeoutAction | null | undefined;
+    keep_time_deadline: string | null | undefined;
+    keep_time_action: TimeoutAction | null | undefined;
+  },
+  windows: BudgetWindows | null,
+  now: number
+): BudgetStory | null {
+  const picked = selectDeadline(
+    deadlines.auto_sleeps_at,
+    deadlines.timeout_action,
+    deadlines.keep_time_deadline,
+    deadlines.keep_time_action
+  );
+  if (!picked) return null;
+  const remaining = remainingMs(picked.deadline, now);
+  if (remaining === null || remaining <= 0) return null;
+  const keepFirst =
+    deadlines.keep_time_deadline != null &&
+    picked.deadline === deadlines.keep_time_deadline &&
+    picked.deadline !== deadlines.auto_sleeps_at;
+  const kind: BudgetStory['kind'] = keepFirst ? 'keep-time' : 'auto-sleep';
+  const windowSeconds = keepFirst ? windows?.keepTimeSeconds : windows?.maxRunSeconds;
+  return {
+    kind,
+    remainingMs: remaining,
+    action: picked.action,
+    label:
+      kind === 'keep-time'
+        ? `Keep time ends in ${formatRemaining(remaining)}`
+        : `Auto-sleep in ${formatRemaining(remaining)}`,
+    severity: severity(remaining),
+    fraction: windowFraction(remaining, windowSeconds)
+  };
+}
+
+function windowFraction(remaining: number, windowSeconds: number | null | undefined): number | null {
+  if (windowSeconds === null || windowSeconds === undefined || windowSeconds <= 0) return null;
+  return Math.min(1, Math.max(0, remaining / (windowSeconds * 1000)));
+}
+
+export function formatRemaining(ms: number): string {  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;

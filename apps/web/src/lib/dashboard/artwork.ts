@@ -17,3 +17,15 @@ export function familyIconSrc(family: TemplateFamily): string {
 export function familyCoverClass(family: TemplateFamily): string {
   return `catalog-cover family-${family}`;
 }
+
+export interface FamilyArtwork {
+  family: TemplateFamily;
+  iconSrc: string;
+  coverClass: string;
+}
+
+/** One call for the full card treatment of a template name. */
+export function familyArtwork(name: string): FamilyArtwork {
+  const family = resolveTemplateFamily(name);
+  return { family, iconSrc: familyIconSrc(family), coverClass: familyCoverClass(family) };
+}

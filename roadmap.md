@@ -216,6 +216,20 @@ Highest-traffic surfaces rebuilt as one language (`.scratch/archive/sidebar-dash
 
 ---
 
+### ✅ Web surface polish (every tab and component, one language)
+
+Follow-up round (`.scratch/archive/web-surface-polish/`): the dashboard language extended to all eight management surfaces plus login and the in-session viewer family — one button weight, one filter-bar pattern, one empty-state voice, one confirmation pattern, one modal/form chrome in a shared sheet. Structure may change, permission/API/lifecycle semantics frozen. `feature/web-surface-polish` (squash).
+
+| Deliverable | Content |
+|---|---|
+| Shared foundation | `ConfirmDialog` + `ConfirmHost`, `EmptyState`, `Modal` focus trap with labelled close, shared filter/panel/table/catalog/form chrome, `PendingConfirm` type, `wrapTabFocus` helper |
+| Traffic pages | templates tab in catalog language (family marks, facts, locked reasons, 3-step editor, unified unlimited vocabulary); sessions table with Open-first actions and Budget column; volumes with Status column and shared cleanup modal |
+| Administration pages | group/user editors on the shared modal with confirmed deletions and quota resets; settings with plain-words explanations and block-newly confirmation |
+| Viewer family | clipboard on shared buttons, labelled viewer settings, toolbar with dominant live intent, reduced-motion throughout; connection behavior byte-for-byte |
+| Tests | pure `budgetStory` / `statusBadge` / `familyArtwork` / permission seams + component tests — full web suite 511 green; per-milestone Playwright specs (base 5, traffic 3, admin 3) + sidebar/quota/monitor/observability/log/live regression all green with captures |
+
+---
+
 ## In-progress / Planned Stages
 
 ### 🔵 Stage 6: Reliability & Backup

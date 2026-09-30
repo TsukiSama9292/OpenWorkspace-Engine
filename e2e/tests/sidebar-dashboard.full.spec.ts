@@ -175,7 +175,7 @@ test('session lifecycle: rich card, stop, and removal with confirmation', async 
 
   const launch = await page.request.post('/api/instances', { data: { template_id: templateId } });
   expect(launch.ok()).toBeTruthy();
-  const launched = (await launch.json()).instance as { id: string };
+  const launched = (await launch.json()).instance as { id: string; name: string };
   const instanceId = launched.id;
   try {
     await page.goto('/');
@@ -184,10 +184,13 @@ test('session lifecycle: rich card, stop, and removal with confirmation', async 
     await expect(card.locator('.ws-state-story')).toBeVisible();
     await expect(card.locator('.overflow-btn')).toHaveText(/More/);
 
-    page.on('dialog', (d) => void d.accept());
     await card.locator('.overflow-btn').click();
     await expect(card.locator('[role="menu"]')).toBeVisible();
     await card.locator('.launch-btn.remove').click();
+    const dialog = page.getByRole('dialog', { name: `Delete "${launched.name}"?` });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('[data-testid="confirm-dialog"]')).toContainText('Persistent data is kept');
+    await dialog.getByRole('button', { name: 'Delete' }).click();
     await expect
       .poll(
         async () => {

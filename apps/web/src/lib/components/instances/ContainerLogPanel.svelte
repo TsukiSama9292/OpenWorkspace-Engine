@@ -8,6 +8,7 @@
     loadLogFontSize,
     saveLogFontSize
   } from '$lib/logs/log-helpers';
+  import EmptyState from '$lib/components/ui/EmptyState.svelte';
   import type { ContainerLogLine, Instance } from '$lib/types';
 
   let {
@@ -172,9 +173,9 @@
       style:font-size={`${fontSize}px`}
     >
       {#if lines.length === 0 && streaming}
-        <p class="empty-text">Waiting for output…</p>
+        <EmptyState message="Waiting for output…" />
       {:else if lines.length === 0}
-        <p class="empty-text">No log output.</p>
+        <EmptyState message="No log output." />
       {:else}
         {#each lines as line, i (lineStart + i)}
           <div class="log-line" class:stderr={line.stream === 'stderr'}>

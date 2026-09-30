@@ -15,6 +15,11 @@
     type GroupFormState
   } from '$lib/groups/group-form';
   import TriStateInput from '$lib/components/forms/TriStateInput.svelte';
+  import Modal from '$lib/components/ui/Modal.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import ConfirmHost from '$lib/components/ui/ConfirmHost.svelte';
+  import EmptyState from '$lib/components/ui/EmptyState.svelte';
+  import type { PendingConfirm } from '$lib/components/ui/confirm';
   import {
     memoryMbFromTriState,
     memoryMbToTriState,
@@ -51,6 +56,7 @@
   });
   let quotaError = $state('');
   let quotaSaving = $state(false);
+  let pendingConfirm = $state<PendingConfirm | null>(null);
 
   const canManageUsers = $derived(ctx?.can_manage_users === true || ctx?.is_admin === true);
   const isAdmin = $derived(ctx?.is_admin === true);
@@ -166,7 +172,16 @@
   }
 
   async function onDelete(group: Group) {
-    if (!confirm(`Delete group "${group.name}"? Its memberships are removed.`)) return;
+    pendingConfirm = {
+      title: `Delete group "${group.name}"?`,
+      body: 'Its memberships are removed. This cannot be undone.',
+      confirmLabel: 'Delete',
+      danger: true,
+      onConfirm: () => void removeGroup(group)
+    };
+  }
+
+  async function removeGroup(group: Group) {
     const res = await deleteGroup(group.id);
     if (!res.error) {
       groups = groups.filter((g) => g.id !== group.id);
@@ -222,7 +237,16 @@
     if (!isAdmin) return;
     const members = group.members ?? [];
     if (members.length === 0) return;
-    if (!confirm(`Reset all ${members.length} member quotas in "${group.name}" to 0 (blocked)?`)) return;
+    pendingConfirm = {
+      title: `Reset all ${members.length} member quotas in "${group.name}"?`,
+      body: 'Every member quota returns to 0 (blocked). This cannot be undone.',
+      confirmLabel: 'Reset quotas',
+      danger: true,
+      onConfirm: () => void resetAllQuotas(group, members)
+    };
+  }
+
+  async function resetAllQuotas(group: Group, members: GroupMember[]) {
     for (const member of members) {
       const res = await updateMemberQuota(group.id, member.user_id, {
         cpu_quota: 0,
@@ -251,11 +275,11 @@
     </div>
 
     {#if loading}
-      <p class="empty-text">Loading groups...</p>
+      <EmptyState message="Loading groups..." />
     {:else if loadError}
-      <p class="empty-text">{loadError}</p>
+      <EmptyState message={loadError} />
     {:else if groups.length === 0}
-      <p class="empty-text">No groups yet.</p>
+      <EmptyState message="No groups yet. Create one to organize members and permissions." />
     {:else}
       <div class="panel-toolbar">
         <div class="panel-search-wrap">
@@ -285,7 +309,7 @@
         {/if}
       </div>
       {#if filteredGroups.length === 0}
-        <p class="empty-text">No groups match your filters.</p>
+        <EmptyState message="No groups match your filters. Try different keywords, or clear the filters to browse everything." />
       {:else}
         <div class="instances-table-wrap">
           <table class="instances-table">
@@ -351,7 +375,7 @@
                     <td colspan="7">
                       <div class="member-panel">
                         {#if (group.members?.length ?? 0) === 0}
-                          <p class="empty-text">No members in this group.</p>
+                          <EmptyState message="No members in this group." />
                         {:else}
                           {#each group.members ?? [] as member (member.user_id)}
                             <div class="member-row">
@@ -383,10 +407,8 @@
   </section>
 
   {#if showModal}
-    <div class="modal-overlay" onclick={closeModal} role="presentation"></div>
-    <div class="modal-card">
-      <h3 class="modal-title">{editing ? 'Edit Group' : 'New Group'}</h3>
-      <form onsubmit={(e) => { e.preventDefault(); onSave(); }}>
+    <Modal open title={editing ? 'Edit Group' : 'New Group'} width="32rem" onclose={closeModal}>
+      <form class="flex flex-col gap-3" onsubmit={(e) => { e.preventDefault(); onSave(); }}>
         <div class="modal-field">
           <label for="group-name" class="modal-label">Name</label>
           <input id="group-name" class="modal-input" type="text" bind:value={form.name} required disabled={nameLocked} />
@@ -437,7 +459,7 @@
         <div class="modal-field">
           <span class="modal-label">Template Whitelist</span>
           {#if templates.length === 0}
-            <p class="empty-text">No templates available.</p>
+            <EmptyState message="No templates available." />
           {:else}
             {#each templates as tpl (tpl.id)}
               <label class="group-toggle-row">
@@ -453,24 +475,22 @@
           {/if}
         </div>
         {#if form.error}
-          <div class="error-badge">{form.error}</div>
+          <p class="text-error-500 text-sm m-0">{form.error}</p>
         {/if}
-        <div class="modal-actions">
-          <button type="button" class="modal-cancel" onclick={closeModal}>Cancel</button>
-          <button type="submit" class="modal-confirm" disabled={form.loading}>
+        <div class="flex justify-end gap-2">
+          <Button variant="secondary" onclick={closeModal}>Cancel</Button>
+          <Button variant="primary" type="submit" disabled={form.loading}>
             {editing ? 'Save Changes' : 'Create Group'}
-          </button>
+          </Button>
         </div>
       </form>
-    </div>
+    </Modal>
   {/if}
 
   {#if showQuotaModal && quotaGroup && quotaMember}
-    <div class="modal-overlay" onclick={closeQuotaModal} role="presentation"></div>
-    <div class="modal-card">
-      <h3 class="modal-title">Edit quotas — {quotaMember.username}</h3>
+    <Modal open title="Edit quotas — {quotaMember.username}" width="32rem" onclose={closeQuotaModal}>
       <p class="modal-hint">Group "{quotaGroup.name}". -1 = unlimited (bounded by the pool), 0 = blocked, custom = exact cap.</p>
-      <form onsubmit={(e) => { e.preventDefault(); onSaveQuota(); }}>
+      <form class="flex flex-col gap-3" onsubmit={(e) => { e.preventDefault(); onSaveQuota(); }}>
         <div class="modal-field">
           <div class="pool-grid">
             <TriStateInput label="CPU Quota (cores)" bind:value={quotaForm.cpu} unit="cores" placeholder="e.g. 4" />
@@ -479,15 +499,17 @@
           </div>
         </div>
         {#if quotaError}
-          <div class="error-badge">{quotaError}</div>
+          <p class="text-error-500 text-sm m-0">{quotaError}</p>
         {/if}
-        <div class="modal-actions">
-          <button type="button" class="modal-cancel" onclick={closeQuotaModal}>Cancel</button>
-          <button type="submit" class="modal-confirm" disabled={quotaSaving}>Save Quotas</button>
+        <div class="flex justify-end gap-2">
+          <Button variant="secondary" onclick={closeQuotaModal}>Cancel</Button>
+          <Button variant="primary" type="submit" disabled={quotaSaving}>Save Quotas</Button>
         </div>
       </form>
-    </div>
+    </Modal>
   {/if}
+
+  <ConfirmHost bind:request={pendingConfirm} />
 {/if}
 
 <style>
@@ -506,13 +528,6 @@
     border: 1px solid rgba(252, 211, 77, 0.3);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-  }
-
-  .modal-hint {
-    font-size: 0.72rem;
-    color: #71717a;
-    font-style: italic;
-    margin: 0;
   }
 
   .group-flag-badge {
@@ -587,73 +602,10 @@
     justify-content: flex-end;
   }
 
-  .modal-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.6);
-    z-index: 200;
-  }
-
-  .modal-card {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: 440px;
-    max-height: 88vh;
-    overflow-y: auto;
-    background: rgba(20, 20, 26, 0.98);
-    backdrop-filter: blur(24px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-top: 1px solid rgba(255, 255, 255, 0.2);
-    border-radius: 16px;
-    padding: 1.5rem;
-    z-index: 201;
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-  }
-
-  .modal-title {
-    font-size: 1.1rem;
-    font-weight: 600;
-    margin: 0;
-  }
-
-  .modal-field {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    margin-bottom: 1rem;
-  }
-
   .pool-grid {
     display: flex;
     gap: 10px;
     align-items: flex-end;
-  }
-
-  .modal-label {
-    font-size: 0.7rem;
-    font-weight: 600;
-    color: #71717a;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  .modal-input {
-    background: rgba(0, 0, 0, 0.4);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 8px;
-    padding: 0.6rem 0.75rem;
-    color: #f4f4f5;
-    font-size: 0.85rem;
-    font-family: inherit;
-    outline: none;
-  }
-
-  .modal-input:focus {
-    border-color: #818cf8;
   }
 
   .group-toggle-row {
@@ -666,51 +618,5 @@
   .group-toggle-label {
     font-size: 0.8rem;
     color: #d4d4d8;
-  }
-
-  .modal-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 0.5rem;
-  }
-
-  .modal-cancel {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    color: #a1a1aa;
-    padding: 0.5rem 1rem;
-    border-radius: 8px;
-    font-size: 0.8rem;
-    cursor: pointer;
-    font-family: inherit;
-    transition: all 0.2s;
-  }
-
-  .modal-cancel:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: #fff;
-  }
-
-  .modal-confirm {
-    background: #6366f1;
-    border: none;
-    color: #fff;
-    padding: 0.5rem 1.25rem;
-    border-radius: 8px;
-    font-size: 0.8rem;
-    font-weight: 600;
-    cursor: pointer;
-    font-family: inherit;
-    transition: background 0.2s;
-  }
-
-  .modal-confirm:hover {
-    background: #4f46e5;
-  }
-
-  .modal-confirm:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
   }
 </style>

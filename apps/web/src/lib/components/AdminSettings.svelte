@@ -9,6 +9,9 @@
   } from '$lib/system-settings';
   import { describeTriState } from '$lib/tri-state';
   import TriStateInput from '$lib/components/forms/TriStateInput.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import ConfirmHost from '$lib/components/ui/ConfirmHost.svelte';
+  import type { PendingConfirm } from '$lib/components/ui/confirm';
 
   let settings = $state<SystemSettingsValue | null>(null);
   let form = $state<AdminSettingsFormState | null>(null);
@@ -16,6 +19,7 @@
   let error = $state('');
   let saved = $state(false);
   let saving = $state(false);
+  let pendingConfirm = $state<PendingConfirm | null>(null);
 
   async function load() {
     loading = true;
@@ -49,6 +53,40 @@
       error = 'Failed to save system settings';
     }
     saving = false;
+  }
+
+  /** Settings the save would newly turn to Blocked (0) — blocking the host is always confirmed. */
+  function newlyBlockedLabels(): string[] {
+    if (!form || !settings) return [];
+    const blocked: string[] = [];
+    if (form.hostInstanceLimit.mode === 'disabled' && settings.host_instance_limit !== 0) {
+      blocked.push('Global instance limit');
+    }
+    if (form.hostCpu.mode === 'disabled' && settings.host_cpu_cores !== 0) {
+      blocked.push('Host CPU');
+    }
+    if (form.hostMemory.mode === 'disabled' && settings.host_memory_mb !== 0) {
+      blocked.push('Host memory');
+    }
+    if (form.hostGpu.mode === 'disabled' && settings.host_gpu_count !== 0) {
+      blocked.push('Host GPU');
+    }
+    return blocked;
+  }
+
+  function onSave() {
+    const blocked = newlyBlockedLabels();
+    if (blocked.length === 0) {
+      void save();
+      return;
+    }
+    pendingConfirm = {
+      title: 'Save blocking settings?',
+      body: `${blocked.join(', ')} ${blocked.length === 1 ? 'is' : 'are'} set to Blocked (0) — launches needing ${blocked.length === 1 ? 'it' : 'them'} will be refused host-wide.`,
+      confirmLabel: 'Save anyway',
+      danger: true,
+      onConfirm: () => void save()
+    };
   }
 
   onMount(load);
@@ -114,14 +152,16 @@
             <span class="save-saved">Saved</span>
           {/if}
         </span>
-        <button class="save-btn" onclick={save} disabled={saving || loading}>
-          {saving ? 'Saving&hellip;' : 'Save Changes'}
-        </button>
+        <Button variant="primary" onclick={onSave} disabled={saving || loading}>
+          {saving ? 'Saving…' : 'Save Changes'}
+        </Button>
       </footer>
     {:else}
       <div class="error-banner" role="alert">{error || 'Failed to load settings'}</div>
     {/if}
   </div>
+
+  <ConfirmHost bind:request={pendingConfirm} />
 </div>
 
 <style>
@@ -296,30 +336,5 @@
     height: 8px;
     border-radius: 50%;
     background: #4ade80;
-  }
-
-  .save-btn {
-    background: #6366f1;
-    color: #fff;
-    border: none;
-    border-top: 1px solid rgba(255, 255, 255, 0.35);
-    font-family: inherit;
-    font-size: 0.85rem;
-    font-weight: 600;
-    padding: 0.6rem 1.4rem;
-    border-radius: 8px;
-    cursor: pointer;
-    box-shadow: 0 4px 16px rgba(99, 102, 241, 0.3);
-    transition: all 0.2s;
-  }
-
-  .save-btn:hover:not(:disabled) {
-    background: #4f46e5;
-    transform: translateY(-1px);
-  }
-
-  .save-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
   }
 </style>

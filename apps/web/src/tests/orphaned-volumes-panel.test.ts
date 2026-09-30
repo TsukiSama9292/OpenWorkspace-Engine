@@ -116,16 +116,33 @@ describe('OrphanedVolumesPanel', () => {
       expect(screen.getByText(new Date(volume.created_at).toLocaleDateString())).toBeTruthy();
       expect(screen.getByText(new Date(deletedOwnerVolume.created_at).toLocaleDateString())).toBeTruthy();
     });
+    expect(screen.getAllByText('orphaned')).toHaveLength(2);
+  });
+
+  it('runs the cleanup dialog on the shared modal with a labelled close', async () => {
+    mockList.mockResolvedValue({ volumes: [volume] });
+
+    render(OrphanedVolumesPanel, { props: { ctx: context({ is_admin: true, tier: 2 }) } });
+
+    await waitFor(() => {
+      expect(screen.getByText(volume.host_path)).toBeTruthy();
+    });
+    await fireEvent.click(screen.getByText('Clean Up'));
+    await waitFor(() => {
+      expect(screen.getByRole('dialog', { name: 'Thorough Cleanup' })).toBeTruthy();
+    });
+    expect(screen.getByRole('button', { name: 'Close dialog' })).toBeTruthy();
   });
 
   it('shows an empty state when no volumes are orphaned', async () => {
     mockList.mockResolvedValue({ volumes: [] });
 
-    render(OrphanedVolumesPanel, { props: { ctx: context({ is_admin: true, tier: 2 }) } });
+    const { container } = render(OrphanedVolumesPanel, { props: { ctx: context({ is_admin: true, tier: 2 }) } });
 
     await waitFor(() => {
-      expect(screen.getByText('No orphaned volumes.')).toBeTruthy();
+      expect(screen.getByText(/No orphaned volumes/)).toBeTruthy();
     });
+    expect(container.querySelector('.empty-state')).toBeTruthy();
   });
 
   it('surfaces a load error', async () => {
@@ -189,7 +206,7 @@ describe('OrphanedVolumesPanel', () => {
     });
     await waitFor(() => {
       expect(screen.queryByText(volume.host_path)).toBeNull();
-      expect(screen.getByText('No orphaned volumes.')).toBeTruthy();
+      expect(screen.getByText(/No orphaned volumes/)).toBeTruthy();
     });
   });
 

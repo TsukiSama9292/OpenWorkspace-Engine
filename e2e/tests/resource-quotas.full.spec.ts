@@ -549,13 +549,15 @@ test('manager edits a lower-tier member quota in the Groups tab and it takes eff
     const row = mgr.page.locator('.member-row').filter({ hasText: SINGLE_USER.username });
     await expect(row).toBeVisible();
     await row.locator('button').filter({ hasText: 'Edit quotas' }).click();
-    await mgr.page.locator('[aria-label="CPU Quota (cores) mode"]').selectOption('custom');
-    await mgr.page.locator('[aria-label="CPU Quota (cores) value"]').fill('1');
+    const quotaDialog = mgr.page.getByRole('dialog', { name: /Edit quotas/ });
+    await expect(quotaDialog).toBeVisible({ timeout: 15_000 });
+    await quotaDialog.locator('[aria-label="CPU Quota (cores) mode"]').selectOption('custom');
+    await quotaDialog.locator('[aria-label="CPU Quota (cores) value"]').fill('1');
     await Promise.all([
       mgr.page.waitForResponse(
         (r) => r.url().includes(`/api/groups/${small.id}/members/${singleId}/quota`) && r.status() === 200
       ),
-      mgr.page.locator('.modal-confirm').filter({ hasText: 'Save Quotas' }).click(),
+      quotaDialog.getByRole('button', { name: 'Save Quotas' }).click(),
     ]);
 
     // The tighter cap rejects the member's next 2-core launch.
@@ -604,17 +606,20 @@ test('admin pool edit below a member cap is refused, then reset-all unblocks it'
     const saveResp = admin.page.waitForResponse(
       (r) => r.url().includes(`/api/groups/${small.id}`) && r.request().method() === 'PUT'
     );
-    await admin.page.locator('.modal-confirm').filter({ hasText: 'Save Changes' }).click();
+    const groupDialog = admin.page.getByRole('dialog', { name: 'Edit Group' });
+    await groupDialog.getByRole('button', { name: 'Save Changes' }).click();
     expect((await saveResp).status()).toBe(409);
     // Still editing: the modal did not close on error.
     await expect(admin.page.locator('[aria-label="Pool CPU (cores) mode"]')).toBeVisible();
-    await admin.page.locator('.modal-cancel').filter({ hasText: 'Cancel' }).click();
+    await groupDialog.getByRole('button', { name: 'Cancel' }).click();
 
-    // UI: one-click reset drops every member quota to 0, then the pool edit lands.
+    // UI: reset drops every member quota to 0 via confirmation, then the pool edit lands.
     const smallRowUi = admin.page.locator('tr').filter({ hasText: SMALL_GROUP }).first();
     await smallRowUi.locator('button.link-btn').click();
-    admin.page.on('dialog', (dialog) => dialog.accept());
     await admin.page.locator('button').filter({ hasText: 'Reset all quotas to 0' }).click();
+    const resetDialog = admin.page.getByRole('dialog', { name: /Reset all \d+ member quotas/ });
+    await expect(resetDialog).toBeVisible({ timeout: 15_000 });
+    await resetDialog.getByRole('button', { name: 'Reset quotas' }).click();
     await expect
       .poll(async () => (await memberQuota(admin.ctx.request, small.id, singleId as string)).cpu, {
         timeout: 15_000,
@@ -705,7 +710,7 @@ test('the -1 convention round-trips through the template form and launches', asy
       .selectOption('public');
     await admin.page.locator('[aria-label="CPU Cores * unlimited"]').check();
     await admin.page.locator('[aria-label="RAM (GB) * unlimited"]').check();
-    await admin.page.locator('button').filter({ hasText: 'Show Advanced' }).click();
+    await admin.page.locator('button').filter({ hasText: 'Step 3 of 3' }).click();
     await admin.page.locator('[aria-label="Upload Limit (Mbps) unlimited"]').check();
     await admin.page.locator('[aria-label="Download Limit (Mbps) unlimited"]').check();
     await Promise.all([
@@ -780,7 +785,7 @@ test('a zero pool blocks launches and -1 round-trips through the Settings tab', 
       admin.page.waitForResponse(
         (r) => r.url().includes('/api/admin/settings') && r.request().method() === 'PUT'
       ),
-      admin.page.locator('.save-btn').filter({ hasText: 'Save Changes' }).click(),
+      admin.page.getByRole('button', { name: 'Save Changes' }).click(),
     ]);
     await expect(admin.page.locator('.save-saved')).toBeVisible();
     const settings = await getJson(admin.ctx.request, '/api/admin/settings');

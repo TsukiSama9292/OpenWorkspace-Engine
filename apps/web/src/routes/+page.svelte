@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { goto } from '$app/navigation';
   import TemplatePanel from '$lib/components/templates/TemplatePanel.svelte';
   import { parseDashboardHash, serializeDashboardHash, isTemplatesEditor, confirmDiscardChanges, type DashboardView, type DashboardTab } from '$lib/templates/dashboard-view';
   import { loadDashboard } from './dashboard-data';
-  import { performAction, deleteInstance } from '$lib/api/instance-actions';
+  import { performAction } from '$lib/api/instance-actions';
   import { launchInstance, deleteTemplate } from '$lib/api/template-actions';
   import {
     auth,
@@ -16,11 +16,14 @@
     canViewAuditLogs,
     effectiveMaxInstances
   } from '$lib/stores/auth';
-  import { mayControlInstance, mayLaunchTemplate } from '$lib/permissions';
+  import { mayControlInstance, mayLaunchTemplate, templateLockReason } from '$lib/permissions';
   import { api } from '$lib/api/client';
-  import { wrapperUrl, formatRemaining, remainingMs } from '$lib/countdown/countdown';
+  import { wrapperUrl, budgetStory } from '$lib/countdown/countdown';
   import AdminSettings from '$lib/components/AdminSettings.svelte';
   import RejectionNotice from '$lib/components/RejectionNotice.svelte';
+  import ConfirmHost from '$lib/components/ui/ConfirmHost.svelte';
+  import EmptyState from '$lib/components/ui/EmptyState.svelte';
+  import type { PendingConfirm } from '$lib/components/ui/confirm';
   import GroupPanel from '$lib/components/groups/GroupPanel.svelte';
   import UserManagementPanel from '$lib/components/users/UserManagementPanel.svelte';
   import OrphanedVolumesPanel from '$lib/components/volumes/OrphanedVolumesPanel.svelte';
@@ -36,8 +39,10 @@
   } from '$lib/launch-billing';
   import { filterDashboard, countSessionsByStatus, type DashboardStatusFilter } from '$lib/dashboard/filter';
   import { loadRailCollapsed, saveRailCollapsed } from '$lib/dashboard/navigation';
-  import { resolveTemplateFamily, familyIconSrc, familyCoverClass } from '$lib/dashboard/artwork';
+  import { familyArtwork } from '$lib/dashboard/artwork';
   import { formatMemory } from '$lib/utils/format';
+  import { wrapTabFocus } from '$lib/utils/focus';
+  import { statusBadgeClass } from '$lib/status-badge';
 
   let sidebarOpen = $state(true);
   let drawerOpen = $state(false);
@@ -51,6 +56,7 @@
   let instances = $state<Instance[]>([]);
   let loading = $state(true);
   let rejectionNotice = $state<{ error: string; rejection: PreflightRejection } | null>(null);
+  let pendingConfirm = $state<PendingConfirm | null>(null);
   let logsInstance = $state<Instance | null>(null);
 
   let launchModal = $state<{ open: boolean; config: Template | null }>({ open: false, config: null });
@@ -198,10 +204,6 @@
 
   // The catalog never shows hidden templates (filterDashboard drops them), so
   // a locked card always means the template is outside the viewer's whitelist.
-  function lockedReason(): string {
-    return 'Not allowed — this template is outside your whitelist. Ask an admin for access.';
-  }
-
   function closeOverlays() {
     drawerOpen = false;
     showSettings = false;
@@ -209,27 +211,50 @@
   }
 
   let openMenuId = $state<string | null>(null);
+  let menuTrigger = $state<HTMLButtonElement | null>(null);
 
-  function toggleMenu(id: string) {
-    openMenuId = openMenuId === id ? null : id;
+  async function toggleMenu(id: string, trigger: HTMLButtonElement | null) {
+    if (openMenuId === id) {
+      openMenuId = null;
+      return;
+    }
+    openMenuId = id;
+    menuTrigger = trigger;
+    await tick();
+    document.querySelector<HTMLElement>('[role="menu"] [role="menuitem"]')?.focus();
   }
 
-  function onLaunchPersistenceChange(event: Event) {
-    const next = (event.currentTarget as HTMLSelectElement).value as
-      | 'use_persistent'
-      | 'no_persistent'
-      | 'reset_persistent';
-    if (next === 'reset_persistent') {
-      const proceed = window.confirm(
-        'Reset persistent storage will erase the existing data and start a fresh environment. Continue?'
-      );
-      if (!proceed) {
-        launchPersistence = prevLaunchPersistence;
-        (event.currentTarget as HTMLSelectElement).value = prevLaunchPersistence;
-        return;
-      }
+  function closeMenuRefocus() {
+    openMenuId = null;
+    menuTrigger?.focus();
+    menuTrigger = null;
+  }
+
+  function handleMenuKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      closeMenuRefocus();
+      return;
     }
-    prevLaunchPersistence = next;
+    wrapTabFocus(e.currentTarget as HTMLElement, e);
+  }
+
+  function onLaunchPersistenceChange() {
+    if (launchPersistence === 'reset_persistent' && prevLaunchPersistence !== 'reset_persistent') {
+      launchPersistence = prevLaunchPersistence;
+      pendingConfirm = {
+        title: 'Reset persistent storage?',
+        body: 'This will erase the existing data and start a fresh environment.',
+        confirmLabel: 'Reset and continue',
+        danger: true,
+        onConfirm: () => {
+          prevLaunchPersistence = 'reset_persistent';
+          launchPersistence = 'reset_persistent';
+        }
+      };
+      return;
+    }
+    prevLaunchPersistence = launchPersistence;
   }
 
   async function confirmLaunch() {
@@ -261,16 +286,33 @@
     return wrapperUrl(inst.remote_type, inst.access_token ?? '');
   }
 
-  function sleepLabel(inst: Instance): string | null {
+  function budgetStoryFor(inst: Instance) {
     if (inst.status !== 'running') return null;
-    const remaining = remainingMs(inst.auto_sleeps_at, Date.now());
-    if (remaining === null || remaining <= 0) return null;
-    return `Left ${formatRemaining(remaining)}`;
+    const tpl = configs.find(c => c.id === inst.template_id) ?? null;
+    return budgetStory(
+      {
+        auto_sleeps_at: inst.auto_sleeps_at,
+        timeout_action: inst.timeout_action,
+        keep_time_deadline: inst.keep_time_deadline,
+        keep_time_action: inst.keep_time_action
+      },
+      tpl ? { maxRunSeconds: tpl.max_run_seconds, keepTimeSeconds: tpl.keep_time_seconds } : null,
+      Date.now()
+    );
   }
 
   async function onDeleteConfig(config: Template) {
+    pendingConfirm = {
+      title: `Delete template "${config.name}"?`,
+      body: 'The template will be removed. Instances must be stopped first.',
+      confirmLabel: 'Delete',
+      danger: true,
+      onConfirm: () => void removeTemplate(config)
+    };
+  }
+
+  async function removeTemplate(config: Template) {
     const result = await deleteTemplate(config.id);
-    if (result.cancelled) return;
     if (result.error) {
       alert(result.error);
       return;
@@ -290,9 +332,18 @@
   }
 
   async function onRemove(inst: Instance) {
-    if (!confirm(`Delete "${inst.name}"? The container will be removed.`)) return;
-    const result = await deleteInstance(inst.id);
-    if (!result.error) {
+    pendingConfirm = {
+      title: `Delete "${inst.name}"?`,
+      body: 'The container will be removed. Persistent data is kept.',
+      confirmLabel: 'Delete',
+      danger: true,
+      onConfirm: () => void removeInstance(inst)
+    };
+  }
+
+  async function removeInstance(inst: Instance) {
+    const res = await api.delete(`/instances/${inst.id}`);
+    if (!res.error) {
       instances = instances.filter(i => i.id !== inst.id);
     }
   }
@@ -315,14 +366,6 @@
       return true;
     })
   );
-
-  const statusColors: Record<string, string> = {
-    running: 'dot-active',
-    paused: 'dot-paused',
-    stopped: 'dot-stopped',
-    error: 'dot-error',
-    starting: 'dot-starting',
-  };
 </script>
 
 <svelte:window onkeydown={(e) => { if (e.key === 'Escape') closeOverlays(); }} />
@@ -538,7 +581,7 @@
           />
         </div>
         {#if pwError}
-          <div class="error-badge">{pwError}</div>
+          <p class="text-error-500 text-sm m-0">{pwError}</p>
         {/if}
         {#if pwSuccess}
           <span class="pw-saved">Password updated</span>
@@ -613,6 +656,8 @@
     onclose={() => rejectionNotice = null}
   />
 
+  <ConfirmHost bind:request={pendingConfirm} />
+
   <main class="main-content">
     {#if loading}
       <p class="loading-text">Loading instances...</p>
@@ -650,32 +695,36 @@
         <h2 class="section-title">My sessions</h2>
         {#if dashboardFiltered.sessions.length === 0}
           {#if myInstances.length === 0}
-            <div class="empty-state">
-              <img class="empty-mark" src="/icons/generic.svg" alt="" aria-hidden="true" />
-              <p class="empty-text">No instances yet. Browse the template catalog below to launch your first session.</p>
-            </div>
+            <EmptyState message="No instances yet. Browse the template catalog below to launch your first session." />
           {:else}
-            <p class="empty-text">No sessions match the current search.</p>
-            <button class="filter-clear" onclick={() => { dashboardQuery = ''; dashboardStatus = ''; }}>Clear search</button>
+            <EmptyState message="No sessions match the current search. Try different keywords, or clear the search to browse everything.">
+              <button class="filter-clear" onclick={() => { dashboardQuery = ''; dashboardStatus = ''; }}>Clear search</button>
+            </EmptyState>
           {/if}
         {:else}
           <div class="instance-grid">
             {#each dashboardFiltered.sessions as inst (inst.id)}
               {@const billingLabel = billingGroupName(inst, billingGroups)}
               {@const resourceLabel = instanceResourceLabel(inst)}
-              {@const stateLabel = sleepLabel(inst) ?? inst.status}
+              {@const story = budgetStoryFor(inst)}
               <div class="ws-card session-rich" class:dimmed={inst.status !== 'running'}>
                 <div class="ws-card-header">
                   <div>
                     <div class="ws-title-row">
-                      <span class="status-dot {statusColors[inst.status] || 'dot-stopped'}"></span>
+                      <span class="status-dot {statusBadgeClass(inst.status) || 'dot-stopped'}"></span>
                       <h3 class="ws-name">{inst.name}</h3>
                       {#if inst.mount_persistent}
                         <span class="persist-badge">persist</span>
                       {/if}
                     </div>
                     <span class="ws-template">{inst.template_name || 'Unknown template'}</span>
-                    <span class="ws-state-story">{stateLabel}</span>
+                    <span class="ws-state-story">{story?.label ?? inst.status}</span>
+                    {#if story?.fraction !== null && story?.fraction !== undefined}
+                      {@const pct = Math.round((story?.fraction ?? 0) * 100)}
+                      <div class="ws-budget" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={story?.label}>
+                        <div class="ws-budget-fill sev-{story?.severity}" style="width: {pct}%"></div>
+                      </div>
+                    {/if}
                     {#if billingLabel || resourceLabel}
                       <div class="ws-billing-row">
                         {#if billingLabel}
@@ -700,22 +749,22 @@
                           class="launch-btn overflow-btn"
                           aria-haspopup="menu"
                           aria-expanded={openMenuId === inst.id}
-                          onclick={() => toggleMenu(inst.id)}
+                          onclick={(e) => toggleMenu(inst.id, e.currentTarget as HTMLButtonElement)}
                         >More ▾</button>
                         {#if openMenuId === inst.id}
-                          <div class="overflow-scrim" onclick={() => openMenuId = null} role="presentation"></div>
-                          <div class="overflow-menu" role="menu" aria-label={`Actions for ${inst.name}`}>
+                          <div class="overflow-scrim" onclick={() => closeMenuRefocus()} role="presentation"></div>
+                          <div class="overflow-menu" role="menu" tabindex="-1" aria-label={`Actions for ${inst.name}`} onkeydown={handleMenuKeydown}>
                             {#if inst.status === 'running'}
-                              <button class="launch-btn pause overflow-item" role="menuitem" onclick={() => { openMenuId = null; onAction(inst, 'pause'); }}>Pause</button>
-                              <button class="launch-btn stop overflow-item" role="menuitem" onclick={() => { openMenuId = null; onAction(inst, 'stop'); }}>Stop</button>
+                              <button class="launch-btn pause overflow-item" role="menuitem" onclick={() => { closeMenuRefocus(); onAction(inst, 'pause'); }}>Pause</button>
+                              <button class="launch-btn stop overflow-item" role="menuitem" onclick={() => { closeMenuRefocus(); onAction(inst, 'stop'); }}>Stop</button>
                             {:else if inst.status === 'paused'}
-                              <button class="launch-btn resume overflow-item" role="menuitem" onclick={() => { openMenuId = null; onAction(inst, 'unpause'); }}>Resume</button>
-                              <button class="launch-btn stop overflow-item" role="menuitem" onclick={() => { openMenuId = null; onAction(inst, 'stop'); }}>Stop</button>
+                              <button class="launch-btn resume overflow-item" role="menuitem" onclick={() => { closeMenuRefocus(); onAction(inst, 'unpause'); }}>Resume</button>
+                              <button class="launch-btn stop overflow-item" role="menuitem" onclick={() => { closeMenuRefocus(); onAction(inst, 'stop'); }}>Stop</button>
                             {:else}
-                              <button class="launch-btn resume overflow-item" role="menuitem" onclick={() => { openMenuId = null; onAction(inst, 'start'); }}>Start</button>
+                              <button class="launch-btn resume overflow-item" role="menuitem" onclick={() => { closeMenuRefocus(); onAction(inst, 'start'); }}>Start</button>
                             {/if}
-                            <button class="launch-btn logs overflow-item" role="menuitem" onclick={() => { openMenuId = null; logsInstance = inst; }}>Logs</button>
-                            <button class="launch-btn remove overflow-item danger" role="menuitem" onclick={() => { openMenuId = null; onRemove(inst); }}>Remove</button>
+                            <button class="launch-btn logs overflow-item" role="menuitem" onclick={() => { closeMenuRefocus(); logsInstance = inst; }}>Logs</button>
+                            <button class="launch-btn remove overflow-item danger" role="menuitem" onclick={() => { closeMenuRefocus(); onRemove(inst); }}>Remove</button>
                           </div>
                         {/if}
                       </div>
@@ -732,15 +781,15 @@
         <h2 class="section-title">Template catalog</h2>
         <p class="section-desc">Pick a template to spin up a new instance.</p>
         {#if dashboardFiltered.templates.length === 0}
-          <p class="empty-text">No templates match the current search.</p>
+          <EmptyState message="No templates match the current search. Try different keywords, or clear the search to browse the full catalog." />
         {:else}
           <div class="catalog-grid">
             {#each dashboardFiltered.templates as config (config.id)}
               {@const launchable = mayLaunchTemplate($auth, config)}
-              {@const family = resolveTemplateFamily(config.name)}
+              {@const art = familyArtwork(config.name)}
               <div class="catalog-card" class:locked={!launchable}>
-                <div class={familyCoverClass(family)}>
-                  <img class="catalog-mark" src={familyIconSrc(family)} alt={`${family} mark`} loading="lazy" />
+                <div class={art.coverClass}>
+                  <img class="catalog-mark" src={art.iconSrc} alt={`${art.family} mark`} loading="lazy" />
                 </div>
                 <div class="catalog-body">
                   <h3 class="catalog-name">{config.name}</h3>
@@ -749,8 +798,8 @@
                   {#if launchable}
                     <button class="launch-btn vnc catalog-launch" onclick={() => onCatalogSelect(config)}>Launch</button>
                   {:else}
-                    <p class="catalog-locked-reason">{lockedReason()}</p>
-                    <button class="launch-btn catalog-launch" title={lockedReason()} onclick={() => onCatalogSelect(config)}>Locked</button>
+                    <p class="catalog-locked-reason">{templateLockReason($auth, config)}</p>
+                    <button class="launch-btn catalog-launch" title={templateLockReason($auth, config) ?? undefined} onclick={() => onCatalogSelect(config)}>Locked</button>
                   {/if}
                 </div>
               </div>
@@ -795,19 +844,19 @@
         </div>
 
         {#if filteredInstances.length === 0}
-          <p class="empty-text">No instances match the current filters.</p>
+          <EmptyState message="No instances match the current filters." />
         {:else}
           <div class="instances-table-wrap">
             <table class="instances-table">
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Owner</th>
-                  <th>Template</th>
-                  <th>Status</th>
-                  <th>Auto-Sleep</th>
-                  <th>Created</th>
-                  <th>Actions</th>
+                    <th>Name</th>
+                    <th>Owner</th>
+                    <th>Template</th>
+                    <th>Status</th>
+                    <th>Budget</th>
+                    <th>Created</th>
+                    <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -820,20 +869,21 @@
                     <td class="td-owner">{inst.owner_username || '---'}</td>
                     <td>{inst.template_name || '---'}</td>
                     <td>
-                      <span class="status-badge {statusColors[inst.status] || ''}">
+                      <span class="status-badge {statusBadgeClass(inst.status)}">
                         <span class="status-dot-inline"></span>
                         {inst.status}
                       </span>
                     </td>
                     <td class="td-sleep">
-                      {#if sleepLabel(inst)}
-                        {sleepLabel(inst)}
-                      {/if}
+                      {budgetStoryFor(inst)?.label ?? ''}
                     </td>
                     <td class="td-date">{new Date(inst.created_at).toLocaleDateString()}</td>
                     <td class="td-actions">
                       {#if mayControlInstance($auth, inst)}
                         <div class="action-buttons">
+                          {#if inst.status === 'running' && inst.access_token}
+                            <a href={instanceUrl(inst)} target="_blank" class="launch-btn vnc sm">Open</a>
+                          {/if}
                           {#if inst.status === 'running'}
                             <button class="launch-btn pause sm" onclick={() => onAction(inst, 'pause')}>Pause</button>
                             <button class="launch-btn stop sm" onclick={() => onAction(inst, 'stop')}>Stop</button>
@@ -1293,8 +1343,7 @@
 
   :global(.btn-create:hover) { background: #4f46e5; transform: translateY(-1px); }
 
-  .loading-text,
-  :global(.empty-text) { color: #71717a; font-size: 0.9rem; }
+  .loading-text { color: #71717a; font-size: 0.9rem; }
 
   /* Workspace Grid */
   :global(.instance-grid) {
@@ -1355,34 +1404,31 @@
     flex-shrink: 0;
   }
 
-  .dot-active {
+  /* Solid fills apply only to the 6px card dots — never to state badges,
+     which carry the same dot-* token for their text/border tint. */
+  .status-dot.dot-active {
     background: #22c55e;
     box-shadow: 0 0 8px #22c55e;
   }
 
-  .dot-paused {
+  .status-dot.dot-paused {
     background: #eab308;
     box-shadow: 0 0 8px #eab308;
   }
 
-  .dot-stopped {
+  .status-dot.dot-stopped {
     background: #52525b;
   }
 
-  .dot-error {
+  .status-dot.dot-error {
     background: #ef4444;
     box-shadow: 0 0 8px #ef4444;
   }
 
-  .dot-starting {
+  .status-dot.dot-starting {
     background: #3b82f6;
     box-shadow: 0 0 8px #3b82f6;
     animation: pulse 1.5s ease-in-out infinite;
-  }
-
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
   }
 
   :global(.ws-name) { font-size: 0.95rem; font-weight: 600; margin: 0; }
@@ -1519,6 +1565,10 @@
   /* Session rich cards */
   .session-rich .primary-action { font-weight: 700; }
   .ws-state-story { display: block; font-size: 0.75rem; color: #a1a1aa; margin-top: 0.25rem; text-transform: capitalize; }
+  .ws-budget { height: 4px; border-radius: 999px; background: rgba(255, 255, 255, 0.08); margin-top: 0.4rem; overflow: hidden; }
+  .ws-budget-fill { height: 100%; border-radius: 999px; background: #818cf8; }
+  .ws-budget-fill.sev-warning { background: #eab308; }
+  .ws-budget-fill.sev-critical { background: #ef4444; }
   .overflow-wrap { position: relative; display: inline-flex; }
   .overflow-btn { white-space: nowrap; }
   .overflow-scrim {
@@ -1551,49 +1601,8 @@
   }
   .overflow-menu .overflow-item:hover { background: rgba(255, 255, 255, 0.07); }
   .overflow-menu .overflow-item.danger { color: #f87171; }
-  .empty-state { padding: 1rem; border: 1px dashed rgba(255, 255, 255, 0.15); border-radius: 12px; display: flex; align-items: center; gap: 0.75rem; }
-  .empty-mark { width: 40px; height: 40px; color: #c7d2fe; flex-shrink: 0; }
 
-  /* Template catalog: large cards with self-hosted marks */
-  .catalog-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-    gap: 1rem;
-  }
-  .catalog-card {
-    display: flex;
-    flex-direction: column;
-    background: rgba(20, 20, 26, 0.6);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-top: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 16px;
-    overflow: hidden;
-  }
-  .catalog-card.locked { opacity: 0.85; }
-  .catalog-cover {
-    height: 112px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(99, 102, 241, 0.22);
-  }
-  .catalog-cover.family-ubuntu { background: linear-gradient(135deg, rgba(232, 119, 34, 0.6), rgba(124, 45, 18, 0.55)); }
-  .catalog-cover.family-python { background: linear-gradient(135deg, rgba(59, 130, 246, 0.6), rgba(30, 58, 138, 0.55)); }
-  .catalog-cover.family-pytorch { background: linear-gradient(135deg, rgba(239, 68, 68, 0.6), rgba(127, 29, 29, 0.55)); }
-  .catalog-cover.family-rust { background: linear-gradient(135deg, rgba(249, 115, 22, 0.6), rgba(124, 45, 18, 0.55)); }
-  .catalog-cover.family-jupyter { background: linear-gradient(135deg, rgba(249, 115, 22, 0.5), rgba(59, 130, 246, 0.5)); }
-  .catalog-cover.family-generic { background: rgba(255, 255, 255, 0.14); }
-  .catalog-mark {
-    width: 52px;
-    height: 52px;
-    color: #ffffff;
-    filter: drop-shadow(0 2px 10px rgba(0, 0, 0, 0.55));
-  }
-  .catalog-body { padding: 1rem; display: flex; flex-direction: column; gap: 0.5rem; }
-  .catalog-name { font-size: 1rem; font-weight: 700; margin: 0; }
-  .catalog-desc { font-size: 0.8rem; color: #a1a1aa; margin: 0; }
-  .catalog-facts { font-size: 0.75rem; color: #d4d4d8; margin: 0; }
-  .catalog-locked-reason { font-size: 0.75rem; color: #fbbf24; margin: 0; }
+  /* Template catalog chrome now lives in the shared stylesheet. */
 
   /* Rail: pinnable + drawer + counts */
   .rail-menu { display: none; }
@@ -1641,7 +1650,6 @@
     .sidebar { position: fixed; left: 0; top: 0; transform: translateX(-100%); transition: transform 0.25s; }
     .sidebar.drawer { transform: translateX(0); width: 240px; }
     .sidebar.drawer .nav-text, .sidebar.drawer .nav-section-label, .sidebar.drawer .brand-name, .sidebar.drawer .user-btn { display: inline; }
-    .catalog-grid { grid-template-columns: 1fr; }
   }
   @media (prefers-reduced-motion: reduce) {
     .sidebar { transition: none; }
@@ -1652,326 +1660,7 @@
     outline-offset: 2px;
   }
 
-  /* Filter Bar (shared: the Sessions view here and the audit filter bar in
-     the child LogsPanel both use this chrome) */
-  :global(.filter-bar) {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-    margin-bottom: 1.5rem;
-    padding: 0.75rem 1rem;
-    background: rgba(0, 0, 0, 0.25);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 10px;
-  }
+  /* Filter-bar, panel, and table chrome now lives in the shared stylesheet. */
 
-  :global(.filter-grid) {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 0.75rem 1rem;
-    align-items: end;
-  }
-
-  :global(.filter-pair) {
-    grid-column: span 2;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0 1rem;
-  }
-
-  :global(.filter-group) {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    min-width: 0;
-  }
-
-  :global(.filter-label) {
-    font-size: 0.6rem;
-    font-weight: 600;
-    color: #71717a;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  :global(.filter-select) {
-    background: rgba(0, 0, 0, 0.4);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 6px;
-    padding: 0.45rem 0.65rem;
-    color: #f4f4f5;
-    font-size: 0.8rem;
-    font-family: inherit;
-    outline: none;
-    cursor: pointer;
-    min-width: 140px;
-  }
-
-  :global(.filter-grid) select {
-    width: 100%;
-    min-width: 0;
-    box-sizing: border-box;
-  }
-
-  :global(.filter-select:focus) { border-color: #818cf8; }
-
-  :global(.filter-clear) {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    color: #a1a1aa;
-    padding: 0.45rem 0.75rem;
-    border-radius: 6px;
-    font-size: 0.75rem;
-    cursor: pointer;
-    font-family: inherit;
-    transition: all 0.2s;
-  }
-
-  :global(.filter-clear:hover) { background: rgba(255, 255, 255, 0.1); color: #fff; }
-
-  :global(.filter-actions-row) {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 8px;
-  }
-
-  :global(.filter-count) {
-    font-size: 0.75rem;
-    color: #52525b;
-    margin-right: auto;
-    white-space: nowrap;
-  }
-
-  .error-badge {
-    background: rgba(239, 68, 68, 0.1);
-    border: 1px solid rgba(239, 68, 68, 0.2);
-    color: #f87171;
-    font-size: 0.8rem;
-    padding: 0.5rem;
-    border-radius: 6px;
-    text-align: center;
-    margin-top: 0.5rem;
-  }
-
-  /* Shared table + panel chrome (used by the Instances view and the
-     Groups/Users/Volumes admin panels, which are child components) */
-  :global(.panel-card) {
-    background: rgba(0, 0, 0, 0.25);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 14px;
-    padding: 1.25rem;
-  }
-
-  :global(.panel-head) {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 1rem;
-    margin-bottom: 1.25rem;
-  }
-
-  :global(.panel-head-title) {
-    font-size: 1.15rem;
-    font-weight: 700;
-    color: #f4f4f5;
-    margin: 0;
-  }
-
-  :global(.panel-head-desc) {
-    font-size: 0.8rem;
-    color: #71717a;
-    margin: 0.25rem 0 0;
-  }
-
-  :global(.panel-toolbar) {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.6rem;
-    margin-bottom: 1rem;
-  }
-
-  :global(.panel-search-wrap) {
-    position: relative;
-    flex: 1 1 240px;
-    min-width: 200px;
-  }
-
-  :global(.panel-search) {
-    width: 100%;
-    box-sizing: border-box;
-    background: rgba(0, 0, 0, 0.3);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 8px;
-    padding: 0.55rem 0.75rem 0.55rem 2.1rem;
-    color: #f4f4f5;
-    font-size: 0.82rem;
-    font-family: inherit;
-    outline: none;
-    transition: border-color 0.2s, box-shadow 0.2s;
-  }
-
-  :global(.panel-search::placeholder) { color: #52525b; }
-
-  :global(.panel-search:focus) {
-    border-color: #818cf8;
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
-  }
-
-  :global(.panel-search-icon) {
-    position: absolute;
-    left: 10px;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 14px;
-    height: 14px;
-    color: #52525b;
-    pointer-events: none;
-  }
-
-  :global(.panel-select) {
-    background: rgba(0, 0, 0, 0.3);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 8px;
-    padding: 0.55rem 0.75rem;
-    color: #d4d4d8;
-    font-size: 0.8rem;
-    font-family: inherit;
-    outline: none;
-    cursor: pointer;
-    transition: border-color 0.2s;
-  }
-
-  :global(.panel-select:focus) { border-color: #818cf8; }
-
-  :global(.panel-count) {
-    margin-left: auto;
-    font-size: 0.75rem;
-    color: #71717a;
-    white-space: nowrap;
-  }
-
-  :global(.panel-clear) {
-    background: transparent;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: #a1a1aa;
-    font-size: 0.72rem;
-    padding: 0.45rem 0.75rem;
-    border-radius: 8px;
-    cursor: pointer;
-    font-family: inherit;
-    transition: all 0.2s;
-  }
-
-  :global(.panel-clear:hover) {
-    color: #f4f4f5;
-    border-color: rgba(255, 255, 255, 0.25);
-  }
-
-  :global(.instances-table-wrap) {
-    overflow-x: auto;
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 10px;
-  }
-
-  :global(.instances-table) {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.8rem;
-  }
-
-  :global(.instances-table thead) {
-    background: rgba(0, 0, 0, 0.3);
-  }
-
-  :global(.instances-table th) {
-    text-align: left;
-    padding: 0.65rem 0.75rem;
-    font-size: 0.65rem;
-    font-weight: 700;
-    color: #71717a;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    white-space: nowrap;
-  }
-
-  :global(.instances-table td) {
-    padding: 0.6rem 0.75rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-    color: #d4d4d8;
-    vertical-align: middle;
-  }
-
-  :global(.instances-table tbody tr:hover) {
-    background: rgba(255, 255, 255, 0.02);
-  }
-
-  :global(.instances-table tbody tr:last-child td) {
-    border-bottom: none;
-  }
-
-  :global(.td-name) { min-width: 0; }
-
-  :global(.td-name-text) { display: block; font-weight: 600; color: #f4f4f5; }
-
-  :global(.td-id) {
-    display: block;
-    font-family: monospace;
-    font-size: 0.65rem;
-    color: #52525b;
-    margin-top: 2px;
-  }
-
-  :global(.td-owner) { color: #a1a1aa; }
-
-  :global(.td-date) {
-    font-size: 0.75rem;
-    color: #71717a;
-    white-space: nowrap;
-  }
-
-  :global(.td-actions) { white-space: nowrap; }
-
-  :global(.instances-table th:first-child),
-  :global(.instances-table td:first-child) {
-    min-width: 190px;
-  }
-
-  .status-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 0.72rem;
-    font-weight: 500;
-    padding: 0.2rem 0.55rem;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    text-transform: capitalize;
-  }
-
-  .status-dot-inline {
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    background: #52525b;
-    flex-shrink: 0;
-  }
-
-  .status-badge.dot-active { color: #4ade80; border-color: rgba(34, 197, 94, 0.2); }
-  .status-badge.dot-active .status-dot-inline { background: #22c55e; }
-
-  .status-badge.dot-paused { color: #facc15; border-color: rgba(234, 179, 8, 0.2); }
-  .status-badge.dot-paused .status-dot-inline { background: #eab308; }
-
-  .status-badge.dot-stopped { color: #71717a; }
-  .status-badge.dot-stopped .status-dot-inline { background: #52525b; }
-
-  .status-badge.dot-error { color: #f87171; border-color: rgba(239, 68, 68, 0.2); }
-  .status-badge.dot-error .status-dot-inline { background: #ef4444; }
-
-  .status-badge.dot-starting { color: #60a5fa; border-color: rgba(59, 130, 246, 0.2); }
-  .status-badge.dot-starting .status-dot-inline { background: #3b82f6; animation: pulse 1.5s ease-in-out infinite; }
+  /* Status badges now live in the shared stylesheet. */
 </style>

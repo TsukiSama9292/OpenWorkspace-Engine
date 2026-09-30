@@ -2,10 +2,11 @@
   import { api } from '$lib/api/client';
   import { auth } from '$lib/stores/auth';
   import { formatMemory } from '$lib/utils/format';
-  import { getTemplateIcon } from '$lib/utils/template-icons';
+  import { familyArtwork } from '$lib/dashboard/artwork';
   import { loadTemplate, submitTemplate, updateTemplate, createInitialFormState, reconcileDefaultImage, type TemplateFormState } from '$lib/templates/template-form';
   import { isTemplatesEditor, serializeDashboardHash, createDirtySnapshot, isFormDirty, confirmDiscardChanges, type DashboardView } from '$lib/templates/dashboard-view';
-  import { mayCreateTemplate, mayEditTemplate, mayLaunchTemplate } from '$lib/permissions';
+  import { mayCreateTemplate, mayEditTemplate, mayLaunchTemplate, templateLockReason } from '$lib/permissions';
+  import EmptyState from '$lib/components/ui/EmptyState.svelte';
   import type { Template, EffectiveContext } from '$lib/types';
   import TemplateBasics from '$lib/components/forms/TemplateBasics.svelte';
   import TemplateResources from '$lib/components/forms/TemplateResources.svelte';
@@ -155,11 +156,17 @@
       <button class="px-4 py-2 mt-4 bg-primary-500 text-white border-none rounded cursor-pointer hover:bg-primary-600 transition-colors" onclick={backToTemplates}>Back to Templates</button>
     {:else if form}
       <form class="flex flex-col gap-4" onsubmit={onSubmit}>
-        <TemplateBasics bind:name={form.name} bind:description={form.description} bind:image={form.image} bind:remoteType={form.remoteType} bind:visibility={form.visibility} />
-        <TemplateResources bind:cores={form.cores} bind:ramGb={form.ramGb} bind:gpuCount={form.gpuCount} bind:dockerRegistry={form.dockerRegistry} bind:persistentStoragePath={form.persistentStoragePath} bind:maxRunSeconds={form.maxRunSeconds} bind:timeoutAction={form.timeoutAction} bind:keepTimeSeconds={form.keepTimeSeconds} bind:keepTimeAction={form.keepTimeAction} />
+        <section aria-label="Step 1 of 3: basics">
+          <p class="editor-step">Step 1 of 3 — Basics</p>
+          <TemplateBasics bind:name={form.name} bind:description={form.description} bind:image={form.image} bind:remoteType={form.remoteType} bind:visibility={form.visibility} />
+        </section>
+        <section aria-label="Step 2 of 3: resources">
+          <p class="editor-step">Step 2 of 3 — Resources</p>
+          <TemplateResources bind:cores={form.cores} bind:ramGb={form.ramGb} bind:gpuCount={form.gpuCount} bind:dockerRegistry={form.dockerRegistry} bind:persistentStoragePath={form.persistentStoragePath} bind:maxRunSeconds={form.maxRunSeconds} bind:timeoutAction={form.timeoutAction} bind:keepTimeSeconds={form.keepTimeSeconds} bind:keepTimeAction={form.keepTimeAction} />
+        </section>
 
         <button type="button" class="text-sm text-surface-400 hover:text-surface-100 bg-transparent border-none cursor-pointer text-left p-0" onclick={() => { if (form) form.showAdvanced = !form.showAdvanced; }}>
-          {form.showAdvanced ? '▾ Hide Advanced' : '▸ Show Advanced'}
+          {form.showAdvanced ? '▾ Step 3 of 3 — Advanced' : '▸ Step 3 of 3 — Advanced (optional)'}
         </button>
 
         {#if form.showAdvanced}
@@ -192,43 +199,31 @@
     {/if}
   </div>
   {#if configs?.length === 0}
-    <p class="empty-text">No templates yet. Create one to get started.</p>
+    <EmptyState message="No templates yet. Create one to get started." />
   {:else}
-    <div class="instance-grid">
+    <div class="catalog-grid">
       {#each configs ?? [] as config (config.id)}
-        <div class="ws-card">
-          <div class="ws-card-header">
-            <div>
-              <div class="ws-title-row">
-                <span class="template-icon-sm">{getTemplateIcon(config.name)}</span>
-                <h3 class="ws-name">{config.name}</h3>
-              </div>
-              <span class="ws-template">{config.image}</span>
-            </div>
-            <span class="ws-id">{config.id.slice(0, 8)}</span>
+        {@const launchable = mayLaunchTemplate(ctx, config)}
+        {@const art = familyArtwork(config.name)}
+        <div class="catalog-card" class:locked={!launchable}>
+          <div class={art.coverClass}>
+            <img class="catalog-mark" src={art.iconSrc} alt={`${art.family} mark`} loading="lazy" />
           </div>
-          <div class="ws-metrics">
-            <div class="metric-item">
-              <span class="metric-label">CPU</span>
-              <span class="metric-value">{config.cores} cores</span>
-            </div>
-            <div class="metric-item">
-              <span class="metric-label">RAM</span>
-              <span class="metric-value">{formatMemory(config.memory)}</span>
-            </div>
-          </div>
-          <div class="ws-actions">
-            <div class="action-buttons">
-              {#if mayLaunchTemplate(ctx, config)}
-                <span class="launchable-badge">May launch</span>
-              {:else}
-                <span class="launchable-badge locked">Not allowed</span>
-              {/if}
-              {#if mayEditTemplate(ctx, config)}
+          <div class="catalog-body">
+            <h3 class="catalog-name">{config.name}</h3>
+            <p class="catalog-desc">{config.description || 'No description yet.'}</p>
+            <p class="catalog-facts">{config.cores} CPU · {formatMemory(config.memory)} · {config.gpu_count} GPU · {config.persistent_storage_path ? 'persistent storage' : 'ephemeral storage'}</p>
+            {#if launchable}
+              <span class="launchable-badge">May launch</span>
+            {:else}
+              <p class="catalog-locked-reason">{templateLockReason(ctx, config)}</p>
+            {/if}
+            {#if mayEditTemplate(ctx, config)}
+              <div class="flex gap-2 mt-2">
                 <button class="launch-btn edit" onclick={() => openEdit(config.id)}>Edit</button>
                 <button class="launch-btn remove" onclick={() => ondelete(config)}>Delete</button>
-              {/if}
-            </div>
+              </div>
+            {/if}
           </div>
         </div>
       {/each}
@@ -243,7 +238,14 @@
     margin-bottom: 1.5rem;
   }
 
-  .template-icon-sm { font-size: 1rem; }
+  .editor-step {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #818cf8;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 0 0 0.5rem 0;
+  }
 
   .launchable-badge {
     display: inline-flex;
@@ -255,11 +257,5 @@
     color: #4ade80;
     background: rgba(34, 197, 94, 0.1);
     border: 1px solid rgba(34, 197, 94, 0.2);
-  }
-
-  .launchable-badge.locked {
-    color: #71717a;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.08);
   }
 </style>

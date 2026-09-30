@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/svelte';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import GroupPanel from '$lib/components/groups/GroupPanel.svelte';
 import type { EffectiveContext, Group, Template } from '$lib/types';
@@ -226,7 +226,6 @@ describe('GroupPanel', () => {
   it('deletes a group after confirmation', async () => {
     mockApi.get.mockResolvedValue({ data: { groups: [group] } });
     mockApi.delete.mockResolvedValue({ data: null });
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     render(GroupPanel, { props: { ctx: context({ is_admin: true, tier: 2 }), templates: [template()] } });
 
@@ -235,6 +234,13 @@ describe('GroupPanel', () => {
     });
 
     await fireEvent.click(screen.getByText('Delete'));
+    await waitFor(() => {
+      expect(screen.getByText('Delete group "Managers"?')).toBeTruthy();
+    });
+    expect(mockApi.delete).not.toHaveBeenCalled();
+
+    const dialog = screen.getByRole('dialog');
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
 
     await waitFor(() => {
       expect(mockApi.delete).toHaveBeenCalledWith('/groups/g1');
@@ -242,6 +248,30 @@ describe('GroupPanel', () => {
     await waitFor(() => {
       expect(screen.queryByText('Managers')).toBeNull();
     });
+  });
+
+  it('keeps the group when the deletion dialog is cancelled', async () => {
+    mockApi.get.mockResolvedValue({ data: { groups: [group] } });
+
+    render(GroupPanel, { props: { ctx: context({ is_admin: true, tier: 2 }), templates: [template()] } });
+
+    await waitFor(() => {
+      expect(screen.getByText('Managers')).toBeTruthy();
+    });
+
+    await fireEvent.click(screen.getByText('Delete'));
+    await waitFor(() => {
+      expect(screen.getByText('Delete group "Managers"?')).toBeTruthy();
+    });
+
+    const dialog = screen.getByRole('dialog');
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+    expect(mockApi.delete).not.toHaveBeenCalled();
+    expect(screen.getByText('Managers')).toBeTruthy();
   });
 
   it('filters groups by name search', async () => {
@@ -345,7 +375,6 @@ describe('GroupPanel', () => {
     };
     mockApi.get.mockResolvedValue({ data: { groups: [withMembers] } });
     mockApi.put.mockResolvedValue({ data: null });
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     render(GroupPanel, { props: { ctx: context({ is_admin: true, tier: 2 }), templates: [template()] } });
 
@@ -355,6 +384,13 @@ describe('GroupPanel', () => {
 
     await fireEvent.click(screen.getByText('2 members'));
     await fireEvent.click(screen.getByText('Reset all quotas to 0'));
+    await waitFor(() => {
+      expect(screen.getByText(/Reset all 2 member quotas/)).toBeTruthy();
+    });
+    expect(mockApi.put).not.toHaveBeenCalled();
+
+    const dialog = screen.getByRole('dialog');
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Reset quotas' }));
 
     await waitFor(() => {
       expect(mockApi.put).toHaveBeenCalledWith('/groups/g1/members/u1/quota', {
@@ -368,7 +404,6 @@ describe('GroupPanel', () => {
         gpu_quota: 0
       });
     });
-    expect(window.confirm).toHaveBeenCalled();
   });
 
   it('shows Edit quotas to a manager only for strictly lower-tier members', async () => {

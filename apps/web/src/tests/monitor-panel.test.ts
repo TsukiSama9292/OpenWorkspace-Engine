@@ -260,13 +260,14 @@ describe('MonitorPanel detail modal', () => {
     await tick();
 
     const modal = screen.getByTestId('instance-modal');
-    expect(modal).toBeTruthy();
+    const dialog = screen.getByRole('dialog', { name: 'dev-1' });
+    expect(dialog).toBeTruthy();
     expect(modal.querySelectorAll('[data-testid="chart-live"]').length).toBe(2);
-    expect(modal.textContent).toContain('dev-1');
-    expect(modal.textContent).toContain('18%');
-    expect(modal.textContent).toContain('/ 200%');
-    expect(modal.textContent).toContain('1.4 GB');
-    expect(modal.textContent).toContain('/ 3.8 GB');
+    expect(dialog.textContent).toContain('dev-1');
+    expect(dialog.textContent).toContain('18%');
+    expect(dialog.textContent).toContain('/ 200%');
+    expect(dialog.textContent).toContain('1.4 GB');
+    expect(dialog.textContent).toContain('/ 3.8 GB');
   });
 
   it('shows unlimited notes in the modal for an unlimited instance', async () => {
@@ -276,9 +277,10 @@ describe('MonitorPanel detail modal', () => {
     await tick();
 
     const modal = screen.getByTestId('instance-modal');
-    expect(modal.textContent).toContain('paused-box');
+    const dialog = screen.getByRole('dialog', { name: 'paused-box' });
+    expect(dialog.textContent).toContain('paused-box');
     expect(modal.querySelectorAll('[data-testid="chart-empty"]').length).toBe(2);
-    expect(modal.textContent).toContain('(unlimited)');
+    expect(dialog.textContent).toContain('(unlimited)');
   });
 
   it('closes the detail modal when the overlay is clicked', async () => {
@@ -288,7 +290,7 @@ describe('MonitorPanel detail modal', () => {
     await tick();
     expect(screen.getByTestId('instance-modal')).toBeTruthy();
 
-    await fireEvent.click(screen.getByTestId('modal-overlay'));
+    await fireEvent.click(screen.getByRole('dialog'));
     await tick();
     expect(screen.queryByTestId('instance-modal')).toBeNull();
   });
@@ -300,7 +302,7 @@ describe('MonitorPanel detail modal', () => {
     await tick();
     expect(screen.getByTestId('instance-modal')).toBeTruthy();
 
-    await fireEvent.click(screen.getByTestId('modal-close'));
+    await fireEvent.click(screen.getByRole('button', { name: 'Close dialog' }));
     await tick();
     expect(screen.queryByTestId('instance-modal')).toBeNull();
   });

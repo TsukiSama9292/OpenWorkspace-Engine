@@ -34,63 +34,11 @@
   const labelClass = 'flex flex-col gap-1';
   const spanClass = 'text-sm text-zinc-400';
 
-  const DEFAULT_SECONDS = 3600;
-
   let gpuTri = $state<TriState>(triStateFromValue(gpuCount, 0));
-  let usageEnabled = $state(maxRunSeconds > 0);
-  let keepTimeEnabled = $state(keepTimeSeconds > 0);
-  let maxRunSecondsInput = $state(String(maxRunSeconds > 0 ? maxRunSeconds : DEFAULT_SECONDS));
-  let keepTimeSecondsInput = $state(String(keepTimeSeconds > 0 ? keepTimeSeconds : DEFAULT_SECONDS));
 
   $effect(() => {
     gpuCount = valueFromTriState(gpuTri);
   });
-
-  function parseSeconds(raw: string | null): number | null {
-    if (raw === null || raw.trim() === '') return null;
-    const n = Number.parseInt(raw, 10);
-    return Number.isFinite(n) && n > 0 ? n : null;
-  }
-
-  $effect(() => {
-    if (maxRunSeconds > 0) {
-      usageEnabled = true;
-      maxRunSecondsInput = String(maxRunSeconds);
-    } else {
-      usageEnabled = false;
-    }
-  });
-
-  $effect(() => {
-    if (keepTimeSeconds > 0) {
-      keepTimeEnabled = true;
-      keepTimeSecondsInput = String(keepTimeSeconds);
-    } else {
-      keepTimeEnabled = false;
-    }
-  });
-
-  function onUsageLimitEnabledChange(event: Event) {
-    const enabled = (event.currentTarget as HTMLInputElement).checked;
-    maxRunSeconds = enabled ? parseSeconds(maxRunSecondsInput) ?? DEFAULT_SECONDS : -1;
-  }
-
-  function onMaxRunSecondsInput() {
-    if (!usageEnabled) return;
-    const n = parseSeconds(maxRunSecondsInput);
-    if (n !== null) maxRunSeconds = n;
-  }
-
-  function onKeepTimeEnabledChange(event: Event) {
-    const enabled = (event.currentTarget as HTMLInputElement).checked;
-    keepTimeSeconds = enabled ? parseSeconds(keepTimeSecondsInput) ?? DEFAULT_SECONDS : -1;
-  }
-
-  function onKeepTimeSecondsInput() {
-    if (!keepTimeEnabled) return;
-    const n = parseSeconds(keepTimeSecondsInput);
-    if (n !== null) keepTimeSeconds = n;
-  }
 </script>
 
 <div class="grid grid-cols-3 gap-3">
@@ -115,33 +63,8 @@
 </label>
 
 <div class="grid grid-cols-2 gap-3">
-  <label class={labelClass}>
-    <span class={spanClass}>Usage Limit (seconds)</span>
-    <div class="flex items-center gap-2">
-      <input
-        type="checkbox"
-        checked={usageEnabled}
-        onchange={onUsageLimitEnabledChange}
-        class="accent-indigo-500 shrink-0"
-      />
-      <span class="text-sm text-zinc-400">Enabled</span>
-      {#if usageEnabled}
-        <input
-          type="number"
-          value={maxRunSecondsInput}
-          min="60"
-          step="60"
-          oninput={(e) => {
-            maxRunSecondsInput = (e.currentTarget as HTMLInputElement).value;
-            onMaxRunSecondsInput();
-          }}
-          class={inputClass}
-          placeholder="e.g. 3600 (1 hour)"
-        />
-      {/if}
-    </div>
-  </label>
-  {#if usageEnabled}
+  <UnlimitedInput label="Usage Limit (seconds)" bind:value={maxRunSeconds} unit="seconds" min={60} placeholder="e.g. 3600 (1 hour)" />
+  {#if maxRunSeconds > 0}
     <label class={labelClass}>
       <span class={spanClass}>Timeout Action</span>
       <select class={inputClass} bind:value={timeoutAction}>
@@ -154,33 +77,8 @@
 </div>
 
 <div class="grid grid-cols-2 gap-3">
-  <label class={labelClass}>
-    <span class={spanClass}>Idle Keep Time (seconds)</span>
-    <div class="flex items-center gap-2">
-      <input
-        type="checkbox"
-        checked={keepTimeEnabled}
-        onchange={onKeepTimeEnabledChange}
-        class="accent-indigo-500 shrink-0"
-      />
-      <span class="text-sm text-zinc-400">Enabled</span>
-      {#if keepTimeEnabled}
-        <input
-          type="number"
-          value={keepTimeSecondsInput}
-          min="60"
-          step="60"
-          oninput={(e) => {
-            keepTimeSecondsInput = (e.currentTarget as HTMLInputElement).value;
-            onKeepTimeSecondsInput();
-          }}
-          class={inputClass}
-          placeholder="e.g. 3600 (1 hour)"
-        />
-      {/if}
-    </div>
-  </label>
-  {#if keepTimeEnabled}
+  <UnlimitedInput label="Idle Keep Time (seconds)" bind:value={keepTimeSeconds} unit="seconds" min={60} placeholder="e.g. 3600 (1 hour)" />
+  {#if keepTimeSeconds > 0}
     <label class={labelClass}>
       <span class={spanClass}>Keep Time Action</span>
       <select class={inputClass} bind:value={keepTimeAction}>

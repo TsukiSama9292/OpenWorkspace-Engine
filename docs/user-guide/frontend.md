@@ -69,6 +69,49 @@ Removal always asks for confirmation:
 - **Delete** — removes the session. Persistent data is kept (only a reset
   erases it).
 
+## Managing templates
+
+The **Templates** page shows the same catalog cards as the dashboard, with
+two extras for people allowed to edit: an **Edit** button and a **Delete**
+button (deletion always asks first). Creating or editing a template walks
+three steps — **Basics** (name, description, image, kind, visibility),
+**Resources** (processor, memory, graphics, storage, time budgets), and
+optional **Advanced** settings. Resource fields share one vocabulary:
+**Unlimited**, **Blocked/Disabled (0)**, or a custom number — time budgets
+use Unlimited-or-custom the same way. Locked cards explain why you cannot
+launch and whom to ask.
+
+## Watching all sessions
+
+The **Sessions** page is a table of every session you may control: owner,
+source template, state in plain words, remaining time budget, and age. The
+filter bar narrows by user and state with a live count. Each row leads with
+an **Open** action for running sessions; the rest matches the card actions.
+Removal asks for confirmation, same as on the dashboard.
+
+## Cleaning up volumes
+
+The **Volumes** page lists persistent data left behind by removed or failed
+sessions: where it lives, who owned it, and since when. A search box filters
+by path or owner. **Clean Up** permanently deletes a volume only after you
+type its full path — there is no gentler delete, so the double gate is
+deliberate.
+
+## Administering groups, users, and settings
+
+- **Groups** — permission groups with their flags, template whitelists,
+  instance ceilings, and resource pools in one editor. Expanding a group
+  shows its members with per-member quotas; managers may edit quotas only
+  for strictly lower tiers. Deleting a group or resetting all its quotas
+  asks for confirmation.
+- **Users** — accounts with group memberships and personal ceilings at a
+  glance, searchable and filterable. Creating a user, editing memberships
+  or ceilings, and deleting an account each take an explicit step — deletes
+  confirm.
+- **Settings** — server-wide limits in plain words (what each cap means and
+  what Unlimited / Blocked do). Saving a value that newly blocks a resource
+  host-wide asks you to confirm, since it refuses launches for everyone.
+
 ## Inside a session
 
 - **Desktops (KasmVNC)** open a full browser-based screen with clipboard
@@ -79,6 +122,11 @@ Removal always asks for confirmation:
   refreshed, so an active viewer never gets reclaimed.
 - Your session's address is unique and stable across stops and restarts — you
   can bookmark it.
+- The viewer toolbar keeps one primary intent prominent: **Clipboard** while
+  connected (for moving text in and out), **Reconnect** when the connection
+  drops. The rest — Ctrl+Alt+Del, fullscreen, viewer quality settings — stays
+  one tap away but visually quiet. Motion-sensitive users get a still toolbar:
+  transitions switch off under the reduced-motion preference.
 
 ## Monitoring the host
 

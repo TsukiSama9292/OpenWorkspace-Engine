@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
-  import { fetchMonitorSnapshot } from '$lib/api/monitor';
+  import { onMount, onDestroy } from 'svelte';  import { fetchMonitorSnapshot } from '$lib/api/monitor';
   import { mayViewMonitoring } from '$lib/permissions';
+  import EmptyState from '$lib/components/ui/EmptyState.svelte';
   import { formatBytes, formatPercent, formatUptime } from '$lib/utils/format';
   import Sparkline from './Sparkline.svelte';
   import TimeSeriesChart from './TimeSeriesChart.svelte';
@@ -177,7 +177,7 @@
 
 {#if !canView}
   <section class="ws-section">
-    <p class="empty-text">You do not have permission to view monitoring.</p>
+    <EmptyState message="You do not have permission to view monitoring." />
   </section>
 {:else}
   <section class="ws-section monitor-panel">
@@ -189,12 +189,12 @@
     </div>
 
     {#if error}
-      <p class="empty-text">{error}</p>
+      <EmptyState message={error} />
     {/if}
 
     {#if !snapshot}
       {#if loading}
-        <p class="empty-text">Loading monitor data...</p>
+        <EmptyState message="Loading monitor data..." />
       {/if}
     {:else}
       <div class="host-cards">

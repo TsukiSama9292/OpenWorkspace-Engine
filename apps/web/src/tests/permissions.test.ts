@@ -3,6 +3,7 @@ import {
   mayControlInstance,
   mayEditMemberQuota,
   mayLaunchTemplate,
+  templateLockReason,
   mayManageUsers,
   mayCreateTemplate,
   mayEditTemplate,
@@ -180,6 +181,27 @@ describe('mayLaunchTemplate', () => {
 
   it('returns false without an authenticated context', () => {
     expect(mayLaunchTemplate(null, template())).toBe(false);
+  });
+});
+
+describe('templateLockReason', () => {
+  it('returns null when the template may be launched', () => {
+    const ctx = context({ allowed_template_ids: ['t1'] });
+    expect(templateLockReason(ctx, template({ id: 't1' }))).toBeNull();
+    expect(templateLockReason(ctx, template({ id: 't9', visibility: 'public' }))).toBeNull();
+  });
+
+  it('explains a whitelist miss and whom to ask', () => {
+    const ctx = context({ allowed_template_ids: ['t1'] });
+    expect(templateLockReason(ctx, template({ id: 't2' }))).toBe(
+      'Not allowed — this template is outside your whitelist. Ask an admin for access.'
+    );
+  });
+
+  it('explains a missing context the same way', () => {
+    expect(templateLockReason(null, template())).toBe(
+      'Not allowed — this template is outside your whitelist. Ask an admin for access.'
+    );
   });
 });
 

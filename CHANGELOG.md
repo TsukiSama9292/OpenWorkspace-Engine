@@ -4,6 +4,22 @@ Chronological, user-visible changes. Append, don't rewrite history.
 
 ## [Unreleased]
 
+### Web surface polish — `feature/web-surface-polish` (squash)
+
+`.scratch/archive/web-surface-polish/`. Every tab now speaks the dashboard's
+language: one button weight, one filter-bar pattern, one empty-state voice
+with helpful next steps, one confirmation pattern for every destructive
+action, and one dialog/form chrome. The templates tab shows true-mark
+catalog cards with a guided three-step editor; the sessions table leads
+with Open and a plain-words budget column; volumes show ownership and
+status with a path-typed cleanup; group/user editors confirm deletions
+and quota resets; settings explain every cap and confirm newly-blocking
+saves; the viewer toolbar promotes the live intent (Clipboard/Reconnect)
+and stills itself under reduced-motion. Session cards show an honest
+remaining-budget meter, and removal, template deletion, and persistence
+reset all confirm through the same dialog. No permission, API, or
+lifecycle behavior changed.
+
 ### Sidebar + dashboard redesign — `feature/sidebar-dashboard-redesign` (squash)
 
 `.scratch/archive/sidebar-dashboard-redesign/`. The Instances page is now a

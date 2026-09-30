@@ -5,6 +5,7 @@ import {
   remainingMs,
   deadlineRemaining,
   selectDeadline,
+  budgetStory,
   formatRemaining,
   severity,
   wrapperUrl,
@@ -492,5 +493,99 @@ describe('CountdownOverlay', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('budgetStory', () => {
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const NOW = 1_000_000;
+
+  it('tells the auto-sleep story with an honest fraction of the max-run window', () => {
+    const story = budgetStory(
+      { auto_sleeps_at: iso(NOW + 600_000), timeout_action: 'remove', keep_time_deadline: null, keep_time_action: null },
+      { maxRunSeconds: 3600, keepTimeSeconds: -1 },
+      NOW
+    );
+    expect(story).toEqual({
+      kind: 'auto-sleep',
+      remainingMs: 600_000,
+      action: 'remove',
+      label: 'Auto-sleep in 10:00',
+      severity: 'normal',
+      fraction: 600_000 / 3_600_000
+    });
+  });
+
+  it('prefers the nearer keep-time deadline and its own window', () => {    const story = budgetStory(
+      {
+        auto_sleeps_at: iso(NOW + 600_000),
+        timeout_action: 'remove',
+        keep_time_deadline: iso(NOW + 120_000),
+        keep_time_action: 'stop'
+      },
+      { maxRunSeconds: 3600, keepTimeSeconds: 3600 },
+      NOW
+    );
+    expect(story).toEqual({
+      kind: 'keep-time',
+      remainingMs: 120_000,
+      action: 'stop',
+      label: 'Keep time ends in 02:00',
+      severity: 'warning',
+      fraction: 120_000 / 3_600_000
+    });
+  });
+
+  it('breaks an exact deadline tie toward auto-sleep', () => {
+    const at = iso(NOW + 300_000);
+    const story = budgetStory(
+      { auto_sleeps_at: at, timeout_action: 'remove', keep_time_deadline: at, keep_time_action: 'stop' },
+      { maxRunSeconds: 3600, keepTimeSeconds: 3600 },
+      NOW
+    );
+    expect(story?.kind).toBe('auto-sleep');
+    expect(story?.action).toBe('remove');
+    expect(story?.label).toBe('Auto-sleep in 05:00');
+  });
+
+  it('omits the fraction when the window is unlimited or unknown', () => {
+    const unlimited = budgetStory(
+      { auto_sleeps_at: iso(NOW + 600_000), timeout_action: null, keep_time_deadline: null, keep_time_action: null },
+      { maxRunSeconds: -1, keepTimeSeconds: -1 },
+      NOW
+    );
+    expect(unlimited?.fraction).toBeNull();
+    expect(unlimited?.label).toBe('Auto-sleep in 10:00');
+
+    const unknown = budgetStory(
+      { auto_sleeps_at: iso(NOW + 600_000), timeout_action: null, keep_time_deadline: null, keep_time_action: null },
+      null,
+      NOW
+    );
+    expect(unknown?.fraction).toBeNull();
+  });
+
+  it('returns null when there is no deadline or the deadline has passed', () => {
+    expect(
+      budgetStory(
+        { auto_sleeps_at: null, timeout_action: null, keep_time_deadline: null, keep_time_action: null },
+        { maxRunSeconds: 3600, keepTimeSeconds: 3600 },
+        NOW
+      )
+    ).toBeNull();
+    expect(
+      budgetStory(
+        { auto_sleeps_at: iso(NOW - 1_000), timeout_action: 'remove', keep_time_deadline: null, keep_time_action: null },
+        { maxRunSeconds: 3600, keepTimeSeconds: 3600 },
+        NOW
+      )
+    ).toBeNull();
+    expect(
+      budgetStory(
+        { auto_sleeps_at: 'not-a-date', timeout_action: null, keep_time_deadline: null, keep_time_action: null },
+        { maxRunSeconds: 3600, keepTimeSeconds: 3600 },
+        NOW
+      )
+    ).toBeNull();
   });
 });

@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/svelte';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/svelte';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import Page from '../routes/+page.svelte';
 import { api } from '$lib/api/client';
@@ -169,6 +169,90 @@ describe('dashboard redesign', () => {
     expect(container.querySelector('[role="progressbar"]')).toBeNull();
   });
 
+  it('shows the budget story with an honest meter when the window is known', async () => {
+    const tpl = template({ max_run_seconds: 3600, timeout_action: 'stop' });
+    const inst = session({
+      status: 'running',
+      access_token: 'tok',
+      auto_sleeps_at: new Date(Date.now() + 1_800_000).toISOString(),
+      timeout_action: 'stop'
+    });
+    stubDashboard([tpl], [inst], context());
+    await auth.check();
+    const { container } = render(Page);
+    await waitFor(() => expect(screen.getByText('alice-box')).toBeTruthy());
+    expect(screen.getByText('Auto-sleep in 30:00')).toBeTruthy();
+    const meter = container.querySelector('[role="progressbar"]');
+    expect(meter?.getAttribute('aria-label')).toBe('Auto-sleep in 30:00');
+    expect(meter?.getAttribute('aria-valuenow')).toBe('50');
+  });
+
+  it('shows the story with no meter when the window is unlimited', async () => {
+    const tpl = template({ max_run_seconds: -1, timeout_action: 'stop' });
+    const inst = session({
+      status: 'running',
+      access_token: 'tok',
+      auto_sleeps_at: new Date(Date.now() + 1_800_000).toISOString(),
+      timeout_action: 'stop'
+    });
+    stubDashboard([tpl], [inst], context());
+    await auth.check();
+    const { container } = render(Page);
+    await waitFor(() => expect(screen.getByText('alice-box')).toBeTruthy());
+    expect(screen.getByText('Auto-sleep in 30:00')).toBeTruthy();
+    expect(container.querySelector('[role="progressbar"]')).toBeNull();
+  });
+
+  it('asks for confirmation before removing a session', async () => {
+    stubDashboard([template()], [session({ status: 'running', access_token: 'tok' })], context());
+    mockApi.delete.mockResolvedValue({});
+    await auth.check();
+    render(Page);
+    await waitFor(() => expect(screen.getByText('alice-box')).toBeTruthy());
+    await fireEvent.click(screen.getByRole('button', { name: /More/ }));
+    await fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove' }));
+    expect(screen.getByText('Delete "alice-box"?')).toBeTruthy();
+    expect(mockApi.delete).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(mockApi.delete).toHaveBeenCalledWith('/instances/s1'));
+    await waitFor(() => expect(screen.queryByText('alice-box')).toBeNull());
+  });
+
+  it('offers a clear-search action inside the empty state', async () => {
+    stubDashboard([template()], [session({ status: 'running', access_token: 'tok' })], context());
+    await auth.check();
+    render(Page);
+    await waitFor(() => expect(screen.getByText('alice-box')).toBeTruthy());
+    const search = screen.getByLabelText('Search sessions and templates');
+    await fireEvent.input(search, { target: { value: 'zzz-no-match' } });
+    await waitFor(() => expect(screen.getByText(/No sessions match the current search/)).toBeTruthy());
+    await fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+    await waitFor(() => expect(screen.getByText('alice-box')).toBeTruthy());
+  });
+
+  it('moves focus into the More menu on open', async () => {
+    stubDashboard([template()], [session({ status: 'running', access_token: 'tok' })], context());
+    await auth.check();
+    render(Page);
+    await waitFor(() => expect(screen.getByText('alice-box')).toBeTruthy());
+    await fireEvent.click(screen.getByRole('button', { name: /More/ }));
+    await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Pause' })).toBeTruthy());
+    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Pause' }));
+  });
+
+  it('closes the More menu on Escape and returns focus to its button', async () => {
+    stubDashboard([template()], [session({ status: 'running', access_token: 'tok' })], context());
+    await auth.check();
+    const { container } = render(Page);
+    await waitFor(() => expect(screen.getByText('alice-box')).toBeTruthy());
+    const more = screen.getByRole('button', { name: /More/ });
+    await fireEvent.click(more);
+    await waitFor(() => expect(container.querySelector('[role="menu"]')).toBeTruthy());
+    await fireEvent.keyDown(container.querySelector('[role="menu"]')!, { key: 'Escape' });
+    await waitFor(() => expect(container.querySelector('[role="menu"]')).toBeNull());
+    expect(document.activeElement).toBe(more);
+  });
+
   it('shows quota usage in the hero', async () => {
     stubDashboard([template()], [session()], context({ effective_max_instances: 4 }));
     await auth.check();
@@ -186,5 +270,49 @@ describe('dashboard redesign', () => {
     render(Page);
     await waitFor(() => expect(screen.getByText('Secret')).toBeTruthy());
     expect(screen.getByText(/outside your whitelist/)).toBeTruthy();
+  });
+
+  it('leads the sessions table with an Open action for running instances', async () => {
+    window.location.hash = '#sessions';
+    try {
+      stubDashboard(
+        [template()],
+        [session({ status: 'running', access_token: 'tok', owner_username: 'alice' })],
+        context({ is_admin: true, tier: 2 })
+      );
+      await auth.check();
+      render(Page);
+      const open = await screen.findByRole('link', { name: 'Open' });
+      expect(open.getAttribute('href')).toBe('/kasmvnc/tok/');
+      const table = screen.getByRole('table');
+      expect(within(table).getByText('alice')).toBeTruthy();
+      expect(within(table).getByText('Budget')).toBeTruthy();
+    } finally {
+      window.location.hash = '';
+    }
+  });
+
+  it('asks for confirmation before deleting a template', async () => {
+    window.location.hash = '#templates';
+    try {
+      stubDashboard(
+        [template({ id: 't1', name: 'Old box', owner_id: 'me' })],
+        [],
+        context({ user_id: 'me', can_create_template: true, allowed_template_ids: ['t1'] })
+      );
+      mockApi.delete.mockResolvedValue({});
+      await auth.check();
+      render(Page);
+      await waitFor(() => expect(screen.getByText('Old box')).toBeTruthy());
+      await fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+      expect(screen.getByText('Delete template "Old box"?')).toBeTruthy();
+      expect(mockApi.delete).not.toHaveBeenCalled();
+      const templateDialog = screen.getByRole('dialog');
+      await fireEvent.click(within(templateDialog).getByRole('button', { name: 'Delete' }));
+      await waitFor(() => expect(mockApi.delete).toHaveBeenCalledWith('/templates/t1'));
+      await waitFor(() => expect(screen.queryByText('Old box')).toBeNull());
+    } finally {
+      window.location.hash = '';
+    }
   });
 });

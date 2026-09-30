@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/svelte';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import UserManagementPanel from '$lib/components/users/UserManagementPanel.svelte';
 import { TIER_MANAGER, type EffectiveContext, type Group } from '$lib/types';
@@ -146,6 +146,33 @@ describe('UserManagementPanel', () => {
       })
     );
   }
+
+  it('deletes a user after confirmation and keeps the row on cancel', async () => {
+    stubListings();
+    mockApi.delete.mockResolvedValue({ data: null });
+
+    render(UserManagementPanel, { props: { ctx: managerCtx() } });
+
+    await waitFor(() => {
+      expect(screen.getByText('alice')).toBeTruthy();
+    });
+
+    await fireEvent.click(screen.getByText('Delete'));
+    await waitFor(() => {
+      expect(screen.getByText('Delete user "alice"?')).toBeTruthy();
+    });
+    expect(mockApi.delete).not.toHaveBeenCalled();
+
+    const dialog = screen.getByRole('dialog');
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => {
+      expect(mockApi.delete).toHaveBeenCalledWith('/users/u1');
+    });
+    await waitFor(() => {
+      expect(screen.queryByText('alice')).toBeNull();
+    });
+  });
 
   it('shows no membership controls for a non can_manage_users holder', async () => {
     mockApi.get.mockResolvedValue({ data: { users: [userRow] } });

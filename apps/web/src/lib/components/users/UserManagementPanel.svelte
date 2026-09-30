@@ -4,7 +4,11 @@
   import { listGroups } from '$lib/api/rbac-actions';
   import { auth } from '$lib/stores/auth';
   import { mayManageUsers, mayManageUser, userTier, assignableGroups } from '$lib/permissions';
-  import {
+  import Modal from '$lib/components/ui/Modal.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import ConfirmHost from '$lib/components/ui/ConfirmHost.svelte';
+  import EmptyState from '$lib/components/ui/EmptyState.svelte';
+  import type { PendingConfirm } from '$lib/components/ui/confirm';  import {
     BLOCKED_CEILING,
     INHERIT_CEILING,
     UNLIMITED_CEILING,
@@ -47,6 +51,7 @@
   let policyTarget = $state<UserRow | null>(null);
   let policyForm = $state<UserPolicyFormState>(createInitialUserPolicyForm());
   let policyError = $state('');
+  let pendingConfirm = $state<PendingConfirm | null>(null);
   let search = $state('');
   let groupFilter = $state('all');
   let ceilingFilter = $state('all');
@@ -184,7 +189,16 @@
   }
 
   async function onDelete(user: UserRow) {
-    if (!confirm(`Delete user "${user.username}"?`)) return;
+    pendingConfirm = {
+      title: `Delete user "${user.username}"?`,
+      body: 'The account and its group memberships are removed. This cannot be undone.',
+      confirmLabel: 'Delete',
+      danger: true,
+      onConfirm: () => void removeUser(user)
+    };
+  }
+
+  async function removeUser(user: UserRow) {
     const res = await api.delete(`/users/${user.id}`);
     if (!res.error) {
       users = users.filter((u) => u.id !== user.id);
@@ -205,11 +219,11 @@
   </div>
 
   {#if loading}
-    <p class="empty-text">Loading users...</p>
+    <EmptyState message="Loading users..." />
   {:else if loadError}
-    <p class="empty-text">{loadError}</p>
+    <EmptyState message={loadError} />
   {:else if users.length === 0}
-    <p class="empty-text">No users found.</p>
+    <EmptyState message="No users found. Create one to get started." />
   {:else}
     <div class="panel-toolbar">
       <div class="panel-search-wrap">
@@ -236,7 +250,7 @@
       {/if}
     </div>
     {#if filteredUsers.length === 0}
-      <p class="empty-text">No users match your filters.</p>
+      <EmptyState message="No users match your filters. Try different keywords, or clear the filters to browse everyone." />
     {:else}
       <div class="instances-table-wrap">
         <table class="instances-table">
@@ -307,10 +321,8 @@
 </section>
 
 {#if canManage && showCreate}
-  <div class="modal-overlay" onclick={() => showCreate = false} role="presentation"></div>
-  <div class="modal-card">
-    <h3 class="modal-title">Create User</h3>
-    <form onsubmit={(e) => { e.preventDefault(); onCreate(); }}>
+  <Modal open title="Create User" width="28rem" onclose={() => showCreate = false}>
+    <form class="flex flex-col gap-3" onsubmit={(e) => { e.preventDefault(); onCreate(); }}>
       <div class="modal-field">
         <label for="user-username" class="modal-label">Username</label>
         <input id="user-username" class="modal-input" type="text" bind:value={createForm.username} required />
@@ -322,7 +334,7 @@
       <div class="modal-field" data-testid="create-user-groups">
         <span class="modal-label">Groups</span>
         {#if assignable.length === 0}
-          <p class="empty-text">No assignable groups.</p>
+          <EmptyState message="No assignable groups." />
         {:else}
           {#each assignable as group (group.id)}
             <label class="policy-toggle-row">
@@ -339,27 +351,25 @@
         {/if}
       </div>
       {#if createError}
-        <div class="error-badge">{createError}</div>
+        <p class="text-error-500 text-sm m-0">{createError}</p>
       {/if}
-      <div class="modal-actions">
-        <button type="button" class="modal-cancel" onclick={() => showCreate = false}>Cancel</button>
-        <button type="submit" class="modal-confirm">Create</button>
+      <div class="flex justify-end gap-2">
+        <Button variant="secondary" onclick={() => showCreate = false}>Cancel</Button>
+        <Button variant="primary" type="submit">Create</Button>
       </div>
     </form>
-  </div>
+  </Modal>
 {/if}
 
 {#if canManage && showPolicy && policyTarget}
-  <div class="modal-overlay" onclick={() => { showPolicy = false; policyTarget = null; }} role="presentation"></div>
-  <div class="modal-card">
-    <h3 class="modal-title">Edit Policy — {policyTarget.username}</h3>
-    <form onsubmit={(e) => { e.preventDefault(); onSavePolicy(); }}>
+  <Modal open title="Edit Policy — {policyTarget.username}" width="32rem" onclose={() => { showPolicy = false; policyTarget = null; }}>
+    <form class="flex flex-col gap-3" onsubmit={(e) => { e.preventDefault(); onSavePolicy(); }}>
       <div class="modal-field" data-testid="user-policy-groups">
         <span class="modal-label">Group Memberships</span>
         {#if policyTarget.is_admin}
-          <p class="empty-text">Admin membership is protected — memberships cannot be changed here.</p>
+          <EmptyState message="Admin membership is protected — memberships cannot be changed here." />
         {:else if assignable.length === 0}
-          <p class="empty-text">No assignable groups.</p>
+          <EmptyState message="No assignable groups." />
         {:else}
           {#each assignable as group (group.id)}
             <label class="policy-toggle-row">
@@ -401,15 +411,17 @@
         </div>
       </div>
       {#if policyError}
-        <div class="error-badge">{policyError}</div>
+        <p class="text-error-500 text-sm m-0">{policyError}</p>
       {/if}
-      <div class="modal-actions">
-        <button type="button" class="modal-cancel" onclick={() => { showPolicy = false; policyTarget = null; }}>Cancel</button>
-        <button type="submit" class="modal-confirm" disabled={policyForm.loading}>Save Policy</button>
+      <div class="flex justify-end gap-2">
+        <Button variant="secondary" onclick={() => { showPolicy = false; policyTarget = null; }}>Cancel</Button>
+        <Button variant="primary" type="submit" disabled={policyForm.loading}>Save Policy</Button>
       </div>
     </form>
-  </div>
+  </Modal>
 {/if}
+
+<ConfirmHost bind:request={pendingConfirm} />
 
 <style>
   .td-memberships { min-width: 0; }
@@ -475,69 +487,6 @@
     color: #f4f4f5;
   }
 
-  .modal-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.6);
-    z-index: 200;
-  }
-
-  .modal-card {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: 440px;
-    max-height: 88vh;
-    overflow-y: auto;
-    background: rgba(20, 20, 26, 0.98);
-    backdrop-filter: blur(24px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-top: 1px solid rgba(255, 255, 255, 0.2);
-    border-radius: 16px;
-    padding: 1.5rem;
-    z-index: 201;
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-  }
-
-  .modal-title {
-    font-size: 1.1rem;
-    font-weight: 600;
-    margin: 0;
-  }
-
-  .modal-field {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    margin-bottom: 1rem;
-  }
-
-  .modal-label {
-    font-size: 0.7rem;
-    font-weight: 600;
-    color: #71717a;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  .modal-input {
-    background: rgba(0, 0, 0, 0.4);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 8px;
-    padding: 0.6rem 0.75rem;
-    color: #f4f4f5;
-    font-size: 0.85rem;
-    font-family: inherit;
-    outline: none;
-  }
-
-  .modal-input:focus {
-    border-color: #818cf8;
-  }
-
   .ceiling-row {
     display: flex;
     gap: 8px;
@@ -561,51 +510,5 @@
   .policy-toggle-label {
     font-size: 0.8rem;
     color: #d4d4d8;
-  }
-
-  .modal-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 0.5rem;
-  }
-
-  .modal-cancel {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    color: #a1a1aa;
-    padding: 0.5rem 1rem;
-    border-radius: 8px;
-    font-size: 0.8rem;
-    cursor: pointer;
-    font-family: inherit;
-    transition: all 0.2s;
-  }
-
-  .modal-cancel:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: #fff;
-  }
-
-  .modal-confirm {
-    background: #6366f1;
-    border: none;
-    color: #fff;
-    padding: 0.5rem 1.25rem;
-    border-radius: 8px;
-    font-size: 0.8rem;
-    font-weight: 600;
-    cursor: pointer;
-    font-family: inherit;
-    transition: background 0.2s;
-  }
-
-  .modal-confirm:hover {
-    background: #4f46e5;
-  }
-
-  .modal-confirm:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
   }
 </style>

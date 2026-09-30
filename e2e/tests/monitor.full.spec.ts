@@ -176,7 +176,7 @@ test('Monitor tab shows live interactive host charts, row sparklines, detail mod
     await expect(modal).toBeVisible({ timeout: 15_000 });
     await expect(modal.locator('.time-series-chart')).toHaveCount(2);
     await expect(modal.locator('.chart-live')).toHaveCount(2);
-    await modal.locator('[data-testid="modal-close"]').click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Close dialog' }).click();
     await expect(modal).toHaveCount(0);
 
     const pause = await page.request.post(`/api/instances/${instance.id}/pause`);

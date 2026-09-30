@@ -4,6 +4,7 @@
   import { fetchAudit } from '$lib/api/audit';
   import { mayViewAuditLogs } from '$lib/permissions';
   import { formatAuditTime, fullAuditTime } from '$lib/logs/log-helpers';
+  import EmptyState from '$lib/components/ui/EmptyState.svelte';
   import type { AuditEntry, AuditOutcome, EffectiveContext } from '$lib/types';
 
   let {
@@ -222,7 +223,7 @@
 {#if !canView}
   <section class="ws-section">
     <h2 class="section-title">Logs</h2>
-    <p class="empty-text">You do not have permission to view the audit trail.</p>
+    <EmptyState message="You do not have permission to view the audit trail." />
   </section>
 {:else}
   <section class="ws-section panel-card">
@@ -289,9 +290,9 @@
     {/if}
 
     {#if loading}
-      <p class="empty-text">Loading audit trail…</p>
+      <EmptyState message="Loading audit trail…" />
     {:else if entries.length === 0}
-      <p class="empty-text">No audit entries match the current filters.</p>
+      <EmptyState message="No audit entries match the current filters. Try different filters, or clear them to browse everything." />
     {:else}
       <div class="instances-table-wrap">
         <table class="instances-table audit-table" class:ip-hidden={narrow}>

@@ -140,65 +140,44 @@ describe('TemplatePanel', () => {
     expect(confirmSpy).toHaveBeenCalled();
   });
 
-  function checkboxFor(container: HTMLElement, labelText: string) {
-    const label = Array.from(container.querySelectorAll('label')).find((l) => l.textContent?.includes(labelText));
-    return label?.querySelector('input[type="checkbox"]') as HTMLInputElement | undefined;
+  function unlimitedFor(container: HTMLElement, labelText: string) {
+    return container.querySelector<HTMLInputElement>(`input[aria-label="${labelText} unlimited"]`);
   }
-  function secondsInputs(container: HTMLElement) {
+  function limitValueInputs(container: HTMLElement) {
     return Array.from(container.querySelectorAll<HTMLInputElement>('input[placeholder="e.g. 3600 (1 hour)"]'));
   }
 
   it.each([
-    ['usage', 'Usage Limit (seconds)'],
-    ['keep-time', 'Idle Keep Time (seconds)']
+    ['usage', 'Usage Limit (seconds)', 'Timeout Action'],
+    ['keep-time', 'Idle Keep Time (seconds)', 'Keep Time Action']
   ])(
-    'clearing the %s seconds input keeps the field enabled and visible',
-    async (_kind, labelText) => {
+    'the %s limit shares the unlimited vocabulary',
+    async (_kind, labelText, actionLabel) => {
       const { container } = render(TemplatePanel, { props: panelProps() });
 
-      const checkbox = checkboxFor(container, labelText)!;
-      expect(checkbox.checked).toBe(false);
-      expect(secondsInputs(container).length).toBe(0);
+      const checkbox = unlimitedFor(container, labelText)!;
+      expect(checkbox.checked).toBe(true);
+      expect(limitValueInputs(container).length).toBe(0);
 
       await fireEvent.click(checkbox);
       await tick();
-      expect(checkbox.checked).toBe(true);
-      expect(secondsInputs(container).length).toBe(1);
+      expect(unlimitedFor(container, labelText)!.checked).toBe(false);
+      expect(limitValueInputs(container).length).toBe(1);
 
-      const input = secondsInputs(container)[0];
-      await fireEvent.input(input, { target: { value: '' } });
+      const input = limitValueInputs(container)[0];
+      await fireEvent.input(input, { target: { value: '600' } });
       await tick();
+      expect(screen.getByText(actionLabel)).toBeTruthy();
 
-      expect(secondsInputs(container).length).toBe(1);
-      expect(checkboxFor(container, labelText)!.checked).toBe(true);
+      await fireEvent.click(unlimitedFor(container, labelText)!);
+      await tick();
+      expect(unlimitedFor(container, labelText)!.checked).toBe(true);
+      expect(limitValueInputs(container).length).toBe(0);
     }
   );
 
-  it('re-enabling after clearing the field shows the input again', async () => {
-    const { container } = render(TemplatePanel, { props: panelProps() });
-
-    const checkbox = checkboxFor(container, 'Usage Limit (seconds)')!;
-    await fireEvent.click(checkbox);
-    await tick();
-
-    const input = secondsInputs(container)[0];
-    await fireEvent.input(input, { target: { value: '' } });
-    await tick();
-
-    await fireEvent.click(checkbox);
-    await tick();
-    expect(checkbox.checked).toBe(false);
-    expect(secondsInputs(container).length).toBe(0);
-
-    await fireEvent.click(checkboxFor(container, 'Usage Limit (seconds)')!);
-    await tick();
-    expect(checkboxFor(container, 'Usage Limit (seconds)')!.checked).toBe(true);
-    expect(secondsInputs(container).length).toBe(1);
-    expect((secondsInputs(container)[0] as HTMLInputElement).value).toBe('3600');
-  });
-
   function showAdvanced(container: HTMLElement) {
-    const btn = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(b => b.textContent?.includes('Show Advanced'));
+    const btn = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(b => b.textContent?.includes('Step 3 of 3'));
     return btn;
   }
   function diniToggle(container: HTMLElement) {
@@ -283,7 +262,7 @@ describe('TemplatePanel', () => {
     });
 
     expect(screen.getAllByText('May launch')).toHaveLength(1);
-    expect(screen.getAllByText('Not allowed')).toHaveLength(1);
+    expect(screen.getAllByText(/outside your whitelist/)).toHaveLength(1);
     expect(screen.getAllByText('Edit')).toHaveLength(1);
     expect(screen.getAllByText('Delete')).toHaveLength(1);
     expect(screen.getAllByText('+ New Template')).toHaveLength(1);
@@ -300,7 +279,7 @@ describe('TemplatePanel', () => {
     });
 
     expect(screen.getAllByText('May launch')).toHaveLength(1);
-    expect(screen.getAllByText('Not allowed')).toHaveLength(1);
+    expect(screen.getAllByText(/outside your whitelist/)).toHaveLength(1);
     expect(screen.getAllByText('Edit')).toHaveLength(2);
     expect(screen.getAllByText('Delete')).toHaveLength(2);
   });
@@ -317,7 +296,48 @@ describe('TemplatePanel', () => {
     });
 
     expect(screen.getAllByText('May launch')).toHaveLength(2);
-    expect(screen.getAllByText('Not allowed')).toHaveLength(1);
+    expect(screen.getAllByText(/outside your whitelist/)).toHaveLength(1);
+  });
+
+  it('renders family marks as local vectors with no emoji on template cards', () => {
+    const ctx = context({ allowed_template_ids: ['t-own'] });
+    const configs = [template({ id: 't-own', name: 'Ubuntu box', owner_id: 'me' })];
+    const { container } = render(TemplatePanel, {
+      props: panelProps({ view: { tab: 'templates', editor: 'list' }, configs, ctx })
+    });
+    const marks = container.querySelectorAll('img.catalog-mark');
+    expect(marks.length).toBe(1);
+    expect(marks[0].getAttribute('src')).toBe('/icons/ubuntu.svg');
+    expect(document.body.textContent).not.toMatch(/🐧|🐍|🧠|⚙|📦/);
+  });
+
+  it('shows descriptions and resource facts on template cards', () => {
+    const ctx = context({ allowed_template_ids: ['t-own'] });
+    const configs = [
+      template({
+        id: 't-own',
+        name: 'Rust box',
+        description: 'Systems hacking',
+        owner_id: 'me',
+        cores: 4,
+        gpu_count: 1,
+        persistent_storage_path: '/data'
+      })
+    ];
+    render(TemplatePanel, {
+      props: panelProps({ view: { tab: 'templates', editor: 'list' }, configs, ctx })
+    });
+    expect(screen.getByText('Systems hacking')).toBeTruthy();
+    expect(screen.getByText(/4 CPU/)).toBeTruthy();
+    expect(screen.getByText(/1 GPU/)).toBeTruthy();
+    expect(screen.getByText(/persistent storage/)).toBeTruthy();
+  });
+
+  it('guides the editor in three numbered steps', () => {
+    render(TemplatePanel, { props: panelProps() });
+    expect(screen.getByText('Step 1 of 3 — Basics')).toBeTruthy();
+    expect(screen.getByText('Step 2 of 3 — Resources')).toBeTruthy();
+    expect(screen.getByText(/Step 3 of 3 — Advanced/)).toBeTruthy();
   });
 
   it('shows a visibility selector defaulting to private in the new-template editor', async () => {
